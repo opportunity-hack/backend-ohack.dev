@@ -4,10 +4,12 @@ from dotenv import load_dotenv
 from common.utils import safe_get_env_var
 
 load_dotenv()
-
-print("I GET HERE================")
+print("1 I GET HERE================")
+myport = safe_get_env_var('PORT')
+print(myport)
+print("2 I GET HERE================")
 wsgi_app = "api.wsgi:app"
-bind = f"0.0.0.0:{safe_get_env_var('PORT')}"
+bind = f"0.0.0.0:{myport}"
 
 def wrap_default_headers(func):
     @wraps(func)
