@@ -3,3 +3,4 @@ package-lock.json
 .flaskenv
 .DS_Store
 node_modules
+__pycache__

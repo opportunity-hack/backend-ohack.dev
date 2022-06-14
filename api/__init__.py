@@ -37,9 +37,10 @@ dict_config = {
     }
 }
 
-print(__name__)
+print("__name__:",__name__)
 logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
+print("2222")
 
 
 from api import exception_views
@@ -47,6 +48,7 @@ from api.messages import messages_views
 from api.security.auth0_service import auth0_service
 
 from common.utils import safe_get_env_var
+print("3333")
 
 def create_app():
     ##########################################
@@ -59,10 +61,11 @@ def create_app():
     ##########################################
     # Flask App Instance
     ##########################################
-
+    print("4444")
     app = Flask(__name__, instance_relative_config=True)
+    print("5555")
     logger.info("test")
-    
+
 
 
     ##########################################
