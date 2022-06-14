@@ -13,3 +13,4 @@ PyJWT==2.3.0
 python-dotenv==0.19.1
 six==1.16.0
 Werkzeug==2.0.2
+requests==2.26.0
