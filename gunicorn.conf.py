@@ -5,7 +5,8 @@ from common.utils import safe_get_env_var
 
 load_dotenv()
 print("1 I GET HERE================")
-myport = safe_get_env_var('PORT')
+#myport = safe_get_env_var('PORT')
+myport = 6060
 print(myport)
 print("2 I GET HERE================")
 wsgi_app = "api.wsgi:app"
