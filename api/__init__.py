@@ -44,9 +44,11 @@ print("2222")
 
 
 from api import exception_views
+print("2222.1")
 from api.messages import messages_views
+print("2222.2")
 from api.security.auth0_service import auth0_service
-
+print("2222.3")
 from common.utils import safe_get_env_var
 print("3333")
 
