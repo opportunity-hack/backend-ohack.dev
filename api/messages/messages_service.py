@@ -54,6 +54,8 @@ def get_token():
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+
+# Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
 cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
 logger.info(f"CONFIG: {cert_env}")
 
