@@ -53,7 +53,7 @@ def get_token():
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-cred = credentials.Certificate("/Users/gregv/Downloads/ohack-dev-firebase-adminsdk-hrr2l-933367ee29.json")
+cred = credentials.Certificate("./api/messages/ohack-dev-firebase-adminsdk-hrr2l-933367ee29.json")
 firebase_admin.initialize_app(cred)
 
 
