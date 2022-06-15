@@ -1,6 +1,7 @@
 from common.utils import safe_get_env_var
 import requests
 from api.messages.message import Message
+import json
 
 import logging
 
@@ -53,8 +54,13 @@ def get_token():
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-cred = credentials.Certificate("./api/messages/ohack-dev-firebase-adminsdk-hrr2l-933367ee29.json")
-firebase_admin.initialize_app(cred)
+cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
+logger.info(f"CONFIG: {cert_env}")
+
+#We don't want this to be a file, we want to use env variables for security (we would have to check in this file)
+#cred = credentials.Certificate("./api/messages/ohack-dev-firebase-adminsdk-hrr2l-933367ee29.json")
+cred = credentials.Certificate(cert_env)
+firebase_admin.initialize_app(credential=cred)
 
 
 def save(user_id=None, email=None, last_login=None):
