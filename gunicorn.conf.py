@@ -4,11 +4,9 @@ from dotenv import load_dotenv
 from common.utils import safe_get_env_var
 
 load_dotenv()
-print("1 I GET HERE================")
+
+# We get the port dynamically for when this is deployed in Heroku
 myport = safe_get_env_var('PORT')
-#myport = 6060
-print(myport)
-print("2 I GET HERE================")
 wsgi_app = "api.wsgi:app"
 bind = f"0.0.0.0:{myport}"
 
