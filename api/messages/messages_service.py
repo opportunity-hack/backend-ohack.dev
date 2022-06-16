@@ -110,39 +110,37 @@ def get_history(user_id):
     logger.debug(res)
 
     _problem_statements=[]
-    for h in res["problem_statements"]:
-        _problem_statements.append(h.get().to_dict())
+    if "problem_statements" in res:
+        for h in res["problem_statements"]:
+            _problem_statements.append(h.get().to_dict())
 
     _hackathons=[]
-    for h in res["hackathons"]:
-        rec = h.get().to_dict()
-        nonprofits = []
-        problem_statements = []
+    if "hackathons" in res:
+        for h in res["hackathons"]:
+            rec = h.get().to_dict()
+            nonprofits = []
+            problem_statements = []
 
-        for n in rec["nonprofits"]:
-            npo_r = n.get().to_dict()
-            # This is duplicate date as we should already have this
-            del npo_r["problem_statements"]
-            nonprofits.append(npo_r)
-        for ps in rec["problem_statements"]:
-            problem_statements.append(ps.get().to_dict())
+            for n in rec["nonprofits"]:
+                npo_r = n.get().to_dict()
+                # This is duplicate date as we should already have this
+                del npo_r["problem_statements"]
+                nonprofits.append(npo_r)
+            for ps in rec["problem_statements"]:
+                problem_statements.append(ps.get().to_dict())
 
-
-
-        _hackathons.append({
-            "nonprofits": nonprofits,
-            "problem_statements": problem_statements,
-            "devpost_url": rec["devpost_url"],
-            "location": rec["location"],
-            "start_date": rec["start_date"]
-        })
-
-
-
+            _hackathons.append({
+                "nonprofits": nonprofits,
+                "problem_statements": problem_statements,
+                "devpost_url": rec["devpost_url"],
+                "location": rec["location"],
+                "start_date": rec["start_date"]
+            })
 
     _badges=[]
-    for h in res["badges"]:
-        _badges.append(h.get().to_dict())
+    if "badges" in res:
+        for h in res["badges"]:
+            _badges.append(h.get().to_dict())
 
     result = {
         "user_id": res["user_id"],

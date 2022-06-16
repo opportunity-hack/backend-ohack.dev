@@ -1,7 +1,3 @@
-
-https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
-
-
 # Hello World API: Flask Auth0 Sample
 
 This Python code sample demonstrates how to implement authorization in a Flask API server using Auth0.
@@ -113,3 +109,7 @@ Status: 200 OK
   "message": "The API successfully recognized you as an admin."
 }
 ```
+
+# References
+- [Firestore UI](https://github.com/thanhlmm/refi-app)
+- [Using Python with Firestore](https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc)
