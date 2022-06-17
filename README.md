@@ -2,7 +2,7 @@
 - This code is the backend [api.ohack.dev](https://api.ohack.dev) and supports [ohack.dev](https://www.ohack.dev) frontend.  
 - Like most things we build, to keep it simple, this runs on [Heroku](https://trifinlabs.com/what-is-heroku/).
 - Grab [VSCode](https://code.visualstudio.com/) as your IDE, we'll use this for both frontend and backend.
-
+- [ohack.dev frontend code is here](https://github.com/opportunity-hack/frontend-ohack.dev)
 
 This Python code was taken from a sample demonstrates how to implement authorization in a Flask API server using Auth0.
 
