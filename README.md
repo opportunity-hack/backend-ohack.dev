@@ -1,38 +1,37 @@
-# Hello World API: Flask Auth0 Sample
+# Opportunity Hack Developer Portal (Backend)
+This code is the backend [api.ohack.dev](https://api.ohack.dev) and supports [ohack.dev](https://www.ohack.dev) frontend.  
 
-This Python code sample demonstrates how to implement authorization in a Flask API server using Auth0.
+Like most things we build, to keep it simple, this runs on [Heroku](https://trifinlabs.com/what-is-heroku/).
 
-## Run the Project
 
-Create a virtual environment under the root project directory:
 
-**macOS/Linux:**
+This Python code was taken from a sample demonstrates how to implement authorization in a Flask API server using Auth0.
 
-```bash
-python3 -m venv venv
+# Run the Project
+First things first, you will need to get the code for this project via:
 ```
-
-**Windows:**
-
-```bash
-py -3 -m venv venv
+git clone git@github.com:opportunity-hack/backend-ohack.dev.git
 ```
+Jump into that directory to get going with the steps below!
 
-Activate the virtual environment:
+## The easy way with Heroku CLI
+- Review [these instructions](https://devcenter.heroku.com/articles/heroku-cli) 
+- Install Heroku CLI
+- Run via `heroku local` command 
 
-**macOS/Linux:**
+## The longer way
+Create a virtual environment.
+You can use:
+1. [Miniconda](https://docs.conda.io/en/latest/miniconda.html) (preferred) 
+2. [Virtual Env](https://docs.python.org/3/tutorial/venv.html) (venv)
+3. [Anaconda](https://www.anaconda.com/products/distribution)
+4. Don't create a virtual environment at all and trample on a single Python environment you might already have
 
-```bash
-. venv/bin/activate
-```
+What are the diffs between Miniconda and Anaconda? [See this](https://stackoverflow.com/questions/45421163/anaconda-vs-miniconda)
 
-**Windows:**
+You'll need to run Python 3.9.13 (see runtime.txt) to match the same version that Heroku runs.
 
-```bash
-venv\Scripts\activate
-```
-
-Install the project dependencies:
+Once you have a virtual environment ready, you will want to install the project dependencies:
 
 ```bash
 pip install -r requirements.txt
@@ -40,14 +39,27 @@ pip install -r requirements.txt
 
 Create a `.env` file under the root project directory and populate it with the following content:
 
+_You will need to get these values from our Slack channel_.
 ```bash
-CLIENT_ORIGIN_URL=http://localhost:4040
+# Flask Settings
+FLASK_APP=api
+FLASK_RUN_PORT=6060
+FLASK_ENV=development
+PORT=6060
+
+# AUTH0 Settings
+CLIENT_ORIGIN_URL=
 AUTH0_AUDIENCE=
 AUTH0_DOMAIN=
+AUTH0_USER_MGMT_CLIENT_ID=
+AUTH0_USER_MGMT_SECRET=
+
+# Firebase Settings
+FIREBASE_CERT_CONFIG=
 ```
 
-Run the project in development mode:
 
+Run the project in development mode:
 ```bash
 flask run
 ```
@@ -109,6 +121,26 @@ Status: 200 OK
   "message": "The API successfully recognized you as an admin."
 }
 ```
+
+### 🔐 Get user profile information
+
+```bash
+GET /profile/<user_id>
+```
+
+#### Response
+
+```bash
+Status: 200 OK
+```
+
+```json
+{
+  ...User Profile Details...
+}
+```
+
+
 
 # References
 - [Firestore UI](https://github.com/thanhlmm/refi-app)
