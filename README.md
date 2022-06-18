@@ -6,7 +6,7 @@
 
 This Python code was taken from a sample demonstrates how to implement authorization in a Flask API server using Auth0.
 
-# Run the Project
+# To run the Project
 First things first, you will need to get the code for this project via:
 ```
 git clone git@github.com:opportunity-hack/backend-ohack.dev.git
