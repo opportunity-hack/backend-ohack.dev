@@ -36,8 +36,16 @@ def protected():
 def admin():
     return vars(get_admin_message())
 
-
+# Used to provide profile details - user must be logged in
 @bp.route("/profile/<user_id>")
 @authorization_guard
 def profile(user_id):
+    return vars(get_profile_metadata(user_id))
+
+
+# Used to provide feedback details - user must be logged in
+@bp.route("/feedback/<user_id>")
+@authorization_guard
+def feedback(user_id):
+    # TODO: This is stubbed out, need to change with new function for get_feedback
     return vars(get_profile_metadata(user_id))
