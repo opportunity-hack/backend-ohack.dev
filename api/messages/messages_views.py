@@ -1,12 +1,14 @@
 from flask import (
-    Blueprint
+    Blueprint,
+    request
 )
 
 from api.messages.messages_service import (
     get_profile_metadata,
     get_public_message,
     get_protected_message,
-    get_admin_message
+    get_admin_message,
+    save_npo
 )
 from api.security.guards import (
     authorization_guard,
@@ -33,8 +35,16 @@ def protected():
 @bp.route("/admin")
 @authorization_guard
 @permissions_guard([admin_messages_permissions.read])
-def admin():
+def admin():    
     return vars(get_admin_message())
+
+
+@bp.route("/npo", methods=["POST"])
+@authorization_guard
+@permissions_guard([admin_messages_permissions.read])
+def add_npo():    
+    return vars(save_npo(request.get_json()))
+
 
 # Used to provide profile details - user must be logged in
 @bp.route("/profile/<user_id>")

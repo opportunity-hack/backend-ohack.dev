@@ -1,7 +1,7 @@
 from common.utils import safe_get_env_var
-import requests
 from api.messages.message import Message
 import json
+
 
 import logging
 
@@ -34,6 +34,35 @@ def get_admin_message():
         "This is an admin message."
     )
 
+
+def save_npo(json):
+    logger.debug("NPO Save")    
+    # TODO: In this current form, you will overwrite any information that matches the same NPO name
+
+    name = json["name"]
+    email = json["email"]
+    npoName = json["npoName"]
+    slack_channel = json["slack_channel"]
+    website = json["website"]
+    description = json["description"]
+ 
+    db = firestore.client()  # this connects to our Firestore database
+    collection = db.collection('nonprofits')
+    
+    insert_res = collection.document(npoName).set({
+        "contact_email": [email], # TODO: Support more than one email
+        "contact_people": [name], # TODO: Support more than one name
+        "name": npoName,
+        "slack_channel" :slack_channel,
+        "website": website,
+        "description":description
+    })
+
+    logger.debug(f"Insert Result: {insert_res}")
+
+    return Message(
+        "Saved NPO"
+    )
 
 def get_token():
     logger.debug("Token")
