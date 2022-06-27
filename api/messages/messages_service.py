@@ -2,7 +2,7 @@ from common.utils import safe_get_env_var
 from api.messages.message import Message
 import json
 
-
+import requests
 import logging
 
 logger = logging.getLogger("myapp")
