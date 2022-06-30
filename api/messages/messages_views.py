@@ -1,6 +1,7 @@
 from flask import (
     Blueprint,
-    request
+    request,
+    g
 )
 
 from api.messages.messages_service import (
@@ -47,10 +48,22 @@ def add_npo():
 
 
 # Used to provide profile details - user must be logged in
-@bp.route("/profile/<user_id>")
+@bp.route("/profile/")
 @authorization_guard
-def profile(user_id):
-    return vars(get_profile_metadata(user_id))
+def profile():    
+    # We should get the user information passed into the context,
+    #  and not honored by the parameter
+    #  that is, don't allow for someone to pass in a <user_id>
+    #  but instead, look it up via auth token so this is secure
+    token = g.get("access_token")
+    if token:
+        user_id = token["sub"]
+        return vars(get_profile_metadata(user_id))
+    else:
+        return None
+
+
+    
 
 
 # Used to provide feedback details - user must be logged in
