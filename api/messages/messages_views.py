@@ -48,7 +48,7 @@ def add_npo():
 
 
 # Used to provide profile details - user must be logged in
-@bp.route("/profile/")
+@bp.route("/profile")
 @authorization_guard
 def profile():    
     # We should get the user information passed into the context,
