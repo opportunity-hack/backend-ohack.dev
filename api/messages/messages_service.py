@@ -4,6 +4,9 @@ import json
 
 import requests
 import logging
+import firebase_admin
+from firebase_admin import credentials, firestore
+
 
 logger = logging.getLogger("myapp")
 
@@ -35,7 +38,32 @@ def get_admin_message():
     )
 
 
+
+def get_npo_list():
+    logger.debug("NPO List")
+    db = firestore.client()  
+    docs = db.collection('nonprofits').stream() # steam() gets all records   
+    if docs is None:
+        return {[]}
+    else:                
+        results = []
+        for doc in docs:
+            d = doc.to_dict()            
+            results.append(
+                {
+                    "id": d["id"],
+                    "name": d["name"],
+                    "description": d["description"],
+                    "slack_channel": d["slack_channel"]
+                }
+                    
+            )
+        return { "nonprofits": results }
+    
+
+
 def save_npo(json):
+    db = firestore.client()  # this connects to our Firestore database
     logger.debug("NPO Save")    
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
 
@@ -45,8 +73,7 @@ def save_npo(json):
     slack_channel = json["slack_channel"]
     website = json["website"]
     description = json["description"]
- 
-    db = firestore.client()  # this connects to our Firestore database
+     
     collection = db.collection('nonprofits')
     
     insert_res = collection.document(npoName).set({
@@ -80,8 +107,7 @@ def get_token():
     return x_j["access_token"]
 
 
-import firebase_admin
-from firebase_admin import credentials, firestore
+
 
 
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
