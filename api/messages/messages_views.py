@@ -10,7 +10,8 @@ from api.messages.messages_service import (
     get_protected_message,
     get_admin_message,
     save_npo,
-    get_npo_list
+    get_npo_list,
+    get_single_npo
 )
 from api.security.guards import (
     authorization_guard,
@@ -51,6 +52,12 @@ def add_npo():
 @bp.route("/npos", methods=["GET"])
 def get_npos():    
     return (get_npo_list())
+
+
+@bp.route("/npo/<npo_id>", methods=["GET"])
+def get_npo(npo_id):
+    return (get_single_npo(npo_id))
+    
 
 # Used to provide profile details - user must be logged in
 @bp.route("/profile")
