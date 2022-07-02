@@ -38,6 +38,36 @@ def get_admin_message():
     )
 
 
+def get_single_npo(npo_id):
+    
+    logger.debug(f"get_npo start npo_id={npo_id}")
+    db = firestore.client()      
+    query = db.collection('nonprofits').where("id","==",npo_id).limit(1)
+    doc = query.stream()
+    
+    if doc is None:
+        logger.debug("get_npo end (no results)")
+        return {}
+    else:                        
+        for ad in doc:
+            d = ad.to_dict()
+            print(d)        
+            problem_statements = []
+            if "problem_statements" in d:
+                for ps in d["problem_statements"]:
+                    problem_statements.append(ps.get().to_dict())
+
+            logger.debug("get_npo end (with results)")
+            return {
+                "nonprofits":{
+                "id": d["id"],
+                "name": d["name"],
+                "description": d["description"],
+                "slack_channel": d["slack_channel"],
+                "problem_statements": problem_statements
+                }
+            }
+    return {}
 
 def get_npo_list():
     logger.debug("NPO List")
@@ -48,13 +78,20 @@ def get_npo_list():
     else:                
         results = []
         for doc in docs:
-            d = doc.to_dict()            
+            d = doc.to_dict()    
+            print(d)        
+            problem_statements = []
+            if "problem_statements" in d:
+                for ps in d["problem_statements"]:
+                    problem_statements.append(ps.get().to_dict())
+
             results.append(
                 {
                     "id": d["id"],
                     "name": d["name"],
                     "description": d["description"],
-                    "slack_channel": d["slack_channel"]
+                    "slack_channel": d["slack_channel"],
+                    "problem_statements": problem_statements
                 }
                     
             )
@@ -92,7 +129,7 @@ def save_npo(json):
     )
 
 def get_token():
-    logger.debug("Token")
+    logger.debug("get_token start")
 
     url = f"https://{auth0_domain}/oauth/token"
     myobj = {
@@ -104,6 +141,7 @@ def get_token():
     x = requests.post(url, data=myobj)
     x_j = x.json()
     logger.info("Got access token")
+    logger.debug("get_token end")
     return x_j["access_token"]
 
 
@@ -111,8 +149,9 @@ def get_token():
 
 
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
+# Instead of giving the code a json file, we use environment variables so we don't have to source control a secrets file
 cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
-logger.info(f"CONFIG: {cert_env}")
+
 
 #We don't want this to be a file, we want to use env variables for security (we would have to check in this file)
 #cred = credentials.Certificate("./api/messages/ohack-dev-firebase-adminsdk-hrr2l-933367ee29.json")
@@ -178,8 +217,10 @@ def get_history(user_id):
 
             for n in rec["nonprofits"]:
                 npo_r = n.get().to_dict()
-                # This is duplicate date as we should already have this
-                del npo_r["problem_statements"]
+                
+                if npo_r and "problem_statements" in npo_r:
+                    # This is duplicate date as we should already have this
+                    del npo_r["problem_statements"]
                 nonprofits.append(npo_r)
             for ps in rec["problem_statements"]:
                 problem_statements.append(ps.get().to_dict())

@@ -144,3 +144,4 @@ Status: 200 OK
 # References
 - [Firestore UI](https://github.com/thanhlmm/refi-app)
 - [Using Python with Firestore](https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc)
+- [Querying Firestore with Python](https://firebase.google.com/docs/firestore/query-data/get-data)

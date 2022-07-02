@@ -66,9 +66,7 @@ def permissions_guard(required_permissions=None):
     def decorator(function):
         @wraps(function)
         def wrapper():
-            access_token = g.get("access_token")
-            print("ACCESS TOKEN")
-            print(access_token)
+            access_token = g.get("access_token")            
 
             if not access_token:
                 json_abort(401, unauthorized_error)
