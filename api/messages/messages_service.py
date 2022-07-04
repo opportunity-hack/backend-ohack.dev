@@ -1,8 +1,8 @@
 from common.utils import safe_get_env_var
 from api.messages.message import Message
 import json
+import uuid
 
-import requests
 import logging
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -16,14 +16,14 @@ auth0_secret = safe_get_env_var("AUTH0_USER_MGMT_SECRET")
 
 
 def get_public_message():
-    logger.debug("Public")
+    logger.debug("~ Public ~")
     return Message(
         "aaThis is a public message."
     )
 
 
 def get_protected_message():
-    logger.debug("Protected")
+    logger.debug("~ Protected ~")
 
     return Message(
         "This is a protected message."
@@ -31,7 +31,7 @@ def get_protected_message():
 
 
 def get_admin_message():
-    logger.debug("Admin")
+    logger.debug("~ Admin ~")
 
     return Message(
         "This is an admin message."
@@ -39,7 +39,6 @@ def get_admin_message():
 
 
 def get_single_npo(npo_id):
-    
     logger.debug(f"get_npo start npo_id={npo_id}")
     db = firestore.client()      
     query = db.collection('nonprofits').where("id","==",npo_id).limit(1)
@@ -98,6 +97,29 @@ def get_npo_list():
         return { "nonprofits": results }
     
 
+def get_problem_statement_list():
+    logger.debug("Problem Statements List")
+    db = firestore.client()
+    docs = db.collection('problem_statements').stream()  # steam() gets all records
+    if docs is None:
+        return {[]}
+    else:
+        results = []
+        for doc in docs:
+            d = doc.to_dict()            
+            results.append(
+                {
+                    "id": doc.id,
+                    "title": d["title"],
+                    "description": d["description"],
+                    "first_thought_of": d["first_thought_of"],
+                    "github": d["github"],
+                    "references": d["references"],
+                    "status": d["status"]
+                }
+
+            )
+        return { "problem_statements": results }
 
 def save_npo(json):
     db = firestore.client()  # this connects to our Firestore database
@@ -127,6 +149,40 @@ def save_npo(json):
     return Message(
         "Saved NPO"
     )
+
+
+def save_problem_statement(json):
+    db = firestore.client()  # this connects to our Firestore database
+    logger.debug("Problem Statement Save")
+    # TODO: In this current form, you will overwrite any information that matches the same NPO name
+
+    doc_id = uuid.uuid1().hex
+    title = json["title"]
+    description = json["description"]
+    first_thought_of = json["first_thought_of"]
+    github = json["github"]
+    references = json["references"]
+    status = json["status"]
+    
+    logger.debug(f"id: {doc_id}")
+
+    collection = db.collection('problem_statements')
+
+    insert_res = collection.document(doc_id).set({
+        "title": title,
+        "description": description,
+        "first_thought_of": first_thought_of,
+        "github": github,
+        "references": [references],  # TODO: Support more than one email
+        "status": status        
+    })
+
+    logger.debug(f"Insert Result: {insert_res}")
+
+    return Message(
+        "Saved Problem Statement"
+    )
+
 
 def get_token():
     logger.debug("get_token start")
