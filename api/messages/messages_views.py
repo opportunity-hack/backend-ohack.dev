@@ -11,7 +11,9 @@ from api.messages.messages_service import (
     get_admin_message,
     save_npo,
     get_npo_list,
-    get_single_npo
+    get_single_npo,
+    save_problem_statement,
+    get_problem_statement_list
 )
 from api.security.guards import (
     authorization_guard,
@@ -48,6 +50,17 @@ def admin():
 def add_npo(): 
     return vars(save_npo(request.get_json()))
 
+
+@bp.route("/problem_statement", methods=["POST"])
+@authorization_guard
+@permissions_guard([admin_messages_permissions.read])
+def add_problem_statement():
+    return vars(save_problem_statement(request.get_json()))
+
+
+@bp.route("/problem_statements", methods=["GET"])
+def get_problem_statments():
+    return get_problem_statement_list()
 
 @bp.route("/npos", methods=["GET"])
 def get_npos():    
