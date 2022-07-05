@@ -227,53 +227,55 @@ firebase_admin.initialize_app(credential=cred)
 
 
 def save(user_id=None, email=None, last_login=None):
-    print("Save Start")
+    logger.debug("User Save Start")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
+
+    
 
     if user_id is None or email is None or last_login is None:
         logger.error(f"Empty values provided for user_id: {user_id}, email: {email}, or last_login: {last_login}")
         return
 
     db = firestore.client()  # this connects to our Firestore database
-    collection = db.collection('users')
-    doc = collection.document(user_id)
-    res = doc.get().to_dict()
-    if res is None:
-        insert_res = collection.document(user_id).set({
-            "email_address": email,
-            "last_login": last_login,
-            "user_id": user_id,
-            "badges":[
-                "first_hackathon"
-            ]
-        })
+    
+    # Even though there is 1 record, we always will need to iterate on it
+    docs = db.collection('users').where("user_id","==",user_id).stream()
+    
+    for doc in docs:
+        res = doc.to_dict()
+        print(res)        
+        if res:
+            # Found result already in DB, update
+            logger.debug(f"Found user (_id={doc.id}), updating last_login")
+            update_res = db.collection("users").document(doc.id).update({
+                "last_login": last_login
+            })
+            logger.debug(f"Update Result: {update_res}")
+        
+        logger.debug("User Save End")
+        return doc.id # Should only have 1 record, but break just for safety 
+
+    doc_id = uuid.uuid1().hex
+    insert_res = db.collection('users').document(doc_id).set({
+        "email_address": email,
+        "last_login": last_login,
+        "user_id": user_id,
+        "badges": [
+            "first_hackathon"
+        ]
+    })
+    logger.debug(f"Insert Result: {insert_res}")
+    return doc_id
+    
 
 
-        logger.debug(f"Insert Result: {insert_res}")
-    else:
-        # Found result already in DB, update
-        update_res = collection.document(user_id).update({
-            "last_login": last_login
-        })
-        logger.debug(f"Update Result: {update_res}")
-
-    print(res)
-    print("Save End")
-
-
-def get_history(user_id):
+def get_history(db_id):
     logger.debug("Get Hackathons Start")
     db = firestore.client()  # this connects to our Firestore database
     collection = db.collection('users')
-    doc = collection.document(user_id)
+    doc = collection.document(db_id)
     doc_get = doc.get()
     res = doc_get.to_dict()
-    logger.debug(res)
-
-    _problem_statements=[]
-    if "problem_statements" in res:
-        for h in res["problem_statements"]:
-            _problem_statements.append(h.get().to_dict())
 
     _hackathons=[]
     if "hackathons" in res:
@@ -306,11 +308,11 @@ def get_history(user_id):
             _badges.append(h.get().to_dict())
 
     result = {
+        "id": doc.id,
         "user_id": res["user_id"],
         "email_address" : res["email_address"],
         "badges" : _badges,
-        "hackathons" : _hackathons,
-        "problem_statements" : _problem_statements
+        "hackathons" : _hackathons        
     }
 
     logger.debug(f"RESULT\n{result}")
@@ -319,11 +321,11 @@ def get_history(user_id):
 
 
 
-def get_profile_metadata(user_id):
+def get_profile_metadata(slack_user_id):
     logger.debug("Profile Metadata")
 
     token = get_token()
-    url = f"https://{auth0_domain}/api/v2/users/{user_id}"
+    url = f"https://{auth0_domain}/api/v2/users/{slack_user_id}"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
@@ -336,13 +338,13 @@ def get_profile_metadata(user_id):
     email = x_j["email"]
     user_id = x_j["user_id"]
     last_login = x_j["last_login"]
-    logger.debug(f"Auth0 Account Details:\nEmail: {email}\nUser ID: {user_id}\nLast Login:{last_login}")
+    logger.debug(f"Auth0 Account Details:\nEmail: {email}\nSlack User ID: {user_id}\nLast Login:{last_login}")
 
     # Call firebase to see if account exists and save these details
-    save(user_id=user_id, email=email, last_login=last_login)
+    db_id = save(user_id=user_id, email=email, last_login=last_login)
 
     #response = f"{x_j}"
-    response = get_history(user_id)
+    response = get_history(db_id)
     logger.debug(response)
 
 
