@@ -6,7 +6,7 @@ import uuid
 import logging
 import firebase_admin
 from firebase_admin import credentials, firestore
-
+import requests
 
 logger = logging.getLogger("myapp")
 
@@ -41,31 +41,31 @@ def get_admin_message():
 def get_single_npo(npo_id):
     logger.debug(f"get_npo start npo_id={npo_id}")
     db = firestore.client()      
-    query = db.collection('nonprofits').where("id","==",npo_id).limit(1)
-    doc = query.stream()
+    doc = db.collection('nonprofits').document(npo_id)    
     
     if doc is None:
-        logger.debug("get_npo end (no results)")
+        logger.warning("get_npo end (no results)")
         return {}
     else:                        
-        for ad in doc:
-            d = ad.to_dict()
-            print(d)        
-            problem_statements = []
-            if "problem_statements" in d:
-                for ps in d["problem_statements"]:
-                    problem_statements.append(ps.get().to_dict())
+        d = doc.get().to_dict()            
+        print(d)        
+        problem_statements = []
+        if "problem_statements" in d:
+            for ps in d["problem_statements"]:
+                problem_statements.append(ps.get().to_dict())
 
-            logger.debug("get_npo end (with results)")
-            return {
-                "nonprofits":{
-                "id": d["id"],
-                "name": d["name"],
-                "description": d["description"],
-                "slack_channel": d["slack_channel"],
-                "problem_statements": problem_statements
-                }
-            }
+        
+        result = {
+            "id": doc.id,
+            "name": d["name"],
+            "description": d["description"],
+            "slack_channel": d["slack_channel"],
+            "problem_statements": problem_statements
+        }
+        logger.debug(f"get_npo end (with result):{result}")
+        return {
+            "nonprofits": result
+        }
     return {}
 
 def get_npo_list():
@@ -77,7 +77,7 @@ def get_npo_list():
     else:                
         results = []
         for doc in docs:
-            d = doc.to_dict()    
+            d = doc.to_dict()  
             print(d)        
             problem_statements = []
             if "problem_statements" in d:
@@ -86,7 +86,7 @@ def get_npo_list():
 
             results.append(
                 {
-                    "id": d["id"],
+                    "id": doc.id,
                     "name": d["name"],
                     "description": d["description"],
                     "slack_channel": d["slack_channel"],
@@ -121,10 +121,12 @@ def get_problem_statement_list():
             )
         return { "problem_statements": results }
 
-def save_npo(json):
+def save_npo(json):    
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("NPO Save")    
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
+
+    doc_id = uuid.uuid1().hex
 
     name = json["name"]
     email = json["email"]
@@ -132,16 +134,25 @@ def save_npo(json):
     slack_channel = json["slack_channel"]
     website = json["website"]
     description = json["description"]
+    temp_problem_statements = json["problem_statements"]
+    
+
+    # We need to convert this from just an ID to a full object
+    # Ref: https://stackoverflow.com/a/59394211
+    problem_statements = []
+    for ps in temp_problem_statements:
+        problem_statements.append(db.collection("problem_statements").document(ps))
      
     collection = db.collection('nonprofits')
     
-    insert_res = collection.document(npoName).set({
+    insert_res = collection.document(doc_id).set({
         "contact_email": [email], # TODO: Support more than one email
         "contact_people": [name], # TODO: Support more than one name
         "name": npoName,
         "slack_channel" :slack_channel,
         "website": website,
-        "description":description
+        "description": description,
+        "problem_statements": problem_statements
     })
 
     logger.debug(f"Insert Result: {insert_res}")
