@@ -226,14 +226,17 @@ cred = credentials.Certificate(cert_env)
 firebase_admin.initialize_app(credential=cred)
 
 
-def save(user_id=None, email=None, last_login=None):
+def save(user_id=None, email=None, last_login=None, profile_image=None):
     logger.debug("User Save Start")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
 
     
 
-    if user_id is None or email is None or last_login is None:
-        logger.error(f"Empty values provided for user_id: {user_id}, email: {email}, or last_login: {last_login}")
+    if user_id is None or email is None or last_login is None or profile_image is None:
+        logger.error(
+            f"Empty values provided for user_id: {user_id},\
+                email: {email}, or last_login: {last_login}\
+                    or profile_image: {profile_image}")
         return
 
     db = firestore.client()  # this connects to our Firestore database
@@ -247,8 +250,10 @@ def save(user_id=None, email=None, last_login=None):
         if res:
             # Found result already in DB, update
             logger.debug(f"Found user (_id={doc.id}), updating last_login")
-            update_res = db.collection("users").document(doc.id).update({
-                "last_login": last_login
+            update_res = db.collection("users").document(doc.id).update(
+                {
+                "last_login": last_login,
+                "profile_image": profile_image
             })
             logger.debug(f"Update Result: {update_res}")
         
@@ -260,6 +265,7 @@ def save(user_id=None, email=None, last_login=None):
         "email_address": email,
         "last_login": last_login,
         "user_id": user_id,
+        "profile_image": profile_image,
         "badges": [
             "first_hackathon"
         ]
@@ -310,6 +316,7 @@ def get_history(db_id):
     result = {
         "id": doc.id,
         "user_id": res["user_id"],
+        "profile_image": res["profile_image"],
         "email_address" : res["email_address"],
         "badges" : _badges,
         "hackathons" : _hackathons        
@@ -325,6 +332,8 @@ def get_profile_metadata(slack_user_id):
     logger.debug("Profile Metadata")
 
     token = get_token()
+
+    # Call Auth0 to get user metadata about the Slack account they used to login
     url = f"https://{auth0_domain}/api/v2/users/{slack_user_id}"
     headers = {
         "Authorization": f"Bearer {token}",
@@ -333,19 +342,23 @@ def get_profile_metadata(slack_user_id):
     x = requests.get(url, headers=headers)
     x_j = x.json()
 
-    logger.debug(x_j)
+    logger.debug(f"Auth0 Metadata Response: {x_j}")
 
     email = x_j["email"]
     user_id = x_j["user_id"]
     last_login = x_j["last_login"]
-    logger.debug(f"Auth0 Account Details:\nEmail: {email}\nSlack User ID: {user_id}\nLast Login:{last_login}")
+    profile_image = x_j["image_192"]    
+    logger.debug(f"Auth0 Account Details:\
+            \nEmail: {email}\nSlack User ID: {user_id}\n\
+            Last Login:{last_login}\
+            Image:{profile_image}")
 
     # Call firebase to see if account exists and save these details
-    db_id = save(user_id=user_id, email=email, last_login=last_login)
+    db_id = save(user_id=user_id, email=email, last_login=last_login, profile_image=profile_image)
 
-    #response = f"{x_j}"
+    # Get all of the user history and profile data from the DB
     response = get_history(db_id)
-    logger.debug(response)
+    logger.debug(f"get_profile_metadata {response}")
 
 
     return Message(response)
