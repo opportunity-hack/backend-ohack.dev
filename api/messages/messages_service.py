@@ -52,7 +52,10 @@ def get_single_npo(npo_id):
         problem_statements = []
         if "problem_statements" in d:
             for ps in d["problem_statements"]:
-                problem_statements.append(ps.get().to_dict())
+                ps_doc = ps.get()
+                ps_json = ps_doc.to_dict()
+                ps_json["id"] = ps_doc.id
+                problem_statements.append(ps_json)
 
         
         result = {
@@ -69,7 +72,7 @@ def get_single_npo(npo_id):
     return {}
 
 def get_npo_list():
-    logger.debug("NPO List")
+    logger.debug("NPO List Start")
     db = firestore.client()  
     docs = db.collection('nonprofits').stream() # steam() gets all records   
     if docs is None:
@@ -82,7 +85,10 @@ def get_npo_list():
             problem_statements = []
             if "problem_statements" in d:
                 for ps in d["problem_statements"]:
-                    problem_statements.append(ps.get().to_dict())
+                    ps_doc = ps.get()
+                    ps_json = ps_doc.to_dict()
+                    ps_json["id"] = ps_doc.id                    
+                    problem_statements.append(ps_json)
 
             results.append(
                 {
@@ -94,6 +100,7 @@ def get_npo_list():
                 }
                     
             )
+        logger.debug(f"NPO List End")
         return { "nonprofits": results }
     
 
@@ -162,6 +169,70 @@ def save_npo(json):
     )
 
 
+def update_npo(json):
+    db = firestore.client()  # this connects to our Firestore database
+    logger.debug("NPO Edit")
+    
+    doc_id = json["id"]
+    temp_problem_statements = json["problem_statements"]
+
+    doc = db.collection('nonprofits').document(doc_id)
+
+    # We need to convert this from just an ID to a full object
+    # Ref: https://stackoverflow.com/a/59394211
+    problem_statements = []
+    for ps in temp_problem_statements:
+        problem_statements.append(db.collection(
+            "problem_statements").document(ps))
+    
+
+    update_result = doc.update({      
+        "problem_statements": problem_statements
+    })
+
+    logger.debug(f"Update Result: {update_result}")
+
+    return Message(
+        "Updated NPO"
+    )
+
+def save_hackathon(json):
+    db = firestore.client()  # this connects to our Firestore database
+    logger.debug("Hackathon Save")
+    # TODO: In this current form, you will overwrite any information that matches the same NPO name
+
+    doc_id = uuid.uuid1().hex
+
+    devpost_url = json["devpost_url"]
+    location = json["location"]
+    temp_problem_statements = json["problem_statements"]
+    start_date = json["start_date"]
+    end_date = json["end_date"]    
+    
+
+    # We need to convert this from just an ID to a full object
+    # Ref: https://stackoverflow.com/a/59394211
+    problem_statements = []
+    for ps in temp_problem_statements:
+        problem_statements.append(db.collection(
+            "problem_statements").document(ps))
+
+    collection = db.collection('hackathons')
+
+    insert_res = collection.document(doc_id).set({
+        "devpost_url": devpost_url,
+        "location": location,
+        "start_date": start_date,
+        "end_date": end_date,                    
+        "problem_statements": problem_statements
+    })
+
+    logger.debug(f"Insert Result: {insert_res}")
+
+    return Message(
+        "Saved Hackathon"
+    )
+
 def save_problem_statement(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("Problem Statement Save")
@@ -174,8 +245,7 @@ def save_problem_statement(json):
     github = json["github"]
     references = json["references"]
     status = json["status"]
-    
-    logger.debug(f"id: {doc_id}")
+        
 
     collection = db.collection('problem_statements')
 

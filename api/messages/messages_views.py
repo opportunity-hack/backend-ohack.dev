@@ -10,10 +10,12 @@ from api.messages.messages_service import (
     get_protected_message,
     get_admin_message,
     save_npo,
+    update_npo,
     get_npo_list,
     get_single_npo,
     save_problem_statement,
-    get_problem_statement_list
+    get_problem_statement_list,
+    save_hackathon
 )
 from api.security.guards import (
     authorization_guard,
@@ -50,6 +52,18 @@ def admin():
 def add_npo(): 
     return vars(save_npo(request.get_json()))
 
+@bp.route("/npo/edit", methods=["PATCH"])
+@authorization_guard
+@permissions_guard([admin_messages_permissions.read])
+def edit_npo(): 
+    return vars(update_npo(request.get_json()))
+
+
+@bp.route("/hackathon", methods=["POST"])
+@authorization_guard
+@permissions_guard([admin_messages_permissions.read])
+def add_hackathon():
+    return vars(save_hackathon(request.get_json()))
 
 @bp.route("/problem_statement", methods=["POST"])
 @authorization_guard
