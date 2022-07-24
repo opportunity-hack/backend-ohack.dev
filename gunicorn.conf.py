@@ -1,8 +1,9 @@
 import gunicorn.http.wsgi
 from functools import wraps
-from dotenv import load_dotenv
+
 from common.utils import safe_get_env_var
 
+from dotenv import load_dotenv
 load_dotenv()
 
 # We get the port dynamically for when this is deployed in Heroku
