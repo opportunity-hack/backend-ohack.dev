@@ -38,6 +38,57 @@ def get_admin_message():
     )
 
 
+def problem_statements_to_json(d):
+    problem_statements = []
+    if "problem_statements" in d:
+        for ps in d["problem_statements"]:
+            ps_doc = ps.get()
+            ps_json = ps_doc.to_dict()
+            ps_json["id"] = ps_doc.id
+
+            event_list = []
+            for e in ps_json["events"]:
+                event_doc = e.get()
+                event = event_doc.to_dict()
+
+                team_list = []
+                for t in event["teams"]:
+                    team_doc = t.get()
+                    team = team_doc.to_dict()
+
+                    user_list = []
+                    for u in team["users"]:
+                        user_doc = u.get()
+                        user_list.append({"user_id": user_doc.id})
+
+                    team_list.append({
+                        "id": team_doc.id,
+                        "active": team["active"],
+                        "name": team["name"],
+                        "slack_channel": team["slack_channel"],
+                        "github_links": team["github_links"],
+                        "team_number": team["team_number"],
+                        "users": user_list
+                    }
+                    )
+
+                event_list.append({
+                    "id": event_doc.id,
+                    "teams": team_list,
+                    "type": event["type"],
+                    "location": event["location"],
+                    "devpost_url": event["devpost_url"],
+                    "start_date": event["start_date"],
+                    "end_date": event["end_date"],
+                    "image_url": event["image_url"]
+                }
+                )
+        ps_json["events"] = event_list
+        problem_statements.append(ps_json)
+    return problem_statements
+
+
+
 def get_single_npo(npo_id):
     logger.debug(f"get_npo start npo_id={npo_id}")
     db = firestore.client()      
@@ -48,22 +99,13 @@ def get_single_npo(npo_id):
         return {}
     else:                        
         d = doc.get().to_dict()            
-        print(d)        
-        problem_statements = []
-        if "problem_statements" in d:
-            for ps in d["problem_statements"]:
-                ps_doc = ps.get()
-                ps_json = ps_doc.to_dict()
-                ps_json["id"] = ps_doc.id
-                problem_statements.append(ps_json)
-
-        
+              
         result = {
             "id": doc.id,
             "name": d["name"],
             "description": d["description"],
             "slack_channel": d["slack_channel"],
-            "problem_statements": problem_statements
+            "problem_statements": problem_statements_to_json(d)
         }
         logger.debug(f"get_npo end (with result):{result}")
         return {
@@ -81,14 +123,6 @@ def get_npo_list():
         results = []
         for doc in docs:
             d = doc.to_dict()  
-            print(d)        
-            problem_statements = []
-            if "problem_statements" in d:
-                for ps in d["problem_statements"]:
-                    ps_doc = ps.get()
-                    ps_json = ps_doc.to_dict()
-                    ps_json["id"] = ps_doc.id                    
-                    problem_statements.append(ps_json)
 
             results.append(
                 {
@@ -96,7 +130,7 @@ def get_npo_list():
                     "name": d["name"],
                     "description": d["description"],
                     "slack_channel": d["slack_channel"],
-                    "problem_statements": problem_statements
+                    "problem_statements": problem_statements_to_json(d)
                 }
                     
             )
