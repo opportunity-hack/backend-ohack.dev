@@ -11,11 +11,13 @@ from api.messages.messages_service import (
     get_admin_message,
     save_npo,
     update_npo,
+    remove_npo,
     get_npo_list,
     get_single_npo,
     save_problem_statement,
     get_problem_statement_list,
-    save_hackathon
+    save_hackathon,
+    get_teams_list
 )
 from api.security.guards import (
     authorization_guard,
@@ -45,6 +47,8 @@ def protected():
 def admin():    
     return vars(get_admin_message())
 
+#
+# Nonprofit Related Endpoints
 
 @bp.route("/npo", methods=["POST"])
 @authorization_guard
@@ -58,6 +62,26 @@ def add_npo():
 def edit_npo(): 
     return vars(update_npo(request.get_json()))
 
+@bp.route("/npo/<npo_id>", methods=["DELETE"])
+@authorization_guard
+@permissions_guard([admin_messages_permissions.read])
+def delete_npo(npo_id):
+    return (remove_npo(npo_id))
+
+
+@bp.route("/npos", methods=["GET"])
+def get_npos():
+    return (get_npo_list())
+
+
+@bp.route("/npo/<npo_id>", methods=["GET"])
+def get_npo(npo_id):
+    return (get_single_npo(npo_id))
+
+
+
+#
+# Hackathon Related Endpoints
 
 @bp.route("/hackathon", methods=["POST"])
 @authorization_guard
@@ -65,26 +89,21 @@ def edit_npo():
 def add_hackathon():
     return vars(save_hackathon(request.get_json()))
 
+
+# Problem Statement (also called Project) Related Endpoints
 @bp.route("/problem_statement", methods=["POST"])
 @authorization_guard
 @permissions_guard([admin_messages_permissions.read])
 def add_problem_statement():
     return vars(save_problem_statement(request.get_json()))
 
-
 @bp.route("/problem_statements", methods=["GET"])
 def get_problem_statments():
-    return get_problem_statement_list()
+    return get_problem_statement_list()    
 
-@bp.route("/npos", methods=["GET"])
-def get_npos():    
-    return (get_npo_list())
-
-
-@bp.route("/npo/<npo_id>", methods=["GET"])
-def get_npo(npo_id):
-    return (get_single_npo(npo_id))
-    
+@bp.route("/teams", methods=["GET"])
+def get_teams():
+    return (get_teams_list())
 
 # Used to provide profile details - user must be logged in
 @bp.route("/profile")
@@ -100,9 +119,6 @@ def profile():
         return vars(get_profile_metadata(user_id))
     else:
         return None
-
-
-    
 
 
 # Used to provide feedback details - user must be logged in
