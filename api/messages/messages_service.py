@@ -45,6 +45,21 @@ def get_admin_message():
 def problem_statement_key(docid, document):
     return hashkey(docid)
 
+# 10 minute cache for 100 objects LRU
+
+
+@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+def users_to_json(docid, d):
+    users = []
+    if "users" in d:
+        for u in d["users"]:            
+            u_doc = u.get()
+            u_json = u_doc.to_dict()
+            u_json["id"] = u.id
+            u_json["badges"] = "" # Don't bother adding this
+            u_json["teams"] = ""  # Don't bother adding this
+            users.append(u_json)
+    return users
 
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
@@ -65,7 +80,6 @@ def problem_statements_to_json(docid, d):
                 for t in event["teams"]:
                     team_doc = t.get()
                     team = team_doc.to_dict()
-
                     user_list = []
                     for u in team["users"]:
                         user_doc = u.get()
@@ -126,10 +140,45 @@ def get_single_npo(npo_id):
         }
     return {}
 
+
+def get_teams_list():
+    logger.debug("Teams List Start")
+    db = firestore.client()  
+    docs = db.collection('teams').stream() # steam() gets all records   
+    if docs is None:
+        return {[]}
+    else:                
+        results = []
+        for doc in docs:
+            d_doc = doc
+            d = d_doc.to_dict()
+
+            results.append(
+                {
+                    "id": doc.id,
+                    "name": d["name"],
+                    "active": d["active"],
+                    "slack_channel": d["slack_channel"],
+                    "github_links": d["github_links"],
+                    "team_number": d["team_number"],
+                    "users": users_to_json(d_doc.id, d),
+                    "problem_statements": problem_statements_to_json(d_doc.id, d)
+                }
+                    
+            )
+        logger.debug(f"Teams List End")
+        return { "teams": results }
+
+
+
+    
+
+
 def get_npo_list():
     logger.debug("NPO List Start")
     db = firestore.client()  
-    docs = db.collection('nonprofits').stream() # steam() gets all records   
+    # steam() gets all records
+    docs = db.collection('nonprofits').order_by("name").stream()
     if docs is None:
         return {[]}
     else:                
@@ -144,6 +193,8 @@ def get_npo_list():
                     "name": d["name"],
                     "description": d["description"],
                     "slack_channel": d["slack_channel"],
+                    "website": d["website"],
+                    "contact_people": ", ".join(d["contact_people"]),
                     "problem_statements": problem_statements_to_json(d_doc.id, d)
                 }
                     
@@ -217,6 +268,18 @@ def save_npo(json):
     )
 
 
+def remove_npo(doc_id):
+    logger.debug("Start NPO Delete")
+    db = firestore.client()  # this connects to our Firestore database
+    doc = db.collection('nonprofits').document(doc_id)
+    doc.delete()
+
+
+    logger.debug("End NPO Delete")
+    return Message(
+        "Delete NPO"
+    )
+
 def update_npo(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("NPO Edit")
@@ -253,17 +316,27 @@ def save_hackathon(json):
 
     devpost_url = json["devpost_url"]
     location = json["location"]
-    temp_problem_statements = json["problem_statements"]
-    start_date = json["start_date"]
-    end_date = json["end_date"]    
     
+    start_date = json["start_date"]
+    end_date = json["end_date"]
+    event_type = json["event_type"]
+    image_url = json["image_url"]
+    
+    temp_nonprofits = json["nonprofits"]
+    temp_teams = json["teams"]
 
     # We need to convert this from just an ID to a full object
     # Ref: https://stackoverflow.com/a/59394211
-    problem_statements = []
-    for ps in temp_problem_statements:
-        problem_statements.append(db.collection(
-            "problem_statements").document(ps))
+    nonprofits = []
+    for ps in temp_nonprofits:
+        nonprofits.append(db.collection(
+            "nonprofits").document(ps))
+
+    teams = []
+    for ps in temp_teams:
+        teams.append(db.collection(
+            "teams").document(ps))
+
 
     collection = db.collection('hackathons')
 
@@ -272,7 +345,10 @@ def save_hackathon(json):
         "location": location,
         "start_date": start_date,
         "end_date": end_date,                    
-        "problem_statements": problem_statements
+        "type": event_type,
+        "image_url": image_url,
+        "nonprofits": nonprofits,
+        "teams": teams
     })
 
     logger.debug(f"Insert Result: {insert_res}")
