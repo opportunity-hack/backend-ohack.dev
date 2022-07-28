@@ -8,6 +8,10 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import requests
 
+from cachetools import cached, LRUCache, TTLCache
+from cachetools.keys import hashkey
+
+
 logger = logging.getLogger("myapp")
 
 auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
@@ -38,7 +42,13 @@ def get_admin_message():
     )
 
 
-def problem_statements_to_json(d):
+def problem_statement_key(docid, document):
+    return hashkey(docid)
+
+
+# 10 minute cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+def problem_statements_to_json(docid, d):
     problem_statements = []
     if "problem_statements" in d:
         for ps in d["problem_statements"]:
@@ -88,7 +98,8 @@ def problem_statements_to_json(d):
     return problem_statements
 
 
-
+# 10 minute cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=600))
 def get_single_npo(npo_id):
     logger.debug(f"get_npo start npo_id={npo_id}")
     db = firestore.client()      
@@ -98,14 +109,16 @@ def get_single_npo(npo_id):
         logger.warning("get_npo end (no results)")
         return {}
     else:                        
-        d = doc.get().to_dict()            
-              
+        d_doc = doc.get()
+        d = d_doc.to_dict()
+        
+
         result = {
             "id": doc.id,
             "name": d["name"],
             "description": d["description"],
             "slack_channel": d["slack_channel"],
-            "problem_statements": problem_statements_to_json(d)
+            "problem_statements": problem_statements_to_json(d_doc.id, d)
         }
         logger.debug(f"get_npo end (with result):{result}")
         return {
@@ -122,7 +135,8 @@ def get_npo_list():
     else:                
         results = []
         for doc in docs:
-            d = doc.to_dict()  
+            d_doc = doc
+            d = d_doc.to_dict()
 
             results.append(
                 {
@@ -130,7 +144,7 @@ def get_npo_list():
                     "name": d["name"],
                     "description": d["description"],
                     "slack_channel": d["slack_channel"],
-                    "problem_statements": problem_statements_to_json(d)
+                    "problem_statements": problem_statements_to_json(d_doc.id, d)
                 }
                     
             )
@@ -379,6 +393,7 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
     
 
 
+# Caching is not needed because the parent method already is caching
 def get_history(db_id):
     logger.debug("Get Hackathons Start")
     db = firestore.client()  # this connects to our Firestore database
@@ -430,8 +445,8 @@ def get_history(db_id):
     return result
 
 
-
-
+# 10 minute cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=600))
 def get_profile_metadata(slack_user_id):
     logger.debug("Profile Metadata")
 
