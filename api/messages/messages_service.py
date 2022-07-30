@@ -11,6 +11,7 @@ import requests
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 
+from ratelimit import limits
 
 logger = logging.getLogger("myapp")
 
@@ -18,6 +19,7 @@ auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
 auth0_client = safe_get_env_var("AUTH0_USER_MGMT_CLIENT_ID")
 auth0_secret = safe_get_env_var("AUTH0_USER_MGMT_SECRET")
 
+ONE_MINUTE = 1*60
 
 def get_public_message():
     logger.debug("~ Public ~")
@@ -114,6 +116,7 @@ def problem_statements_to_json(docid, d):
 
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=100, period=ONE_MINUTE)
 def get_single_npo(npo_id):
     logger.debug(f"get_npo start npo_id={npo_id}")
     db = firestore.client()      
@@ -140,7 +143,7 @@ def get_single_npo(npo_id):
         }
     return {}
 
-
+@limits(calls=100, period=ONE_MINUTE)
 def get_teams_list():
     logger.debug("Teams List Start")
     db = firestore.client()  
@@ -171,9 +174,7 @@ def get_teams_list():
 
 
 
-    
-
-
+@limits(calls=5, period=ONE_MINUTE)
 def get_npo_list():
     logger.debug("NPO List Start")
     db = firestore.client()  
@@ -203,6 +204,7 @@ def get_npo_list():
         return { "nonprofits": results }
     
 
+@limits(calls=100, period=ONE_MINUTE)
 def get_problem_statement_list():
     logger.debug("Problem Statements List")
     db = firestore.client()
@@ -227,6 +229,8 @@ def get_problem_statement_list():
             )
         return { "problem_statements": results }
 
+
+@limits(calls=100, period=ONE_MINUTE)
 def save_npo(json):    
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("NPO Save")    
@@ -268,18 +272,24 @@ def save_npo(json):
     )
 
 
-def remove_npo(doc_id):
+@limits(calls=100, period=ONE_MINUTE)
+def remove_npo(json):
     logger.debug("Start NPO Delete")
+    doc_id = json["id"]
     db = firestore.client()  # this connects to our Firestore database
     doc = db.collection('nonprofits').document(doc_id)
     doc.delete()
 
+    # TODO: Add a way to track what has been deleted
+    # Either by calling Slack or by using another DB/updating the DB with a hidden=True flag, etc.
 
     logger.debug("End NPO Delete")
     return Message(
         "Delete NPO"
     )
 
+
+@limits(calls=100, period=ONE_MINUTE)
 def update_npo(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("NPO Edit")
@@ -307,6 +317,8 @@ def update_npo(json):
         "Updated NPO"
     )
 
+
+@limits(calls=50, period=ONE_MINUTE)
 def save_hackathon(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("Hackathon Save")
@@ -357,6 +369,8 @@ def save_hackathon(json):
         "Saved Hackathon"
     )
 
+
+@limits(calls=50, period=ONE_MINUTE)
 def save_problem_statement(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("Problem Statement Save")
@@ -420,6 +434,7 @@ cred = credentials.Certificate(cert_env)
 firebase_admin.initialize_app(credential=cred)
 
 
+@limits(calls=50, period=ONE_MINUTE)
 def save(user_id=None, email=None, last_login=None, profile_image=None):
     logger.debug("User Save Start")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
@@ -470,6 +485,7 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
 
 
 # Caching is not needed because the parent method already is caching
+@limits(calls=100, period=ONE_MINUTE)
 def get_history(db_id):
     logger.debug("Get Hackathons Start")
     db = firestore.client()  # this connects to our Firestore database
@@ -523,6 +539,7 @@ def get_history(db_id):
 
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata(slack_user_id):
     logger.debug("Profile Metadata")
 

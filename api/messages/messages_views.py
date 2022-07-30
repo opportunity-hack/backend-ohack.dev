@@ -62,11 +62,11 @@ def add_npo():
 def edit_npo(): 
     return vars(update_npo(request.get_json()))
 
-@bp.route("/npo/<npo_id>", methods=["DELETE"])
+@bp.route("/npo", methods=["DELETE"])
 @authorization_guard
 @permissions_guard([admin_messages_permissions.read])
-def delete_npo(npo_id):
-    return (remove_npo(npo_id))
+def delete_npo():        
+    return vars(remove_npo(request.get_json()))
 
 
 @bp.route("/npos", methods=["GET"])
