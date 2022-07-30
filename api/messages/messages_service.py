@@ -1,4 +1,4 @@
-from common.utils import safe_get_env_var
+from common.utils import safe_get_env_var, send_slack_audit
 from api.messages.message import Message
 import json
 import uuid
@@ -118,7 +118,7 @@ def problem_statements_to_json(docid, d):
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=100, period=ONE_MINUTE)
 def get_single_npo(npo_id):
-    logger.debug(f"get_npo start npo_id={npo_id}")
+    logger.debug(f"get_npo start npo_id={npo_id}")    
     db = firestore.client()      
     doc = db.collection('nonprofits').document(npo_id)    
     
@@ -174,7 +174,7 @@ def get_teams_list():
 
 
 
-@limits(calls=5, period=ONE_MINUTE)
+@limits(calls=20, period=ONE_MINUTE)
 def get_npo_list():
     logger.debug("NPO List Start")
     db = firestore.client()  
@@ -232,6 +232,7 @@ def get_problem_statement_list():
 
 @limits(calls=100, period=ONE_MINUTE)
 def save_npo(json):    
+    send_slack_audit(action="save_npo", message="Saving", payload=json)
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("NPO Save")    
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
@@ -274,11 +275,13 @@ def save_npo(json):
 
 @limits(calls=100, period=ONE_MINUTE)
 def remove_npo(json):
-    logger.debug("Start NPO Delete")
+    logger.debug("Start NPO Delete")    
     doc_id = json["id"]
     db = firestore.client()  # this connects to our Firestore database
     doc = db.collection('nonprofits').document(doc_id)
-    doc.delete()
+    if doc:
+        send_slack_audit(action="remove_npo", message="Removing", payload=doc.get().to_dict())
+        doc.delete()
 
     # TODO: Add a way to track what has been deleted
     # Either by calling Slack or by using another DB/updating the DB with a hidden=True flag, etc.
@@ -293,6 +296,7 @@ def remove_npo(json):
 def update_npo(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("NPO Edit")
+    send_slack_audit(action="update_npo", message="Updating", payload=json)
     
     doc_id = json["id"]
     temp_problem_statements = json["problem_statements"]
@@ -322,6 +326,7 @@ def update_npo(json):
 def save_hackathon(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("Hackathon Save")
+    send_slack_audit(action="save_hackathon", message="Saving", payload=json)
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
 
     doc_id = uuid.uuid1().hex
@@ -374,6 +379,8 @@ def save_hackathon(json):
 def save_problem_statement(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("Problem Statement Save")
+    send_slack_audit(action="save_problem_statement",
+                     message="Saving", payload=json)
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
 
     doc_id = uuid.uuid1().hex
@@ -542,6 +549,7 @@ def get_history(db_id):
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata(slack_user_id):
     logger.debug("Profile Metadata")
+    
 
     token = get_token()
 
@@ -558,6 +566,8 @@ def get_profile_metadata(slack_user_id):
 
     email = x_j["email"]
     user_id = x_j["user_id"]
+    send_slack_audit(
+        action="login", message=f"User went to profile: {user_id} with email: {email}")
     last_login = x_j["last_login"]
     profile_image = x_j["image_192"]    
     logger.debug(f"Auth0 Account Details:\
