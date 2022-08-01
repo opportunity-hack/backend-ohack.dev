@@ -175,7 +175,8 @@ def get_teams_list():
 
 
 @limits(calls=20, period=ONE_MINUTE)
-def get_npo_list():
+@cached(cache=TTLCache(maxsize=100, ttl=3600)) # 1hr cache
+def get_npo_list(word_length=30):
     logger.debug("NPO List Start")
     db = firestore.client()  
     # steam() gets all records
@@ -187,12 +188,17 @@ def get_npo_list():
         for doc in docs:
             d_doc = doc
             d = d_doc.to_dict()
+            description = d["description"]
+            words = description.split(" ")
+            only_first_words = " ".join(words[0:word_length])
+            if len(only_first_words) < len(description):
+                only_first_words = only_first_words.rstrip(',').strip() + "..."
 
             results.append(
                 {
                     "id": doc.id,
                     "name": d["name"],
-                    "description": d["description"],
+                    "description": only_first_words,
                     "slack_channel": d["slack_channel"],
                     "website": d["website"],
                     "contact_people": ", ".join(d["contact_people"]),
@@ -219,6 +225,7 @@ def get_problem_statement_list():
                 {
                     "id": doc.id,
                     "title": d["title"],
+                    "slack_channel": d["slack_channel"],
                     "description": d["description"],
                     "first_thought_of": d["first_thought_of"],
                     "github": d["github"],
