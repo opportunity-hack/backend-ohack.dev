@@ -483,6 +483,8 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
         logger.debug("User Save End")
         return doc.id # Should only have 1 record, but break just for safety 
 
+    default_badge = db.collection('badges').document("fU7c3ne90Rd1TB5P7NTV")
+
     doc_id = uuid.uuid1().hex
     insert_res = db.collection('users').document(doc_id).set({
         "email_address": email,
@@ -490,8 +492,9 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
         "user_id": user_id,
         "profile_image": profile_image,
         "badges": [
-            "first_hackathon"
-        ]
+            default_badge
+        ],
+        "teams": []
     })
     logger.debug(f"Insert Result: {insert_res}")
     return doc_id
