@@ -13,6 +13,7 @@ from cachetools.keys import hashkey
 
 from ratelimit import limits
 
+
 logger = logging.getLogger("myapp")
 
 auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
@@ -72,52 +73,56 @@ def problem_statements_to_json(docid, d):
             ps_doc = ps.get()
             ps_json = ps_doc.to_dict()
             ps_json["id"] = ps_doc.id
+            logger.debug(f"* Found Problem Statement {ps_doc.id}")
 
             event_list = []
-            for e in ps_json["events"]:
-                event_doc = e.get()
-                event = event_doc.to_dict()
+            if "events" in ps_json:
+                for e in ps_json["events"]:
+                    event_doc = e.get()
+                    event = event_doc.to_dict()
 
-                team_list = []
-                for t in event["teams"]:
-                    team_doc = t.get()
-                    team = team_doc.to_dict()
-                    user_list = []
-                    for u in team["users"]:
-                        user_doc = u.get()
-                        user_list.append({"user_id": user_doc.id})
+                    team_list = []
+                    for t in event["teams"]:
+                        team_doc = t.get()
+                        team = team_doc.to_dict()
+                        user_list = []
+                        for u in team["users"]:
+                            user_doc = u.get()
+                            user_list.append({"user_id": user_doc.id})
 
-                    team_list.append({
-                        "id": team_doc.id,
-                        "active": team["active"],
-                        "name": team["name"],
-                        "slack_channel": team["slack_channel"],
-                        "github_links": team["github_links"],
-                        "team_number": team["team_number"],
-                        "users": user_list
+                        slack_channel = team["slack_channel"] if "slack_channel" in team else ""
+                        team_list.append({
+                            "id": team_doc.id,
+                            "active": team["active"],
+                            "name": team["name"],
+                            "slack_channel": slack_channel,
+                            "github_links": team["github_links"],
+                            "team_number": team["team_number"],
+                            "users": user_list
+                        }
+                        )
+
+                    event_list.append({
+                        "id": event_doc.id,
+                        "teams": team_list,
+                        "type": event["type"],
+                        "location": event["location"],
+                        "devpost_url": event["devpost_url"],
+                        "start_date": event["start_date"],
+                        "end_date": event["end_date"],
+                        "image_url": event["image_url"]
                     }
                     )
+            ps_json["events"] = event_list
+            problem_statements.append(ps_json)  
 
-                event_list.append({
-                    "id": event_doc.id,
-                    "teams": team_list,
-                    "type": event["type"],
-                    "location": event["location"],
-                    "devpost_url": event["devpost_url"],
-                    "start_date": event["start_date"],
-                    "end_date": event["end_date"],
-                    "image_url": event["image_url"]
-                }
-                )
-        ps_json["events"] = event_list
-        problem_statements.append(ps_json)
     return problem_statements
 
 
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=100, period=ONE_MINUTE)
-def get_single_npo(npo_id):
+def get_single_npo(npo_id):    
     logger.debug(f"get_npo start npo_id={npo_id}")    
     db = firestore.client()      
     doc = db.collection('nonprofits').document(npo_id)    
@@ -194,12 +199,13 @@ def get_npo_list(word_length=30):
             if len(only_first_words) < len(description):
                 only_first_words = only_first_words.rstrip(',').strip() + "..."
 
+            slack_channel = d["slack_channel"] if "slack_channel" in d else ""
             results.append(
                 {
                     "id": doc.id,
                     "name": d["name"],
                     "description": only_first_words,
-                    "slack_channel": d["slack_channel"],
+                    "slack_channel": slack_channel,
                     "website": d["website"],
                     "contact_people": ", ".join(d["contact_people"]),
                     "problem_statements": problem_statements_to_json(d_doc.id, d)
@@ -220,15 +226,18 @@ def get_problem_statement_list():
     else:
         results = []
         for doc in docs:
-            d = doc.to_dict()            
+            d = doc.to_dict()        
+
+            slack_channel = d["slack_channel"] if "slack_channel" in d else ""
+            github = d["github"] if "github" in d else ""
             results.append(
                 {
                     "id": doc.id,
                     "title": d["title"],
-                    "slack_channel": d["slack_channel"],
+                    "slack_channel": slack_channel,
                     "description": d["description"],
                     "first_thought_of": d["first_thought_of"],
-                    "github": d["github"],
+                    "github": github,
                     "references": d["references"],
                     "status": d["status"]
                 }
@@ -302,6 +311,12 @@ def remove_npo(json):
 @limits(calls=100, period=ONE_MINUTE)
 def update_npo(json):
     db = firestore.client()  # this connects to our Firestore database
+
+    logger.debug("Clearing cache")
+    problem_statements_to_json.cache_clear()
+    get_single_npo.cache_clear()
+
+    logger.debug("Done Clearing cache")
     logger.debug("NPO Edit")
     send_slack_audit(action="update_npo", message="Updating", payload=json)
     
