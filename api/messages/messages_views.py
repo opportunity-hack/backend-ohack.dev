@@ -17,7 +17,9 @@ from api.messages.messages_service import (
     save_problem_statement,
     get_problem_statement_list,
     save_hackathon,
-    get_teams_list
+    get_teams_list,
+    get_hackathon_list,
+    link_problem_statements_to_events
 )
 from api.security.guards import (
     authorization_guard,
@@ -90,6 +92,10 @@ def add_hackathon():
     return vars(save_hackathon(request.get_json()))
 
 
+@bp.route("/hackathons", methods=["GET"])
+def list_hackathons():
+    return get_hackathon_list()
+
 # Problem Statement (also called Project) Related Endpoints
 @bp.route("/problem_statement", methods=["POST"])
 @authorization_guard
@@ -99,11 +105,20 @@ def add_problem_statement():
 
 @bp.route("/problem_statements", methods=["GET"])
 def get_problem_statments():
-    return get_problem_statement_list()    
+    return get_problem_statement_list()
+
+
+@authorization_guard
+@permissions_guard([admin_messages_permissions.read])
+@bp.route("/problem_statements/events", methods=["PATCH"])
+def update_problem_statement_events_link():    
+    return vars(link_problem_statements_to_events(request.get_json()))
 
 @bp.route("/teams", methods=["GET"])
 def get_teams():
     return (get_teams_list())
+
+
 
 # Used to provide profile details - user must be logged in
 @bp.route("/profile")
