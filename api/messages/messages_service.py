@@ -52,6 +52,23 @@ def problem_statement_key(docid, document):
 
 
 @cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+def events_to_json(docid, d):
+    events = []
+    if "events" in d:
+        for e in d["events"]:            
+            e_doc = e.get()
+            if not e_doc:
+                logger.warning("No event object found for this reference in the DB")
+                continue
+
+            e_json = e_doc.to_dict()
+            e_json["id"] = e.id            
+            e_json["nonprofits"] = ""  # Don't bother adding this
+            e_json["teams"] = ""  # Don't bother adding this
+            events.append(e_json)
+    return events
+
+@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
 def users_to_json(docid, d):
     users = []
     if "users" in d:
@@ -63,6 +80,7 @@ def users_to_json(docid, d):
             u_json["teams"] = ""  # Don't bother adding this
             users.append(u_json)
     return users
+
 
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
@@ -80,6 +98,9 @@ def problem_statements_to_json(docid, d):
                 for e in ps_json["events"]:
                     event_doc = e.get()
                     event = event_doc.to_dict()
+                    if not event:
+                        logger.warning(f"Unable to find event reference for problem statement {ps_doc.id}")
+                        continue
 
                     team_list = []
                     for t in event["teams"]:
@@ -147,6 +168,37 @@ def get_single_npo(npo_id):
             "nonprofits": result
         }
     return {}
+
+
+@limits(calls=100, period=ONE_MINUTE)
+def get_hackathon_list():
+    logger.debug("Hackathon List Start")
+    db = firestore.client()
+    docs = db.collection('hackathons').order_by("start_date").stream()  # steam() gets all records
+    if docs is None:
+        return {[]}
+    else:
+        results = []
+        for doc in docs:
+            d_doc = doc
+            d = d_doc.to_dict()
+
+            results.append(
+                {
+                    "id": doc.id,
+                    "type": d["type"],
+                    "location": d["location"],
+                    "devpost_url": d["devpost_url"],
+                    "start_date": d["start_date"],
+                    "end_date": d["end_date"],
+                    "image_url": d["image_url"],
+                    "nonprofits": [], #TODO
+                    "teams":[] #TODO
+                }
+
+            )
+        logger.debug(f"Hackathon List End")
+        return {"hackathons": results}
 
 @limits(calls=100, period=ONE_MINUTE)
 def get_teams_list():
@@ -226,10 +278,13 @@ def get_problem_statement_list():
     else:
         results = []
         for doc in docs:
-            d = doc.to_dict()        
+            d_doc = doc
+            d = d_doc.to_dict()
 
             slack_channel = d["slack_channel"] if "slack_channel" in d else ""
             github = d["github"] if "github" in d else ""
+            
+
             results.append(
                 {
                     "id": doc.id,
@@ -239,7 +294,8 @@ def get_problem_statement_list():
                     "first_thought_of": d["first_thought_of"],
                     "github": github,
                     "references": d["references"],
-                    "status": d["status"]
+                    "status": d["status"],
+                    "events": events_to_json(d_doc.id, d)
                 }
 
             )
@@ -288,6 +344,13 @@ def save_npo(json):
         "Saved NPO"
     )
 
+def clear_cache():
+    problem_statements_to_json.cache_clear()
+    get_single_npo.cache_clear()
+    get_npo_list.cache_clear()
+    events_to_json.cache_clear()
+    get_profile_metadata.cache_clear()
+    users_to_json.cache_clear()
 
 @limits(calls=100, period=ONE_MINUTE)
 def remove_npo(json):
@@ -306,6 +369,42 @@ def remove_npo(json):
     return Message(
         "Delete NPO"
     )
+
+
+@limits(calls=100, period=ONE_MINUTE)
+def link_problem_statements_to_events(json):    
+    # JSON format should be in the format of
+    # event/hackathon -> [problemStatement1, problemStatement2]
+    db = firestore.client()  # this connects to our Firestore database
+    for items in json["mapping"]:
+        for eventId, problemIds in items.items():            
+            event_doc = db.collection('hackathons').document(eventId)
+            for problemId in problemIds:
+                print(f"Checking problemId: {problemId}")
+                problem_doc = db.collection('problem_statements').document(problemId)                
+                problem_dict = problem_doc.get().to_dict()
+                events = set()
+                
+                # Add any existing
+                # Don't add existing events because we may have wanted to delete them
+                #if "events" in problem_dict:
+                #    for current_event in problem_dict["events"]:
+                #        events.add(current_event)
+                
+                # Add the new one
+                events.add( event_doc )
+                print(f" Events to add: {events}")
+                problem_result = problem_doc.update({
+                    "events": events
+                });
+                
+    clear_cache()
+    
+    return Message(
+        "Updated Problem Statement Event Associations"
+    )
+
+    
 
 
 @limits(calls=100, period=ONE_MINUTE)
@@ -401,6 +500,13 @@ def save_hackathon(json):
 def save_problem_statement(json):
     db = firestore.client()  # this connects to our Firestore database
     logger.debug("Problem Statement Save")
+
+    logger.debug("Clearing cache")
+    problem_statements_to_json.cache_clear()
+    get_single_npo.cache_clear()
+    logger.debug("Done Clearing cache")
+
+
     send_slack_audit(action="save_problem_statement",
                      message="Saving", payload=json)
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
