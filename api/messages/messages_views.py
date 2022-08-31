@@ -19,7 +19,8 @@ from api.messages.messages_service import (
     save_hackathon,
     get_teams_list,
     get_hackathon_list,
-    link_problem_statements_to_events
+    link_problem_statements_to_events,
+    save_helping_status
 )
 from api.security.guards import (
     authorization_guard,
@@ -48,6 +49,7 @@ def protected():
 @permissions_guard([admin_messages_permissions.read])
 def admin():    
     return vars(get_admin_message())
+
 
 #
 # Nonprofit Related Endpoints
@@ -119,6 +121,11 @@ def get_teams():
     return (get_teams_list())
 
 
+# Used to register when person says they are helping, not helping
+@bp.route("/profile/helping", methods=["POST"])
+@authorization_guard
+def register_helping_status():
+    return vars(save_helping_status(request.get_json()))
 
 # Used to provide profile details - user must be logged in
 @bp.route("/profile")

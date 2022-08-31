@@ -94,34 +94,37 @@ def problem_statements_to_json(docid, d):
             logger.debug(f"* Found Problem Statement {ps_doc.id}")
 
             event_list = []
-            if "events" in ps_json:
+            if "events" in ps_json:                
+
                 for e in ps_json["events"]:
                     event_doc = e.get()
                     event = event_doc.to_dict()
+                    
                     if not event:
                         logger.warning(f"Unable to find event reference for problem statement {ps_doc.id}")
                         continue
 
                     team_list = []
-                    for t in event["teams"]:
-                        team_doc = t.get()
-                        team = team_doc.to_dict()
-                        user_list = []
-                        for u in team["users"]:
-                            user_doc = u.get()
-                            user_list.append({"user_id": user_doc.id})
+                    if "teams" in event:
+                        for t in event["teams"]:
+                            team_doc = t.get()
+                            team = team_doc.to_dict()
+                            user_list = []
+                            for u in team["users"]:
+                                user_doc = u.get()
+                                user_list.append({"user_id": user_doc.id})
 
-                        slack_channel = team["slack_channel"] if "slack_channel" in team else ""
-                        team_list.append({
-                            "id": team_doc.id,
-                            "active": team["active"],
-                            "name": team["name"],
-                            "slack_channel": slack_channel,
-                            "github_links": team["github_links"],
-                            "team_number": team["team_number"],
-                            "users": user_list
-                        }
-                        )
+                            slack_channel = team["slack_channel"] if "slack_channel" in team else ""
+                            team_list.append({
+                                "id": team_doc.id,
+                                "active": team["active"],
+                                "name": team["name"],
+                                "slack_channel": slack_channel,
+                                "github_links": team["github_links"],
+                                "team_number": team["team_number"],
+                                "users": user_list
+                            }
+                            )
 
                     event_list.append({
                         "id": event_doc.id,
@@ -140,12 +143,16 @@ def problem_statements_to_json(docid, d):
     return problem_statements
 
 
+def get_db():
+    #mock_db = MockFirestore()
+    return firestore.client()
+
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=100, period=ONE_MINUTE)
 def get_single_npo(npo_id):    
     logger.debug(f"get_npo start npo_id={npo_id}")    
-    db = firestore.client()      
+    db = get_db()      
     doc = db.collection('nonprofits').document(npo_id)    
     
     if doc is None:
@@ -173,7 +180,7 @@ def get_single_npo(npo_id):
 @limits(calls=100, period=ONE_MINUTE)
 def get_hackathon_list():
     logger.debug("Hackathon List Start")
-    db = firestore.client()
+    db = get_db()
     docs = db.collection('hackathons').order_by("start_date").stream()  # steam() gets all records
     if docs is None:
         return {[]}
@@ -203,7 +210,7 @@ def get_hackathon_list():
 @limits(calls=100, period=ONE_MINUTE)
 def get_teams_list():
     logger.debug("Teams List Start")
-    db = firestore.client()  
+    db = get_db()  
     docs = db.collection('teams').stream() # steam() gets all records   
     if docs is None:
         return {[]}
@@ -235,7 +242,7 @@ def get_teams_list():
 @cached(cache=TTLCache(maxsize=100, ttl=3600)) # 1hr cache
 def get_npo_list(word_length=30):
     logger.debug("NPO List Start")
-    db = firestore.client()  
+    db = get_db()  
     # steam() gets all records
     docs = db.collection('nonprofits').order_by("name").stream()
     if docs is None:
@@ -271,7 +278,7 @@ def get_npo_list(word_length=30):
 @limits(calls=100, period=ONE_MINUTE)
 def get_problem_statement_list():
     logger.debug("Problem Statements List")
-    db = firestore.client()
+    db = get_db()
     docs = db.collection('problem_statements').stream()  # steam() gets all records
     if docs is None:
         return {[]}
@@ -305,7 +312,7 @@ def get_problem_statement_list():
 @limits(calls=100, period=ONE_MINUTE)
 def save_npo(json):    
     send_slack_audit(action="save_npo", message="Saving", payload=json)
-    db = firestore.client()  # this connects to our Firestore database
+    db = get_db()  # this connects to our Firestore database
     logger.debug("NPO Save")    
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
 
@@ -356,7 +363,7 @@ def clear_cache():
 def remove_npo(json):
     logger.debug("Start NPO Delete")    
     doc_id = json["id"]
-    db = firestore.client()  # this connects to our Firestore database
+    db = get_db()  # this connects to our Firestore database
     doc = db.collection('nonprofits').document(doc_id)
     if doc:
         send_slack_audit(action="remove_npo", message="Removing", payload=doc.get().to_dict())
@@ -372,36 +379,70 @@ def remove_npo(json):
 
 
 @limits(calls=100, period=ONE_MINUTE)
+def save_helping_status(json):
+    helping_status = json["status"]
+    userId = json["userId"]
+    
+    db = get_db() 
+    user_doc = db.collection('users').document(userId)
+
+
+
+@limits(calls=100, period=ONE_MINUTE)
 def link_problem_statements_to_events(json):    
     # JSON format should be in the format of
-    # event/hackathon -> [problemStatement1, problemStatement2]
-    db = firestore.client()  # this connects to our Firestore database
-    for items in json["mapping"]:
-        for eventId, problemIds in items.items():            
+    # problemStatementId -> [ <eventTitle1>|<eventId1>, <eventTitle2>|<eventId2> ]
+    logger.debug(f"Linking payload {json}")
+    
+    db = get_db()  # this connects to our Firestore database
+    data = json["mapping"]
+    for problemId, eventList in data.items():
+        problem_statement_doc = db.collection(
+            'problem_statements').document(problemId)
+        
+        eventObsList = []
+        
+        for event in eventList:
+            print(f"Checking event: {event}")
+            if "|" in event:
+                eventId = event.split("|")[1]
+            else:
+                eventId = event
             event_doc = db.collection('hackathons').document(eventId)
-            for problemId in problemIds:
-                print(f"Checking problemId: {problemId}")
-                problem_doc = db.collection('problem_statements').document(problemId)                
-                problem_dict = problem_doc.get().to_dict()
-                events = set()
+            eventObsList.append(event_doc)
+
+        print(f" Events to add: {eventObsList}")
+        problem_result = problem_statement_doc.update({
+            "events": eventObsList
+        });
+        
+
+
+        # for problemId, eventList in items.items():            
+        #     problem_statement_doc = db.collection('problem_statements').document(problemId)
+            
+        #     # Look up all event docs so we can link them with their objects in the DB
+        #     eventObsList = []
+        #     for event in eventList:
+        #         print(f"Checking event: {event}")
+        #         if "|" in event:
+        #             eventId = event.split("|")[1]
+        #         else:
+        #             eventId = event
+
+        #         event_doc = db.collection('hackathons').document(eventId)                
+        #         eventObsList.add(event_doc)
+
+        #     print(f" Events to add: {eventObsList}")
+        #     problem_result = problem_statement_doc.update({
+        #         "events": eventObsList
+        #     });
                 
-                # Add any existing
-                # Don't add existing events because we may have wanted to delete them
-                #if "events" in problem_dict:
-                #    for current_event in problem_dict["events"]:
-                #        events.add(current_event)
-                
-                # Add the new one
-                events.add( event_doc )
-                print(f" Events to add: {events}")
-                problem_result = problem_doc.update({
-                    "events": events
-                });
                 
     clear_cache()
-    
+
     return Message(
-        "Updated Problem Statement Event Associations"
+        "Updated Problem Statement to Event Associations"
     )
 
     
@@ -409,7 +450,7 @@ def link_problem_statements_to_events(json):
 
 @limits(calls=100, period=ONE_MINUTE)
 def update_npo(json):
-    db = firestore.client()  # this connects to our Firestore database
+    db = get_db()  # this connects to our Firestore database
 
     logger.debug("Clearing cache")
     problem_statements_to_json.cache_clear()
@@ -445,7 +486,7 @@ def update_npo(json):
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_hackathon(json):
-    db = firestore.client()  # this connects to our Firestore database
+    db = get_db()  # this connects to our Firestore database
     logger.debug("Hackathon Save")
     send_slack_audit(action="save_hackathon", message="Saving", payload=json)
     # TODO: In this current form, you will overwrite any information that matches the same NPO name
@@ -498,7 +539,7 @@ def save_hackathon(json):
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_problem_statement(json):
-    db = firestore.client()  # this connects to our Firestore database
+    db = get_db()  # this connects to our Firestore database
     logger.debug("Problem Statement Save")
 
     logger.debug("Clearing cache")
@@ -583,7 +624,7 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
                     or profile_image: {profile_image}")
         return
 
-    db = firestore.client()  # this connects to our Firestore database
+    db = get_db()  # this connects to our Firestore database
     
     # Even though there is 1 record, we always will need to iterate on it
     docs = db.collection('users').where("user_id","==",user_id).stream()
@@ -626,7 +667,7 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
 @limits(calls=100, period=ONE_MINUTE)
 def get_history(db_id):
     logger.debug("Get Hackathons Start")
-    db = firestore.client()  # this connects to our Firestore database
+    db = get_db()  # this connects to our Firestore database
     collection = db.collection('users')
     doc = collection.document(db_id)
     doc_get = doc.get()
