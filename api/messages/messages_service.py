@@ -1,4 +1,4 @@
-from common.utils import safe_get_env_var, send_slack_audit
+from common.utils import safe_get_env_var, send_slack_audit, send_slack
 from api.messages.message import Message
 import json
 import uuid
@@ -380,12 +380,27 @@ def remove_npo(json):
 
 @limits(calls=100, period=ONE_MINUTE)
 def save_helping_status(json):
+    logger.debug(f"save_helping_status {json}")
     helping_status = json["status"]
-    userId = json["userId"]
+    user_id = json["user_id"]
     
     db = get_db() 
-    user_doc = db.collection('users').document(userId)
+    docs = db.collection('users').where("user_id", "==", user_id).stream()
 
+    for doc in docs:
+        res = doc.to_dict()
+        print(res)
+        if res:
+            # Found result already in DB, update
+            logger.debug(f"Found user (_id={doc.id}), updating helping status")
+            # update_res = db.collection("users").document(doc.id).update(
+            #     {
+            #         "last_login": last_login                    
+            #     })
+            # logger.debug(f"Update Result: {update_res}")
+
+    send_slack_audit(action="helping", message=user_id, payload=helping_status)
+    send_slack(message="test", channel="#test")
 
 
 @limits(calls=100, period=ONE_MINUTE)
