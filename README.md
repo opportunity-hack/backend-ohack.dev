@@ -63,81 +63,6 @@ Run the project in development mode:
 flask run
 ```
 
-## API Endpoints
-
-The API server defines the following endpoints:
-
-### 🔓 Get public message
-
-```bash
-GET /api/messages/public
-```
-
-#### Response
-
-```bash
-Status: 200 OK
-```
-
-```json
-{
-  "message": "The API doesn't require an access token to share this message."
-}
-```
-
-### 🔐 Get protected message
-
-```bash
-GET /api/messages/protected
-```
-
-#### Response
-
-```bash
-Status: 200 OK
-```
-
-```json
-{
-  "message": "The API successfully validated your access token."
-}
-```
-
-### 🔐 Get admin message
-
-```bash
-GET /api/messages/admin
-```
-
-#### Response
-
-```bash
-Status: 200 OK
-```
-
-```json
-{
-  "message": "The API successfully recognized you as an admin."
-}
-```
-
-### 🔐 Get user profile information
-
-```bash
-GET /profile/<user_id>
-```
-
-#### Response
-
-```bash
-Status: 200 OK
-```
-
-```json
-{
-  ...User Profile Details...
-}
-```
 
 
 
@@ -145,3 +70,4 @@ Status: 200 OK
 - [Firestore UI](https://github.com/thanhlmm/refi-app)
 - [Using Python with Firestore](https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc)
 - [Querying Firestore with Python](https://firebase.google.com/docs/firestore/query-data/get-data)
+- [Auth0 Python Flask boilerplate used to start this repo](https://github.com/auth0-developer-hub/api_flask_python_hello-world)
