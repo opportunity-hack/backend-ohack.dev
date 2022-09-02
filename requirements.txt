@@ -18,3 +18,4 @@ firebase_admin==5.2.0
 ratelimit==2.2.1
 cachetools==5.2.0
 cryptography==35.0.0
+slack_sdk==3.18.1
