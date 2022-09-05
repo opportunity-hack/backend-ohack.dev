@@ -290,6 +290,7 @@ def get_problem_statement_list():
 
             slack_channel = d["slack_channel"] if "slack_channel" in d else ""
             github = d["github"] if "github" in d else ""
+            helping_list = d["helping"] if "helping" in d else ""
             
 
             results.append(
@@ -302,6 +303,7 @@ def get_problem_statement_list():
                     "github": github,
                     "references": d["references"],
                     "status": d["status"],
+                    "helping": helping_list,
                     "events": events_to_json(d_doc.id, d)
                 }
 
@@ -381,26 +383,54 @@ def remove_npo(json):
 @limits(calls=100, period=ONE_MINUTE)
 def save_helping_status(json):
     logger.debug(f"save_helping_status {json}")
-    helping_status = json["status"]
-    user_id = json["user_id"]
+    helping_status = json["status"] # helping or not_helping
+    user_id = json["user_id"] # Slack user id
+    problem_statement_id = json["problem_statement_id"]
+    mentor_or_hacker = json["type"]
     
+    user_obj = get_user_from_slack_id(user_id)
+    
+    to_add = {
+        "user": user_obj.id,
+        "slack_user": user_id,
+        "type": mentor_or_hacker
+    }
+
     db = get_db() 
-    docs = db.collection('users').where("user_id", "==", user_id).stream()
+    problem_statement_doc = db.collection(
+        'problem_statements').document(problem_statement_id)
+    
+    ps_dict = problem_statement_doc.get().to_dict()
+    helping_list = []
+    if "helping" in ps_dict:
+        helping_list = ps_dict["helping"]
+        logger.debug(f"Start Helping list: {helping_list}")
 
-    for doc in docs:
-        res = doc.to_dict()
-        print(res)
-        if res:
-            # Found result already in DB, update
-            logger.debug(f"Found user (_id={doc.id}), updating helping status")
-            # update_res = db.collection("users").document(doc.id).update(
-            #     {
-            #         "last_login": last_login                    
-            #     })
-            # logger.debug(f"Update Result: {update_res}")
+        if "helping" == helping_status:            
+            helping_list.append(to_add)
+        else:
+            helping_list = [
+                d for d in helping_list if d['user'] not in user_obj.id]            
 
-    send_slack_audit(action="helping", message=user_id, payload=helping_status)
-    send_slack(message="test", channel="#test")
+    else:
+        logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
+        if "helping" == helping_status:            
+            helping_list.append(to_add)
+
+
+    logger.debug(f"End Helping list: {helping_list}")
+    problem_result = problem_statement_doc.update({
+        "helping": helping_list
+    })
+
+    clear_cache()
+
+    send_slack_audit(action="helping", message=user_id, payload=to_add)
+    #send_slack(message="test", channel="#test")
+
+    return Message(
+        "Updated helping status"
+    )
 
 
 @limits(calls=100, period=ONE_MINUTE)
@@ -611,7 +641,15 @@ def get_token():
     return x_j["access_token"]
 
 
-
+def get_user_from_slack_id(user_id):
+    db = get_db()  # this connects to our Firestore database
+    # Even though there is 1 record, we always will need to iterate on it
+    docs = db.collection('users').where("user_id", "==", user_id).stream()
+    
+    for doc in docs:
+        return doc
+        
+    return None
 
 
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
