@@ -2,6 +2,7 @@ from common.utils import safe_get_env_var, send_slack_audit, send_slack
 from api.messages.message import Message
 import json
 import uuid
+from datetime import datetime
 
 import logging
 import firebase_admin
@@ -389,11 +390,14 @@ def save_helping_status(json):
     mentor_or_hacker = json["type"]
     
     user_obj = get_user_from_slack_id(user_id)
-    
+    my_date = datetime.now()
+
+
     to_add = {
         "user": user_obj.id,
         "slack_user": user_id,
-        "type": mentor_or_hacker
+        "type": mentor_or_hacker,
+        "timestamp": my_date.isoformat()
     }
 
     db = get_db() 
