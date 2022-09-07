@@ -40,10 +40,25 @@ def send_slack(message="", channel=""):
     # TODO: will need to join private channel if not already in it
     client = WebClient(token=slack_token)
 
+    # Get channel name
+    result = client.conversations_list(exclude_archived=True, limit=1000)
+
+    channel_id = ""
+    for c in result["channels"]:        
+        if c["name"] == channel:
+            print(f"Found Channel! {channel}")
+            channel_id = c["id"]
+    
+
+    # Joining isn't necessary to be able to send messages via chat_postMessage
+    #join_result = client.conversations_join(channel=channel_id)
+    # print(join_result)
+    
+    # Post
     try:
         response = client.chat_postMessage(
-            channel="C040GVBCVEH",
-            text="Hello from your app! :tada:")
+            channel=channel_id,
+            text=message)
         print(response)
     
     except SlackApiError as e:

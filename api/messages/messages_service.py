@@ -384,10 +384,12 @@ def remove_npo(json):
 @limits(calls=100, period=ONE_MINUTE)
 def save_helping_status(json):
     logger.debug(f"save_helping_status {json}")
+
     helping_status = json["status"] # helping or not_helping
     user_id = json["user_id"] # Slack user id
     problem_statement_id = json["problem_statement_id"]
     mentor_or_hacker = json["type"]
+    npo_id = json["npo_id"]
     
     user_obj = get_user_from_slack_id(user_id)
     my_date = datetime.now()
@@ -418,7 +420,7 @@ def save_helping_status(json):
 
     else:
         logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
-        if "helping" == helping_status:            
+        if "helping" == helping_status:
             helping_list.append(to_add)
 
 
@@ -430,7 +432,19 @@ def save_helping_status(json):
     clear_cache()
 
     send_slack_audit(action="helping", message=user_id, payload=to_add)
-    #send_slack(message="test", channel="#test")
+
+
+
+    slack_user_id = user_id.split("-")[1]
+    slack_message = f"<@{slack_user_id}>"
+    problem_statement_title = ps_dict["title"]
+    problem_statement_slack_channel = ps_dict["slack_channel"]
+    if "helping" == helping_status:
+        slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* https://ohack.dev/nonprofit/{npo_id}"
+    else:
+        slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* https://ohack.dev/nonprofit/{npo_id}"
+    
+    send_slack(message=slack_message, channel=problem_statement_slack_channel)
 
     return Message(
         "Updated helping status"
