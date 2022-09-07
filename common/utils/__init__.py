@@ -43,6 +43,7 @@ def send_slack(message="", channel=""):
     # Get channel name
     result = client.conversations_list(exclude_archived=True, limit=1000)
 
+    print(f"Looking for slack channel {channel}...")
     channel_id = ""
     for c in result["channels"]:        
         if c["name"] == channel:
@@ -55,6 +56,7 @@ def send_slack(message="", channel=""):
     # print(join_result)
     
     # Post
+    print("Sending message...")
     try:
         response = client.chat_postMessage(
             channel=channel_id,
