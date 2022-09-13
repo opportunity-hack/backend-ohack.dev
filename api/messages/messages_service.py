@@ -631,7 +631,7 @@ def save_problem_statement(json):
         "description": description,
         "first_thought_of": first_thought_of,
         "github": github,
-        "references": [references],  # TODO: Support more than one email
+        "references": references,
         "status": status        
     })
 
