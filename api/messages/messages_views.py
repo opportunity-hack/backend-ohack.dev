@@ -96,7 +96,8 @@ def add_hackathon():
 
 @bp.route("/hackathons", methods=["GET"])
 def list_hackathons():
-    return get_hackathon_list()
+    is_current = request.args.get("current") != None
+    return get_hackathon_list(is_current)
 
 # Problem Statement (also called Project) Related Endpoints
 @bp.route("/problem_statement", methods=["POST"])
@@ -106,7 +107,7 @@ def add_problem_statement():
     return vars(save_problem_statement(request.get_json()))
 
 @bp.route("/problem_statements", methods=["GET"])
-def get_problem_statments():
+def get_problem_statments():    
     return get_problem_statement_list()
 
 

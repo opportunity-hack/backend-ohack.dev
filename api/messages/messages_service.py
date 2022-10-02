@@ -13,6 +13,7 @@ from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 
 from ratelimit import limits
+from datetime import datetime, timedelta
 
 
 logger = logging.getLogger("myapp")
@@ -51,6 +52,15 @@ def problem_statement_key(docid, document):
 
 # 10 minute cache for 100 objects LRU
 
+
+@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+def nonprofit_to_json(docid, d):            
+    e_json = {}
+    if "name" in d:        
+        e_json["problem_statements"] = ""  # Don't bother adding this
+        e_json["id"] = docid 
+        e_json["name"] = d["name"]
+    return e_json
 
 @cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
 def events_to_json(docid, d):
@@ -179,10 +189,22 @@ def get_single_npo(npo_id):
 
 
 @limits(calls=100, period=ONE_MINUTE)
-def get_hackathon_list():
+def get_hackathon_list(is_current_only):
     logger.debug("Hackathon List Start")
     db = get_db()
-    docs = db.collection('hackathons').order_by("start_date").stream()  # steam() gets all records
+    
+    if is_current_only:        
+        N_DAYS_LOOK_FORWARD = 4*30
+        today = datetime.now()        
+        today_str = today.strftime("%Y-%m-%D")
+        logger.debug(
+            f"Looking for any event that finishes after today {today_str}for most current events only.")
+        docs = db.collection('hackathons').where("end_date", ">=", today_str).order_by(
+            "end_date").stream()  # steam() gets all records
+    else:
+        docs = db.collection('hackathons').order_by("start_date").stream()  # steam() gets all records
+    
+    
     if docs is None:
         return {[]}
     else:
@@ -190,6 +212,13 @@ def get_hackathon_list():
         for doc in docs:
             d_doc = doc
             d = d_doc.to_dict()
+
+            nonprofits = []
+            if "nonprofits" in d:
+                for npo in d["nonprofits"]:
+                    npo_doc = npo.get()
+                    nonprofits.append(nonprofit_to_json(
+                        npo_doc.id, npo_doc.to_dict()))
 
             results.append(
                 {
@@ -200,7 +229,12 @@ def get_hackathon_list():
                     "start_date": d["start_date"],
                     "end_date": d["end_date"],
                     "image_url": d["image_url"],
-                    "nonprofits": [], #TODO
+                    "title": d["title"] if "title" in d else "",
+                    "donation_url": d["donation_url"] if "donation_url" in d else "",
+                    "donation_goals": d["donation_goals"] if "donation_goals" in d else "",
+                    "donation_current": d["donation_current"] if "donation_current" in d else "",
+
+                    "nonprofits": nonprofits,
                     "teams":[] #TODO
                 }
 
@@ -509,7 +543,6 @@ def link_problem_statements_to_events(json):
     )
 
     
-
 
 @limits(calls=100, period=ONE_MINUTE)
 def update_npo(json):
