@@ -18,6 +18,7 @@ from api.messages.messages_service import (
     get_problem_statement_list,
     save_hackathon,
     get_teams_list,
+    save_team,
     get_hackathon_list,
     link_problem_statements_to_events,
     save_helping_status
@@ -121,6 +122,10 @@ def update_problem_statement_events_link():
 def get_teams():
     return (get_teams_list())
 
+
+@bp.route("/team", methods=["POST"])
+def add_team():
+    return vars(save_team(request.get_json()))
 
 # Used to register when person says they are helping, not helping
 @bp.route("/profile/helping", methods=["POST"])

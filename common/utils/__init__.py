@@ -31,25 +31,46 @@ def send_slack_audit(action="", message="", payload=None):
     requests.post(json=json, url=SLACK_URL)
 
 
-def send_slack(message="", channel=""):
+def get_slack_token():
     slack_token = safe_get_env_var("SLACK_BOT_TOKEN")
     if not slack_token:
         print("SLACK_BOT_TOKEN not set, returning")
         return
-    
-    # TODO: will need to join private channel if not already in it
-    client = WebClient(token=slack_token)
+    return slack_token
 
+def get_client():
+    token = get_slack_token()
+    print("Creating new client, token = ", token)
+    client = WebClient(token=token)
+    return client
+
+def get_channel_id_from_channel_name(channel_name):
     # Get channel name
+    client = get_client()
     result = client.conversations_list(exclude_archived=True, limit=1000)
 
-    print(f"Looking for slack channel {channel}...")
-    channel_id = ""
-    for c in result["channels"]:        
-        if c["name"] == channel:
-            print(f"Found Channel! {channel}")
-            channel_id = c["id"]
-    
+    print(f"Looking for slack channel {channel_name}...")
+    for c in result["channels"]:
+        if c["name"] == channel_name:
+            print(f"Found Channel! {channel_name}")
+            return c["id"]
+    return None
+
+
+def invite_user_to_channel(user_id, channel_name):
+    print("invite_user_to_channel start")
+    client = get_client()
+    channel_id = get_channel_id_from_channel_name(channel_name)
+
+    print(channel_id)
+    client.conversations_join(channel=channel_id)
+    result = client.conversations_invite(channel=channel_id, users=user_id)
+    print(result)
+    print("invite_user_to_channel end")
+
+def send_slack(message="", channel=""):
+    client = get_client()
+    channel_id = get_channel_id_from_channel_name(channel)
 
     # Joining isn't necessary to be able to send messages via chat_postMessage
     #join_result = client.conversations_join(channel=channel_id)

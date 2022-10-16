@@ -1,4 +1,5 @@
-from common.utils import safe_get_env_var, send_slack_audit, send_slack
+from heapq import merge
+from common.utils import safe_get_env_var, send_slack_audit, send_slack, invite_user_to_channel
 from api.messages.message import Message
 import json
 import uuid
@@ -242,6 +243,74 @@ def get_hackathon_list(is_current_only):
         logger.debug(f"Hackathon List End")
         return {"hackathons": results}
 
+def save_team(json):
+    send_slack_audit(action="save_team", message="Saving", payload=json)
+    db = get_db()  # this connects to our Firestore database
+    logger.debug("Team Save")    
+
+    logger.debug(json)
+    doc_id = uuid.uuid1().hex
+
+    name = json["name"]    
+    slack_user_id = json["userId"]
+    event_id = json["eventId"]
+    problem_statement_id = json["problemStatementId"]
+
+
+    user = get_user_from_slack_id(slack_user_id).reference
+    if user is None:
+        return
+
+    problem_statement = get_problem_statement_from_id(problem_statement_id)
+    if problem_statement is None:
+        return
+
+    logger.debug(user)
+
+    logger.debug(problem_statement)
+
+    collection = db.collection('teams')
+
+    insert_res = collection.document(doc_id).set({
+        "team_number" : -1,
+        "users": [user],        
+        "problem_statements": [problem_statement],
+        "name": name,
+        "slack_channel": "general",
+        "active": "True",
+        "github_links": [
+            {
+                "link": "",
+                "name": ""
+            }
+        ]
+    })
+
+    logger.debug(f"Insert Result: {insert_res}")
+    new_team_doc = db.collection('teams').document(doc_id)
+
+    event_collection = db.collection("hackathons").document(event_id)
+    event_collection_dict = event_collection.get().to_dict()
+    logger.debug(event_collection_dict)
+
+
+    new_teams = [] 
+    logger.debug("****")
+    for t in event_collection_dict["teams"]:
+        logger.debug(t)
+        new_teams.append(t)
+    new_teams.append(new_team_doc)
+
+    logger.debug(new_teams)
+    event_collection.set({
+        "teams" : new_teams
+    }, merge=True)
+
+
+    clear_cache()
+    return Message(
+        "Saved Team")
+
 @limits(calls=100, period=ONE_MINUTE)
 def get_teams_list():
     logger.debug("Teams List Start")
@@ -468,8 +537,7 @@ def save_helping_status(json):
     send_slack_audit(action="helping", message=user_id, payload=to_add)
 
 
-
-    slack_user_id = user_id.split("-")[1]
+    slack_user_id = user_id.split("-")[1]  # Example user_id = oauth2|slack|T1Q7116BH-U041117EYTQ
     slack_message = f"<@{slack_user_id}>"
     problem_statement_title = ps_dict["title"]
     problem_statement_slack_channel = ps_dict["slack_channel"]
@@ -477,7 +545,9 @@ def save_helping_status(json):
         slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* https://ohack.dev/nonprofit/{npo_id}"
     else:
         slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* https://ohack.dev/nonprofit/{npo_id}"
-    
+
+    invite_user_to_channel(user_id=slack_user_id,
+                           channel_name=problem_statement_slack_channel)
     send_slack(message=slack_message, channel=problem_statement_slack_channel)
 
     return Message(
@@ -691,6 +761,10 @@ def get_token():
     logger.debug("get_token end")
     return x_j["access_token"]
 
+def get_problem_statement_from_id(problem_id):
+    db = get_db()    
+    doc = db.collection('problem_statements').document(problem_id)
+    return doc
 
 def get_user_from_slack_id(user_id):
     db = get_db()  # this connects to our Firestore database
