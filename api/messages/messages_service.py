@@ -88,6 +88,7 @@ def users_to_json(docid, d):
             u_doc = u.get()
             u_json = u_doc.to_dict()
             u_json["id"] = u.id
+            u_json["slack_id"] = u_doc["user_id"]
             u_json["badges"] = "" # Don't bother adding this
             u_json["teams"] = ""  # Don't bother adding this
             users.append(u_json)
@@ -124,7 +125,20 @@ def problem_statements_to_json(docid, d):
                             user_list = []
                             for u in team["users"]:
                                 user_doc = u.get()
-                                user_list.append({"user_id": user_doc.id})
+                                user_doc_json = user_doc.to_dict()
+                                user_list.append({
+                                            "user_id": user_doc.id,
+                                            "slack_id": user_doc_json["user_id"]
+                                        }
+                                    )
+
+                            team_problem_statements = []
+                            for p in team["problem_statements"]:
+                                problem_statement_doc = p.get()
+                                team_problem_statements.append(problem_statement_doc.id)
+                                #team_problem_statements.append(
+                                #    {"id": problem_statement_doc.id})
+
 
                             slack_channel = team["slack_channel"] if "slack_channel" in team else ""
                             team_list.append({
@@ -134,7 +148,8 @@ def problem_statements_to_json(docid, d):
                                 "slack_channel": slack_channel,
                                 "github_links": team["github_links"],
                                 "team_number": team["team_number"],
-                                "users": user_list
+                                "users": user_list,
+                                "problem_statements": team_problem_statements
                             }
                             )
 
