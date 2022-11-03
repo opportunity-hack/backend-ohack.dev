@@ -51,10 +51,8 @@ def get_admin_message():
 def problem_statement_key(docid, document):
     return hashkey(docid)
 
-# 10 minute cache for 100 objects LRU
-
-
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+# 12 hour cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
 def nonprofit_to_json(docid, d):            
     e_json = {}
     if "name" in d:        
@@ -63,7 +61,8 @@ def nonprofit_to_json(docid, d):
         e_json["name"] = d["name"]
     return e_json
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+
+@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
 def events_to_json(docid, d):
     events = []
     if "events" in d:
@@ -80,7 +79,8 @@ def events_to_json(docid, d):
             events.append(e_json)
     return events
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+
+@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
 def users_to_json(docid, d):
     users = []
     if "users" in d:
@@ -88,15 +88,15 @@ def users_to_json(docid, d):
             u_doc = u.get()
             u_json = u_doc.to_dict()
             u_json["id"] = u.id
-            u_json["slack_id"] = u_doc["user_id"]
+            u_json["slack_id"] = u_json["user_id"]
             u_json["badges"] = "" # Don't bother adding this
             u_json["teams"] = ""  # Don't bother adding this
             users.append(u_json)
     return users
 
 
-# 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=problem_statement_key)
+# 12 hour cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
 def problem_statements_to_json(docid, d):
     problem_statements = []
     if "problem_statements" in d:
@@ -128,7 +128,10 @@ def problem_statements_to_json(docid, d):
                                 user_doc_json = user_doc.to_dict()
                                 user_list.append({
                                             "user_id": user_doc.id,
-                                            "slack_id": user_doc_json["user_id"]
+                                            "slack_id": user_doc_json["user_id"],
+                                            "profile_image": user_doc_json["profile_image"],
+                                            "name": user_doc_json["name"] if "name" in user_doc_json else "",
+                                            "nickname": user_doc_json["nickname"] if "nickname" in user_doc_json else ""
                                         }
                                     )
 
@@ -165,6 +168,8 @@ def problem_statements_to_json(docid, d):
                     }
                     )
             ps_json["events"] = event_list
+
+            ps_json["description"] = ps_json["description"]
             problem_statements.append(ps_json)  
 
     return problem_statements
@@ -174,8 +179,8 @@ def get_db():
     #mock_db = MockFirestore()
     return firestore.client()
 
-# 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+# 12 hour cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=43200))
 @limits(calls=100, period=ONE_MINUTE)
 def get_single_npo(npo_id):    
     logger.debug(f"get_npo start npo_id={npo_id}")    
@@ -308,11 +313,8 @@ def save_team(json):
     event_collection_dict = event_collection.get().to_dict()
     logger.debug(event_collection_dict)
 
-
-    new_teams = [] 
-    logger.debug("****")
-    for t in event_collection_dict["teams"]:
-        logger.debug(t)
+    new_teams = []     
+    for t in event_collection_dict["teams"]:        
         new_teams.append(t)
     new_teams.append(new_team_doc)
 
@@ -358,7 +360,7 @@ def get_teams_list():
 
 
 @limits(calls=20, period=ONE_MINUTE)
-@cached(cache=TTLCache(maxsize=100, ttl=3600)) # 1hr cache
+@cached(cache=TTLCache(maxsize=100, ttl=43200))  # 12 hr cache
 def get_npo_list(word_length=30):
     logger.debug("NPO List Start")
     db = get_db()  
@@ -563,7 +565,9 @@ def save_helping_status(json):
 
     invite_user_to_channel(user_id=slack_user_id,
                            channel_name=problem_statement_slack_channel)
-    send_slack(message=slack_message, channel=problem_statement_slack_channel)
+
+    send_slack(message=slack_message,
+                channel=problem_statement_slack_channel)
 
     return Message(
         "Updated helping status"
@@ -804,11 +808,16 @@ firebase_admin.initialize_app(credential=cred)
 
 
 @limits(calls=50, period=ONE_MINUTE)
-def save(user_id=None, email=None, last_login=None, profile_image=None):
+def save(
+        user_id=None,
+        email=None,
+        last_login=None,
+        profile_image=None,
+        name=None,
+        nickname=None):
     logger.debug("User Save Start")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
 
-    
 
     if user_id is None or email is None or last_login is None or profile_image is None:
         logger.error(
@@ -830,8 +839,10 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
             logger.debug(f"Found user (_id={doc.id}), updating last_login")
             update_res = db.collection("users").document(doc.id).update(
                 {
-                "last_login": last_login,
-                "profile_image": profile_image
+                    "last_login": last_login,
+                    "profile_image": profile_image,
+                    "name": name,
+                    "nickname": nickname
             })
             logger.debug(f"Update Result: {update_res}")
         
@@ -846,6 +857,8 @@ def save(user_id=None, email=None, last_login=None, profile_image=None):
         "last_login": last_login,
         "user_id": user_id,
         "profile_image": profile_image,
+        "name": name,
+        "nickname": nickname,
         "badges": [
             default_badge
         ],
@@ -935,13 +948,23 @@ def get_profile_metadata(slack_user_id):
         action="login", message=f"User went to profile: {user_id} with email: {email}")
     last_login = x_j["last_login"]
     profile_image = x_j["image_192"]    
+    name = x_j["name"]
+    nickname = x_j["nickname"]
+
+
     logger.debug(f"Auth0 Account Details:\
             \nEmail: {email}\nSlack User ID: {user_id}\n\
             Last Login:{last_login}\
             Image:{profile_image}")
 
     # Call firebase to see if account exists and save these details
-    db_id = save(user_id=user_id, email=email, last_login=last_login, profile_image=profile_image)
+    db_id = save(
+            user_id=user_id,
+            email=email,
+            last_login=last_login,
+            profile_image=profile_image,
+            name=name,
+            nickname=nickname)
 
     # Get all of the user history and profile data from the DB
     response = get_history(db_id)

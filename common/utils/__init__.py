@@ -63,9 +63,13 @@ def invite_user_to_channel(user_id, channel_name):
     channel_id = get_channel_id_from_channel_name(channel_name)
 
     print(channel_id)
-    client.conversations_join(channel=channel_id)
-    result = client.conversations_invite(channel=channel_id, users=user_id)
-    print(result)
+    try:
+        client.conversations_join(channel=channel_id)
+        result = client.conversations_invite(channel=channel_id, users=user_id)
+        print(result)
+    except Exception as e:
+        print("Caught exception - this might be okay if the user is already in the channel.")
+    
     print("invite_user_to_channel end")
 
 def send_slack(message="", channel=""):
