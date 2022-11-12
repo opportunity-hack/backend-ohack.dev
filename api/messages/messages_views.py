@@ -19,6 +19,8 @@ from api.messages.messages_service import (
     save_hackathon,
     get_teams_list,
     save_team,
+    unjoin_team,
+    join_team,
     get_hackathon_list,
     link_problem_statements_to_events,
     save_helping_status
@@ -123,9 +125,34 @@ def get_teams():
     return (get_teams_list())
 
 
+@authorization_guard
 @bp.route("/team", methods=["POST"])
 def add_team():
-    return vars(save_team(request.get_json()))
+    return save_team(request.get_json())
+
+
+@bp.route("/team", methods=["DELETE"])
+@authorization_guard
+def remove_user_from_team():
+    token = g.get("access_token")
+    if token:
+        user_id = token["sub"]
+        return vars(unjoin_team(user_id, request.get_json()))
+    else:
+        print("** ERROR Could not obtain token for DELETE /team")
+        return None
+
+
+@bp.route("/team", methods=["PATCH"])
+@authorization_guard
+def add_user_to_team():
+    token = g.get("access_token")
+    if token:
+        user_id = token["sub"]
+        return vars(join_team(user_id, request.get_json()))
+    else:
+        print("** ERROR Could not obtain token for PATCH /team")
+        return None
 
 # Used to register when person says they are helping, not helping
 @bp.route("/profile/helping", methods=["POST"])

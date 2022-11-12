@@ -4,6 +4,7 @@ from api.messages.message import Message
 import json
 import uuid
 from datetime import datetime
+import time
 
 import logging
 import firebase_admin
@@ -75,7 +76,29 @@ def events_to_json(docid, d):
             e_json = e_doc.to_dict()
             e_json["id"] = e.id            
             e_json["nonprofits"] = ""  # Don't bother adding this
-            e_json["teams"] = ""  # Don't bother adding this
+
+            _teams = []
+            # You want to try and handle cases where the DB might have some weird stuff in it
+            # This is defensive coding
+            teamsa = e_json["teams"] if "teams" in e_json else []
+            if teamsa:
+                for t in teamsa:
+                    for t in e_json["teams"]:
+                        try:
+                            t_doc = t.get()
+                            t_dict = t_doc.to_dict()
+                            _teams.append({
+                                "id": t_doc.id,
+                                "name": t_dict["name"],
+                                "active": t_dict["active"],
+                                "slack_channel": t_dict["slack_channel"],
+                                "users" : users_to_json(f"t_doc.id_users", t_dict["users"])
+                            })
+                        except e:
+                            logger.debug(f"Could not add this to teams list: {e}")
+
+            logger.debug(f"Teams: {teamsa}")
+            e_json["teams"] = _teams  # Don't bother adding this
             events.append(e_json)
     return events
 
@@ -89,6 +112,7 @@ def users_to_json(docid, d):
             u_json = u_doc.to_dict()
             u_json["id"] = u.id
             u_json["slack_id"] = u_json["user_id"]
+            u_json["profile_image"] = u_json["profile_image"]
             u_json["badges"] = "" # Don't bother adding this
             u_json["teams"] = ""  # Don't bother adding this
             users.append(u_json)
@@ -101,6 +125,8 @@ def problem_statements_to_json(docid, d):
     problem_statements = []
     if "problem_statements" in d:
         for ps in d["problem_statements"]:
+            start = time.time()
+
             ps_doc = ps.get()
             ps_json = ps_doc.to_dict()
             ps_json["id"] = ps_doc.id
@@ -171,6 +197,8 @@ def problem_statements_to_json(docid, d):
 
             ps_json["description"] = ps_json["description"]
             problem_statements.append(ps_json)  
+            total_time = time.time() - start             
+            logger.debug(f"{total_time} sec")
 
     return problem_statements
 
@@ -269,11 +297,12 @@ def save_team(json):
     logger.debug("Team Save")    
 
     logger.debug(json)
-    doc_id = uuid.uuid1().hex
+    doc_id = uuid.uuid1().hex # Generate a new team id
 
     name = json["name"]    
     slack_user_id = json["userId"]
     event_id = json["eventId"]
+    slack_channel = json["slackChannel"]
     problem_statement_id = json["problemStatementId"]
 
 
@@ -284,19 +313,16 @@ def save_team(json):
     problem_statement = get_problem_statement_from_id(problem_statement_id)
     if problem_statement is None:
         return
-
-    logger.debug(user)
-
-    logger.debug(problem_statement)
-
+    
+    my_date = datetime.now()
     collection = db.collection('teams')
-
     insert_res = collection.document(doc_id).set({
         "team_number" : -1,
         "users": [user],        
         "problem_statements": [problem_statement],
-        "name": name,
-        "slack_channel": "general",
+        "name": name,        
+        "slack_channel": slack_channel,
+        "created": my_date.isoformat(),
         "active": "True",
         "github_links": [
             {
@@ -307,26 +333,139 @@ def save_team(json):
     })
 
     logger.debug(f"Insert Result: {insert_res}")
-    new_team_doc = db.collection('teams').document(doc_id)
 
+    # Look up the new team object that was just created
+    new_team_doc = db.collection('teams').document(doc_id)
+    user_dict = user.get().to_dict()
+    user_teams = user_dict["teams"]
+    user_teams.append(new_team_doc)
+    user.set({
+        "teams": user_teams
+    }, merge=True)
+
+    # Get the hackathon (event) - add the team to the event
     event_collection = db.collection("hackathons").document(event_id)
     event_collection_dict = event_collection.get().to_dict()
-    logger.debug(event_collection_dict)
 
     new_teams = []     
     for t in event_collection_dict["teams"]:        
         new_teams.append(t)
     new_teams.append(new_team_doc)
 
-    logger.debug(new_teams)
     event_collection.set({
         "teams" : new_teams
     }, merge=True)
 
 
     clear_cache()
+
+    return {
+        "message":"Saved Team",
+        "team": {
+            "name": name,
+            "slack_channel": slack_channel
+        },
+        "user": {
+            "name" : user_dict["name"],
+            "profile_image": user_dict["profile_image"],
+        }
+        }
+        
+
+def join_team(userid, json):
+    send_slack_audit(action="join_team", message="Adding", payload=json)
+    db = get_db()  # this connects to our Firestore database
+    logger.debug("Join Team Start")
+
+    logger.debug(f"UserId: {userid} Json: {json}")
+    team_id = json["teamId"]
+
+    team_doc = db.collection('teams').document(team_id)
+    team_dict = team_doc.get().to_dict()
+
+    user_doc = get_user_from_slack_id(userid).reference
+    user_dict = user_doc.get().to_dict()
+    new_teams = []
+    for t in user_dict["teams"]:
+        new_teams.append(t)
+    new_teams.append(team_doc)
+    user_doc.set({
+        "teams": new_teams
+    }, merge=True)
+
+    new_users = []
+    if "users" in team_dict:
+        for u in team_dict["users"]:
+            new_users.append(u)
+    new_users.append(user_doc)    
+    team_doc.set({
+        "users": new_users
+    }, merge=True)
+
+    problem_statements_to_json.cache_clear()
+    users_to_json.cache_clear()
+
+    logger.debug("Join Team End")
     return Message(
-        "Saved Team")
+    "Joined Team")
+
+
+
+
+def unjoin_team(userid, json):
+    send_slack_audit(action="unjoin_team", message="Removing", payload=json)
+    db = get_db()  # this connects to our Firestore database
+    logger.debug("Unjoin Team Start")
+    
+    logger.debug(f"UserId: {userid} Json: {json}")
+    team_id = json["teamId"]
+
+    ## 1. Lookup Team, Remove User
+ 
+    doc = db.collection('teams').document(team_id)
+    
+    if doc:
+        doc_dict = doc.get().to_dict()
+        send_slack_audit(action="unjoin_team",
+                         message="Removing", payload=doc_dict)
+        user_list = doc_dict["users"] if "users" in doc_dict else []
+
+        # Look up a team associated with this user and remove that team from their list of teams
+        new_users = []
+        for u in user_list:
+            user_dict = u.get().to_dict()
+
+            new_teams = []
+            if userid == user_dict["user_id"]:
+                for t in user_dict["teams"]:
+                    logger.debug(t.get().id)
+                    if t.get().id == team_id:
+                        logger.debug("Remove team")                        
+                    else:
+                        logger.debug("Keep team")
+                        new_teams.append(t)
+            else:
+                logger.debug("Keep user")
+                new_users.append(u)
+            # Update users collection with new teams
+            u.set({
+                "teams": new_teams
+                }, merge=True) # merging allows to only update this column and not blank everything else out
+        
+        doc.set({
+            "users": new_users
+        }, merge=True)
+        logger.debug(new_users)
+        clear_cache()
+            
+
+    logger.debug("Unjoin Team End")
+
+    return Message(
+        "Removed from Team")
+
+    
+
 
 @limits(calls=100, period=ONE_MINUTE)
 def get_teams_list():
@@ -602,29 +741,6 @@ def link_problem_statements_to_events(json):
             "events": eventObsList
         });
         
-
-
-        # for problemId, eventList in items.items():            
-        #     problem_statement_doc = db.collection('problem_statements').document(problemId)
-            
-        #     # Look up all event docs so we can link them with their objects in the DB
-        #     eventObsList = []
-        #     for event in eventList:
-        #         print(f"Checking event: {event}")
-        #         if "|" in event:
-        #             eventId = event.split("|")[1]
-        #         else:
-        #             eventId = event
-
-        #         event_doc = db.collection('hackathons').document(eventId)                
-        #         eventObsList.add(event_doc)
-
-        #     print(f" Events to add: {eventObsList}")
-        #     problem_result = problem_statement_doc.update({
-        #         "events": eventObsList
-        #     });
-                
-                
     clear_cache()
 
     return Message(
@@ -776,7 +892,6 @@ def get_token():
     }
     x = requests.post(url, data=myobj)
     x_j = x.json()
-    logger.info("Got access token")
     logger.debug("get_token end")
     return x_j["access_token"]
 
@@ -922,13 +1037,7 @@ def get_history(db_id):
     return result
 
 
-# 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600))
-@limits(calls=100, period=ONE_MINUTE)
-def get_profile_metadata(slack_user_id):
-    logger.debug("Profile Metadata")
-    
-
+def get_auth0_details_by_slackid(slack_user_id):
     token = get_token()
 
     # Call Auth0 to get user metadata about the Slack account they used to login
@@ -943,14 +1052,26 @@ def get_profile_metadata(slack_user_id):
     logger.debug(f"Auth0 Metadata Response: {x_j}")
 
     email = x_j["email"]
-    user_id = x_j["user_id"]
-    send_slack_audit(
-        action="login", message=f"User went to profile: {user_id} with email: {email}")
+    user_id = x_j["user_id"]    
     last_login = x_j["last_login"]
-    profile_image = x_j["image_192"]    
+    profile_image = x_j["image_192"]
     name = x_j["name"]
     nickname = x_j["nickname"]
+    return email, user_id, last_login, profile_image, name, nickname
 
+
+
+# 10 minute cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=100, period=ONE_MINUTE)
+def get_profile_metadata(slack_user_id):
+    logger.debug("Profile Metadata")
+    
+    email, user_id, last_login, profile_image, name, nickname = get_auth0_details_by_slackid(slack_user_id)
+    
+    send_slack_audit(
+        action="login", message=f"User went to profile: {user_id} with email: {email}")
+    
 
     logger.debug(f"Auth0 Account Details:\
             \nEmail: {email}\nSlack User ID: {user_id}\n\
