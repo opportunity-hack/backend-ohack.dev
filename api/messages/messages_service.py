@@ -246,7 +246,7 @@ def get_hackathon_list(is_current_only):
         today = datetime.now()        
         today_str = today.strftime("%Y-%m-%d")
         logger.debug(
-            f"Looking for any event that finishes after today {today_str}for most current events only.")
+            f"Looking for any event that finishes after today {today_str} for most current events only.")
         docs = db.collection('hackathons').where("end_date", ">=", today_str).order_by(
             "end_date").stream()  # steam() gets all records
     else:
@@ -254,6 +254,7 @@ def get_hackathon_list(is_current_only):
     
     
     if docs is None:
+        logger.debug("Found no results, returning empty list")
         return {[]}
     else:
         results = []
@@ -287,6 +288,8 @@ def get_hackathon_list(is_current_only):
                 }
 
             )
+        num_results = len(results)
+        logger.debug(f"Found {num_results} results")
         logger.debug(f"Hackathon List End")
         return {"hackathons": results}
 
