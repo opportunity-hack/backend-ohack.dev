@@ -110,14 +110,7 @@ def create_app():
     if client_origin_url == "*":
         logger.debug(
             "Using wildcard for CORS client_origin_url - pretty dangerous, just for development purposes only")
-        CORS(
-            app,
-            send_wildcard = True,
-            resources={r"/api/*": {"origins": "*"}},
-            allow_headers=["Authorization", "Content-Type"],
-            methods=["GET","POST","PATCH","DELETE"],
-            max_age=86400
-        )
+        CORS(app)
     else:
         logger.debug(
             f"Using {client_origin_url} for CORS client_origin_url")
