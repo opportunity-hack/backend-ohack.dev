@@ -89,6 +89,12 @@ def create_app():
 
     @app.after_request
     def add_headers(response):
+        client_origin_url = safe_get_env_var("CLIENT_ORIGIN_URL")
+        if client_origin_url == "*":
+            logger.debug(
+                "Using wildcard for Access-Control-Allow-Origin - pretty dangerous, just for development purposes only")
+            response.headers['Access-Control-Allow-Origin'] = "*"
+
         response.headers['X-XSS-Protection'] = '0'
         response.headers['Cache-Control'] = 'no-store, max-age=0, must-revalidate'
         response.headers['Pragma'] = 'no-cache'
