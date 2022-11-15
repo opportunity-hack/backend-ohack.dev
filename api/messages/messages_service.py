@@ -134,7 +134,6 @@ def problem_statements_to_json(docid, d):
 
             event_list = []
             if "events" in ps_json:                
-
                 for e in ps_json["events"]:
                     event_doc = e.get()
                     event = event_doc.to_dict()
@@ -245,7 +244,7 @@ def get_hackathon_list(is_current_only):
     if is_current_only:        
         N_DAYS_LOOK_FORWARD = 4*30
         today = datetime.now()        
-        today_str = today.strftime("%Y-%m-%D")
+        today_str = today.strftime("%Y-%m-%d")
         logger.debug(
             f"Looking for any event that finishes after today {today_str}for most current events only.")
         docs = db.collection('hackathons').where("end_date", ">=", today_str).order_by(
