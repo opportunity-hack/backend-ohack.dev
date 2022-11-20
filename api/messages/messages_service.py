@@ -56,6 +56,11 @@ def problem_statement_key(docid, document):
 @cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
 def nonprofit_to_json(docid, d):            
     e_json = {}
+    
+    if not d:
+        logger.error("Dict is NoneType")
+        return
+
     if "name" in d:        
         e_json["problem_statements"] = ""  # Don't bother adding this
         e_json["id"] = docid 
@@ -67,39 +72,48 @@ def nonprofit_to_json(docid, d):
 def events_to_json(docid, d):
     events = []
     if "events" in d:
+        logger.debug("Events:")
+        logger.debug(d["events"])
+
         for e in d["events"]:            
+            logger.debug("Event:")
+            logger.debug(e)
+            
+
             e_doc = e.get()
-            if not e_doc:
+            if not e or not e_doc or not e_doc.to_dict():
                 logger.warning("No event object found for this reference in the DB")
-                continue
+            else:
+                e_json = e_doc.to_dict()
+                logger.debug("Event JSON:")
+                logger.debug(e_json)
 
-            e_json = e_doc.to_dict()
-            e_json["id"] = e.id            
-            e_json["nonprofits"] = ""  # Don't bother adding this
+                e_json["id"] = e.id            
+                e_json["nonprofits"] = ""  # Don't bother adding this
 
-            _teams = []
-            # You want to try and handle cases where the DB might have some weird stuff in it
-            # This is defensive coding
-            teamsa = e_json["teams"] if "teams" in e_json else []
-            if teamsa:
-                for t in teamsa:
-                    for t in e_json["teams"]:
-                        try:
-                            t_doc = t.get()
-                            t_dict = t_doc.to_dict()
-                            _teams.append({
-                                "id": t_doc.id,
-                                "name": t_dict["name"],
-                                "active": t_dict["active"],
-                                "slack_channel": t_dict["slack_channel"],
-                                "users" : users_to_json(f"t_doc.id_users", t_dict["users"])
-                            })
-                        except e:
-                            logger.debug(f"Could not add this to teams list: {e}")
+                _teams = []
+                # You want to try and handle cases where the DB might have some weird stuff in it
+                # This is defensive coding
+                teamsa = e_json["teams"] if "teams" in e_json else []
+                if teamsa:
+                    for t in teamsa:
+                        for t in e_json["teams"]:
+                            try:
+                                t_doc = t.get()
+                                t_dict = t_doc.to_dict()
+                                _teams.append({
+                                    "id": t_doc.id,
+                                    "name": t_dict["name"],
+                                    "active": t_dict["active"],
+                                    "slack_channel": t_dict["slack_channel"],
+                                    "users" : users_to_json(f"t_doc.id_users", t_dict["users"])
+                                })
+                            except e:
+                                logger.debug(f"Could not add this to teams list: {e}")
 
-            logger.debug(f"Teams: {teamsa}")
-            e_json["teams"] = _teams  # Don't bother adding this
-            events.append(e_json)
+                logger.debug(f"Teams: {teamsa}")
+                e_json["teams"] = _teams  # Don't bother adding this
+                events.append(e_json)
     return events
 
 
@@ -126,7 +140,8 @@ def problem_statements_to_json(docid, d):
     if "problem_statements" in d:
         for ps in d["problem_statements"]:
             start = time.time()
-
+            logger.debug("Problem Statements:")
+            logger.debug(d["problem_statements"])
             ps_doc = ps.get()
             ps_json = ps_doc.to_dict()
             ps_json["id"] = ps_doc.id
@@ -135,7 +150,13 @@ def problem_statements_to_json(docid, d):
             event_list = []
             if "events" in ps_json:                
                 for e in ps_json["events"]:
+                    logger.debug("Events: ")
+                    logger.debug(ps_json["events"])
+
                     event_doc = e.get()
+                    event_id = event_doc.id 
+                    logger.debug(f"Event ID: {event_id}")
+                    
                     event = event_doc.to_dict()
                     
                     if not event:
@@ -145,10 +166,18 @@ def problem_statements_to_json(docid, d):
                     team_list = []
                     if "teams" in event:
                         for t in event["teams"]:
+                            logger.debug("Teams:")
+                            logger.debug(event["teams"])
+
                             team_doc = t.get()
+                            team_id = team_doc.id 
+                            logger.debug(f"Team ID: {team_id}")
+
                             team = team_doc.to_dict()
                             user_list = []
                             for u in team["users"]:
+                                logger.debug("Users Within Team: ")
+                                logger.debug(team["users"])
                                 user_doc = u.get()
                                 user_doc_json = user_doc.to_dict()
                                 user_list.append({
@@ -264,8 +293,11 @@ def get_hackathon_list(is_current_only):
 
             nonprofits = []
             if "nonprofits" in d:
-                for npo in d["nonprofits"]:
+                logger.debug("Found these nonprofits:")
+                logger.debug(d["nonprofits"])
+                for npo in d["nonprofits"]:                    
                     npo_doc = npo.get()
+                    logger.debug(npo_doc.id)
                     nonprofits.append(nonprofit_to_json(
                         npo_doc.id, npo_doc.to_dict()))
 
@@ -399,9 +431,13 @@ def join_team(userid, json):
     if "users" in team_dict:
         for u in team_dict["users"]:
             new_users.append(u)
-    new_users.append(user_doc)    
+    new_users.append(user_doc)  
+
+    # Avoid any duplicate additions
+    new_users_set = set(new_users)
+
     team_doc.set({
-        "users": new_users
+        "users": new_users_set
     }, merge=True)
 
     problem_statements_to_json.cache_clear()
@@ -511,9 +547,13 @@ def get_npo_list(word_length=30):
         return {[]}
     else:                
         results = []
-        for doc in docs:
+        for doc in docs:            
             d_doc = doc
             d = d_doc.to_dict()
+            npo_name = d["name"]
+
+            logger.debug(f"Nonprofit Name: {npo_name}")            
+
             description = d["description"]
             words = description.split(" ")
             only_first_words = " ".join(words[0:word_length])
