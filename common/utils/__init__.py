@@ -15,7 +15,7 @@ def safe_get_env_var(key):
 
 SLACK_URL = safe_get_env_var("SLACK_WEBHOOK")
 def send_slack_audit(action="", message="", payload=None):
-    if not SLACK_URL:
+    if not SLACK_URL or SLACK_URL=="":
         print("SLACK_URL not set, returning")
         return 
 
