@@ -215,11 +215,10 @@ def problem_statements_to_json(docid, d):
                         "teams": team_list,
                         "type": event["type"],
                         "location": event["location"],
-                        "links": event["links"],
+                        "links": event["links"] if "links" in event else "",
                         "start_date": event["start_date"],
                         "end_date": event["end_date"],
-                        "image_url": event["image_url"],
-                        "links": event["links"]
+                        "image_url": event["image_url"]                        
                     }
                     )
             ps_json["events"] = event_list
