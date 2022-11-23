@@ -4,3 +4,8 @@ package-lock.json
 .DS_Store
 node_modules
 __pycache__
+output-0
+output-1
+test.log
+.firebaserc
+emulator/2022-11-20T*
