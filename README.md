@@ -1,24 +1,37 @@
+# Are you here for Opportunity Hack 2022?
+- Hacker Signup [on DevPost](https://opportunity-hack-2022.devpost.com/)
+- Arizona [In-person RSVP form](https://docs.google.com/forms/d/e/1FAIpQLScTveAW1rOEN_YO-IgI0qmi3aPkFH71O5j1OElqgYUXScKysA/viewform)
+- Mentor [signup](https://docs.google.com/forms/d/e/1FAIpQLSdY352vtbNhNM5fyKozQ7HbuxCKfkU6xTO2aA7cKx7UpWRZog/viewform) and more about OHack [mentorship](https://www.ohack.org/about/mentors)
+- Follow us on [Instagram](https://www.instagram.com/opportunityhack/), [LinkedIn](https://www.linkedin.com/company/opportunity-hack/), [YouTube](https://www.youtube.com/@opportunityhack)
+
+
 # Opportunity Hack Developer Portal (Backend)
+- 📝 [ohack.dev frontend code is here](https://github.com/opportunity-hack/frontend-ohack.dev)
 - This code is the backend [api.ohack.dev](https://api.ohack.dev) and supports [ohack.dev](https://www.ohack.dev) frontend.  
 - Like most things we build, to keep it simple, this runs on [Heroku](https://trifinlabs.com/what-is-heroku/).
-- Grab [VSCode](https://code.visualstudio.com/) as your IDE, we'll use this for both frontend and backend.
-- [ohack.dev frontend code is here](https://github.com/opportunity-hack/frontend-ohack.dev)
+- We borrowed the code from [Auth0 here](https://github.com/auth0-developer-hub/api_flask_python_hello-world) to bootstrap our development (always a good practice)
 
-This Python code was taken from a sample demonstrates how to implement authorization in a Flask API server using Auth0.
+## Quickstart
+- [Use this doc to setup GitHub Codespaces](https://docs.google.com/document/d/1RDJsTLouF3S35mgFZptQv4DZXK0SC6P1mieCinFicDs/edit?usp=sharing): you won't need to download anything on your computer
 
-# To run the Project
-First things first, you will need to get the code for this project via:
+- Install Python modules
+```bash
+pip install -r requirements.txt
 ```
-git clone git@github.com:opportunity-hack/backend-ohack.dev.git
+- Run the app
+```bash
+flask run
 ```
-Jump into that directory to get going with the steps below!
+- Create a `.env` file under the root project directory and populate it with the contents listed [in our doc here](https://docs.google.com/document/d/1RDJsTLouF3S35mgFZptQv4DZXK0SC6P1mieCinFicDs/edit#bookmark=id.ho9aqosnukcm)
 
-## The easy way with Heroku CLI
+# References
+## Running this on your laptop
+### The easy way with Heroku CLI
 - Review [these instructions](https://devcenter.heroku.com/articles/heroku-cli) 
 - Install Heroku CLI
 - Run via `heroku local` command 
 
-## The longer way
+### The longer way
 Create a virtual environment.
 You can use:
 1. [Miniconda](https://docs.conda.io/en/latest/miniconda.html) (preferred) 
@@ -62,8 +75,6 @@ Run the project in development mode:
 ```bash
 flask run
 ```
-
-
 
 
 # References
