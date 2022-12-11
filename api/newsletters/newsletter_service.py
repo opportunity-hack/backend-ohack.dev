@@ -19,12 +19,11 @@ def get_subscription_list():
     docs  = db.collection('users').stream()
     for doc in docs:
         data = doc.to_dict()
-        # TODO change to in 
-        if "subscribed" not in data and "name" in data:
+        if "subscribed" in data and "name" in data:
             subscription_list.append(
                 address(data["email_address"],data["name"].split(" ")[0])
             )
-
+            logger.debug(data["email_address"])
     return {"active": subscription_list}
 
 
