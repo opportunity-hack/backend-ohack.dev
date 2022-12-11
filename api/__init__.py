@@ -45,6 +45,7 @@ logging.config.dictConfig(dict_config)
 
 from api import exception_views
 from api.messages import messages_views
+from api.newsletters import newsletter_views
 from api.security.auth0_service import auth0_service
 from common.utils import safe_get_env_var
 
@@ -128,5 +129,6 @@ def create_app():
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
+    app.register_blueprint(newsletter_views.bp)
 
     return app
