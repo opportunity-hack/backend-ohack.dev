@@ -4,7 +4,7 @@ from string import Template
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-
+from api.newsletters.template import (FIRST_CONTENT, FOOTER)
 from decouple import config
 
 ADDRESS = config('NEWSLETTER_ADDRESS')
@@ -22,15 +22,15 @@ def send_newsletters( message, subject, addresses, is_html):
     # TODO explore multithreading here to make sending emails one instant
     for address in addresses:
         try:
-            send_mail(smtp,address,subject,message,html)
+            send_mail(smtp,address,subject,FIRST_CONTENT+html+FOOTER.format(link = "http://localhost:3000/api/newsletter/unsubscibe/"+address["email"]))
         except  Exception as e:
-            raise Exception(r'Failed sending email to:{} with address:{}'.format(address.name,address.email)) 
+            raise Exception(r'Failed sending email to:{} with address:{}'.format(address["name"],address["email"])) 
     smtp.quit()
                 
-def send_mail(s,address,subject, message, html):
+def send_mail(s,address,subject, html):
     msg = MIMEMultipart()
     msg['From']= NAME
-    msg['To']=address.email
+    msg['To']=address["email"]
     msg['Subject']=subject
     msg.attach(MIMEText(html, 'html'))
     try:

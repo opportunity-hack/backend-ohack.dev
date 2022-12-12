@@ -19,9 +19,10 @@ def get_subscription_list():
     docs  = db.collection('users').stream()
     for doc in docs:
         data = doc.to_dict()
-        if "subscribed" in data and "name" in data:
+        # TODO DANGER remove not here
+        if "subscribed" not in data and "name" in data:
             subscription_list.append(
-                address(data["email_address"],data["name"].split(" ")[0])
+                address(data["email_address"],data["name"].split(" ")[0]).__dict__
             )
             logger.debug(data["email_address"])
     return {"active": subscription_list}
@@ -40,15 +41,14 @@ def add_to_subscription_list(user_id):
     return user_doc.id
 
 @limits(calls=100, period=ONE_MINUTE)
-def remove_from_subscription_list(user_id):
-    user_doc = get_user_from_slack_id(user_id)
+def remove_from_subscription_list(email):
     db = get_db()
-    update_subs = db.collection("users").document(user_doc.id).update(
+    update_subs = db.collection("users").where("email_address","==", email).update(
         {
             "subscribe" : False
     })
     logger.debug(f"Update Result: {update_subs}")
-    return user_doc.id
+    return email+"unsubscribed"
 
 @limits(calls=100, period=ONE_MINUTE)
 def check_subscription_list(user_id):

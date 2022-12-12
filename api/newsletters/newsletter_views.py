@@ -1,9 +1,11 @@
 from api.newsletters.newsletter_service import(address, get_subscription_list,add_to_subscription_list,check_subscription_list,remove_from_subscription_list)
 from api.newsletters.smtp import(send_newsletters)
 import json
+
 import logging
 from flask import (
     Blueprint,
+    request
 )
 from api.security.guards import (
     authorization_guard,
@@ -20,8 +22,8 @@ logger = logging.getLogger("myapp")
 
 
 @bp.route("/")
-# @authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
+@authorization_guard
+@permissions_guard([admin_messages_permissions.read])
 def newsletter():
     return get_subscription_list()
 
@@ -44,58 +46,38 @@ def newsletter_signup(subscribe, user_id):
         return remove_from_subscription_list(user_id)
 
 dicti ={
-    "subject": "This is my fancy subject",
+    "subject": "ths is test4",
     "body" : """
-    
-    # Portfolio
-
-This portffolio was created with [Angular CLI](https://github.com/angular/angular-cli) version 14.1.0.
-Uses ```saas``` 
-
-<details>
-
-<summary>Running the project</summary>
-
-## Development server
-
-Run `ng serve` for a dev server. Navigate to `http://localhost:4200/`. The application will automatically reload if you change any of the source files.
-
-## Code scaffolding
-
-Run `ng generate component component-name` to generate a new component. You can also use `ng generate directive|pipe|service|class|guard|interface|enum|module`.
-
-## Build
-
-Run `ng build` to build the project. The build artifacts will be stored in the `dist/` directory.
-
-## Running unit tests
-
-Run `ng test` to execute the unit tests via [Karma](https://karma-runner.github.io).
-
-## Running end-to-end tests
-
-Run `ng e2e` to execute the end-to-end tests via a platform of your choice. To use this command, you need to first add a package that implements end-to-end testing capabilities.
-
-## Further help
-
-To get more help on the Angular CLI use `ng help` or go check out the [Angular CLI Overview and Command Reference](https://angular.io/cli) page.
-
-</details>
+                       <p>     Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod
+                            tempor incididunt ut labore et dolore magna aliqua. Vel facilisis volutpat
+                            est velit egestas dui. Ornare arcu odio ut sem nulla pharetra diam sit.
+                            Curabitur vitae nunc sed velit dignissim. Lacus suspendisse faucibus
+                            interdum posuere. Cras adipiscing enim eu turpis egestas pretium aenean
+                            pharetra. Pellentesque elit eget gravida cum sociis natoque penatibus et.
+                            Fermentum dui faucibus in ornare. Vel elit scelerisque mauris
+                            pellentesque. Duis at consectetur lorem donec massa sapien. Ac odio tempor
+                            orci dapibus ultrices in iaculis nunc sed. Mi in nulla posuere
+                            sollicitudin aliquam ultrices. Nibh praesent tristique magna sit amet
+                            purus gravida quis. Arcu odio ut sem nulla. Odio facilisis mauris sit amet
+                            massa. Laoreet non curabitur gravida arcu ac tortor dignissim </p>
+                   
     """,
-    "is_html": False
+    "is_html": True
 }
 jsonObj = json.dumps(dicti)
 
-@bp.route("/send_newsletter")
+@bp.route("/send_newsletter", methods=["POST"])
 # @authorization_guard
 # @permissions_guard([admin_messages_permissions.read])
 def send_newsletter():
-    addresses = get_subscription_list()["active"]
-    logger.debug(addresses)
-    data   = json.loads(jsonObj)
+    # addresses = get_subscription_list()["active"]
+    # logger.debug(addresses)?
+    data   = request.get_json()
+
+    logger.debug(data)
     try:
-        send_newsletters(addresses=addresses,message=data["body"],subject=data["subject"],is_html=data["is_html"])
+        send_newsletters(addresses=data["addresses"],message=data["body"],subject=data["subject"],is_html=data["is_html"])
     except  Exception as e:
-        logger.debug(f"get_profile_metadata {e}")
+        logger.debug(e)
         return "some error"
     return "True"
