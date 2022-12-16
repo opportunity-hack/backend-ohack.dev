@@ -1,0 +1,9 @@
+{
+  "version": "X.X.X",
+  "firestore":
+  {
+    "version": "X.XX.X",
+    "path": "2022-11-20T02:56:20_12843",
+    "metadata_file": "2022-11-20T02:56:20_12843.overall_export_metadata"
+  }
+}

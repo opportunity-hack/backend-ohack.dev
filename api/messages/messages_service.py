@@ -216,9 +216,10 @@ def problem_statements_to_json(docid, d):
                         "type": event["type"],
                         "location": event["location"],
                         "devpost_url": event["devpost_url"] if "devpost_url" in event else "",
+                        "links": event["links"] if "links" in event else "",
                         "start_date": event["start_date"],
                         "end_date": event["end_date"],
-                        "image_url": event["image_url"]
+                        "image_url": event["image_url"]                        
                     }
                     )
             ps_json["events"] = event_list
@@ -300,13 +301,12 @@ def get_hackathon_list(is_current_only):
                 {
                     "id": doc.id,
                     "type": d["type"],
-                    "location": d["location"],
-                    "devpost_url": d["devpost_url"],
+                    "location": d["location"],                    
+                    "links": d["links"] if "links" in d else "",
                     "start_date": d["start_date"],
                     "end_date": d["end_date"],
                     "image_url": d["image_url"],
-                    "title": d["title"] if "title" in d else "",
-                    "donation_url": d["donation_url"] if "donation_url" in d else "",
+                    "title": d["title"] if "title" in d else "",                    
                     "donation_goals": d["donation_goals"] if "donation_goals" in d else "",
                     "donation_current": d["donation_current"] if "donation_current" in d else "",
 
@@ -858,7 +858,10 @@ def save_hackathon(json):
     collection = db.collection('hackathons')
 
     insert_res = collection.document(doc_id).set({
-        "devpost_url": devpost_url,
+        "links":{
+            "name":"DevPost",
+            "link":"devpost_url"
+        },        
         "location": location,
         "start_date": start_date,
         "end_date": end_date,                    
@@ -1051,7 +1054,7 @@ def get_history(db_id):
             _hackathons.append({
                 "nonprofits": nonprofits,
                 "problem_statements": problem_statements,
-                "devpost_url": rec["devpost_url"],
+                "links": rec["links"],
                 "location": rec["location"],
                 "start_date": rec["start_date"]
             })
