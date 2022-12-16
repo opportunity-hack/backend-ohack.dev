@@ -215,6 +215,7 @@ def problem_statements_to_json(docid, d):
                         "teams": team_list,
                         "type": event["type"],
                         "location": event["location"],
+                        
                         "devpost_url": event["devpost_url"] if "devpost_url" in event else "",
                         "links": event["links"] if "links" in event else "",
                         "start_date": event["start_date"],
