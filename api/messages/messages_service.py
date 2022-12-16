@@ -215,6 +215,8 @@ def problem_statements_to_json(docid, d):
                         "teams": team_list,
                         "type": event["type"],
                         "location": event["location"],
+                        
+                        "devpost_url": event["devpost_url"] if "devpost_url" in event else "",
                         "links": event["links"] if "links" in event else "",
                         "start_date": event["start_date"],
                         "end_date": event["end_date"],
@@ -249,15 +251,10 @@ def get_single_npo(npo_id):
     else:                        
         d_doc = doc.get()
         d = d_doc.to_dict()
-        
+        result = d
+        result["id"] = doc.id
+        result["problem_statements"] = problem_statements_to_json(d_doc.id, d)
 
-        result = {
-            "id": doc.id,
-            "name": d["name"],
-            "description": d["description"],
-            "slack_channel": d["slack_channel"],
-            "problem_statements": problem_statements_to_json(d_doc.id, d)
-        }
         logger.debug(f"get_npo end (with result):{result}")
         return {
             "nonprofits": result
