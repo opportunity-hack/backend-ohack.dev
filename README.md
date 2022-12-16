@@ -10,6 +10,7 @@
 - This code is the backend [api.ohack.dev](https://api.ohack.dev) and supports [ohack.dev](https://www.ohack.dev) frontend.  
 - Like most things we build, to keep it simple, this runs on [Heroku](https://trifinlabs.com/what-is-heroku/).
 - We borrowed the code from [Auth0 here](https://github.com/auth0-developer-hub/api_flask_python_hello-world) to bootstrap our development (always a good practice)
+- If you plan on doing database work, see our guide to cloning our [Firebase Firestore Database](https://docs.google.com/document/d/1i7PGj2bOMfyrWjTUeSmbcF9fHUCpj39DrrFkYPpJ35E/edit?usp=sharing)
 
 ## Quickstart
 - [Use this doc to setup GitHub Codespaces](https://docs.google.com/document/d/1RDJsTLouF3S35mgFZptQv4DZXK0SC6P1mieCinFicDs/edit?usp=sharing): you won't need to download anything on your computer
@@ -82,7 +83,6 @@ flask run
 - [Using Python with Firestore](https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc)
 - [Querying Firestore with Python](https://firebase.google.com/docs/firestore/query-data/get-data)
 - [Auth0 Python Flask boilerplate used to start this repo](https://github.com/auth0-developer-hub/api_flask_python_hello-world)
-
 
 ## Getting Firestore Emulator Running
 - [Setting up a fully functional database in Firebase Emulator](https://medium.com/rpdstartup/setting-up-a-fully-functional-database-in-firebase-emulator-b0199fff0252)
