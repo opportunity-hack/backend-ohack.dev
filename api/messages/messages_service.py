@@ -713,7 +713,8 @@ def save_helping_status(json):
     user_id = json["user_id"] # Slack user id
     problem_statement_id = json["problem_statement_id"]
     mentor_or_hacker = json["type"]
-    npo_id = json["npo_id"]
+
+    npo_id =  json["npo_id"] if "npo_id" in json else ""
     
     user_obj = get_user_from_slack_id(user_id)
     my_date = datetime.now()
@@ -762,10 +763,17 @@ def save_helping_status(json):
     slack_message = f"<@{slack_user_id}>"
     problem_statement_title = ps_dict["title"]
     problem_statement_slack_channel = ps_dict["slack_channel"]
-    if "helping" == helping_status:
-        slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* https://ohack.dev/nonprofit/{npo_id}"
+
+    url = ""
+    if npo_id == "":
+        url = f"for project https://ohack.dev/project/{problem_statement_id}"
     else:
-        slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* https://ohack.dev/nonprofit/{npo_id}"
+        url = f"for project https://ohack.dev/project/{npo_id} and nonprofit: https://ohack.dev/nonprofit/{npo_id}"
+
+    if "helping" == helping_status:
+        slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
+    else:
+        slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
 
     invite_user_to_channel(user_id=slack_user_id,
                            channel_name=problem_statement_slack_channel)
