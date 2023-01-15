@@ -133,102 +133,110 @@ def users_to_json(docid, d):
     return users
 
 
+
+def problem_statement_to_json(ps):    
+    logger.debug("Problem Statement:")
+    logger.debug(ps)
+
+    ps_doc = ps.get()
+    ps_json = ps_doc.to_dict()
+    ps_json["id"] = ps_doc.id
+    logger.debug(f"* Found Problem Statement {ps_doc.id}")
+
+    event_list = []
+    if "events" in ps_json:                
+        for e in ps_json["events"]:
+            logger.debug("Events: ")
+            logger.debug(ps_json["events"])
+
+            event_doc = e.get()
+            event_id = event_doc.id 
+            logger.debug(f"Event ID: {event_id}")
+            
+            event = event_doc.to_dict()
+            
+            if not event:
+                logger.warning(f"Unable to find event reference for problem statement {ps_doc.id}")
+                continue
+
+            team_list = []
+            if "teams" in event:
+                for t in event["teams"]:
+                    logger.debug("Teams:")
+                    logger.debug(event["teams"])
+
+                    team_doc = t.get()
+                    team_id = team_doc.id 
+                    logger.debug(f"Team ID: {team_id}")
+
+                    team = team_doc.to_dict()
+                    user_list = []
+                    for u in team["users"]:
+                        logger.debug("Users Within Team: ")
+                        logger.debug(team["users"])
+                        user_doc = u.get()
+                        user_doc_json = user_doc.to_dict()
+                        user_list.append({
+                                    "user_id": user_doc.id,
+                                    "slack_id": user_doc_json["user_id"],
+                                    "profile_image": user_doc_json["profile_image"],
+                                    "name": user_doc_json["name"] if "name" in user_doc_json else "",
+                                    "nickname": user_doc_json["nickname"] if "nickname" in user_doc_json else ""
+                                }
+                            )
+
+                    team_problem_statements = []
+                    for p in team["problem_statements"]:
+                        problem_statement_doc = p.get()
+                        team_problem_statements.append(problem_statement_doc.id)
+                        #team_problem_statements.append(
+                        #    {"id": problem_statement_doc.id})
+
+
+                    slack_channel = team["slack_channel"] if "slack_channel" in team else ""
+                    team_list.append({
+                        "id": team_doc.id,
+                        "active": team["active"],
+                        "name": team["name"],
+                        "slack_channel": slack_channel,
+                        "github_links": team["github_links"],
+                        "team_number": team["team_number"],
+                        "users": user_list,
+                        "problem_statements": team_problem_statements
+                    }
+                    )
+
+            event_list.append({
+                "id": event_doc.id,
+                "teams": team_list,
+                "type": event["type"],
+                "location": event["location"],
+                
+                "devpost_url": event["devpost_url"] if "devpost_url" in event else "",
+                "links": event["links"] if "links" in event else "",
+                "start_date": event["start_date"],
+                "end_date": event["end_date"],
+                "image_url": event["image_url"]                        
+            }
+            )
+    ps_json["events"] = event_list
+
+    ps_json["description"] = ps_json["description"]
+    return ps_json
+
 # 12 hour cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
 def problem_statements_to_json(docid, d):
     problem_statements = []
+
     if "problem_statements" in d:
-        for ps in d["problem_statements"]:
-            start = time.time()
-            logger.debug("Problem Statements:")
-            logger.debug(d["problem_statements"])
-            ps_doc = ps.get()
-            ps_json = ps_doc.to_dict()
-            ps_json["id"] = ps_doc.id
-            logger.debug(f"* Found Problem Statement {ps_doc.id}")
-
-            event_list = []
-            if "events" in ps_json:                
-                for e in ps_json["events"]:
-                    logger.debug("Events: ")
-                    logger.debug(ps_json["events"])
-
-                    event_doc = e.get()
-                    event_id = event_doc.id 
-                    logger.debug(f"Event ID: {event_id}")
-                    
-                    event = event_doc.to_dict()
-                    
-                    if not event:
-                        logger.warning(f"Unable to find event reference for problem statement {ps_doc.id}")
-                        continue
-
-                    team_list = []
-                    if "teams" in event:
-                        for t in event["teams"]:
-                            logger.debug("Teams:")
-                            logger.debug(event["teams"])
-
-                            team_doc = t.get()
-                            team_id = team_doc.id 
-                            logger.debug(f"Team ID: {team_id}")
-
-                            team = team_doc.to_dict()
-                            user_list = []
-                            for u in team["users"]:
-                                logger.debug("Users Within Team: ")
-                                logger.debug(team["users"])
-                                user_doc = u.get()
-                                user_doc_json = user_doc.to_dict()
-                                user_list.append({
-                                            "user_id": user_doc.id,
-                                            "slack_id": user_doc_json["user_id"],
-                                            "profile_image": user_doc_json["profile_image"],
-                                            "name": user_doc_json["name"] if "name" in user_doc_json else "",
-                                            "nickname": user_doc_json["nickname"] if "nickname" in user_doc_json else ""
-                                        }
-                                    )
-
-                            team_problem_statements = []
-                            for p in team["problem_statements"]:
-                                problem_statement_doc = p.get()
-                                team_problem_statements.append(problem_statement_doc.id)
-                                #team_problem_statements.append(
-                                #    {"id": problem_statement_doc.id})
-
-
-                            slack_channel = team["slack_channel"] if "slack_channel" in team else ""
-                            team_list.append({
-                                "id": team_doc.id,
-                                "active": team["active"],
-                                "name": team["name"],
-                                "slack_channel": slack_channel,
-                                "github_links": team["github_links"],
-                                "team_number": team["team_number"],
-                                "users": user_list,
-                                "problem_statements": team_problem_statements
-                            }
-                            )
-
-                    event_list.append({
-                        "id": event_doc.id,
-                        "teams": team_list,
-                        "type": event["type"],
-                        "location": event["location"],
-                        
-                        "devpost_url": event["devpost_url"] if "devpost_url" in event else "",
-                        "links": event["links"] if "links" in event else "",
-                        "start_date": event["start_date"],
-                        "end_date": event["end_date"],
-                        "image_url": event["image_url"]                        
-                    }
-                    )
-            ps_json["events"] = event_list
-
-            ps_json["description"] = ps_json["description"]
+        start = time.time()
+        for ps in d["problem_statements"]:            
+            ps_json = problem_statement_to_json(ps)
             problem_statements.append(ps_json)  
-            total_time = time.time() - start             
-            logger.debug(f"{total_time} sec")
+
+        total_time = time.time() - start             
+        logger.debug(f"{total_time} sec")
 
     return problem_statements
 
@@ -236,6 +244,25 @@ def problem_statements_to_json(docid, d):
 def get_db():
     #mock_db = MockFirestore()
     return firestore.client()
+
+
+def get_single_problem_statement(project_id):
+    logger.debug(f"get_single_problem_statement start project_id={project_id}")    
+    db = get_db()      
+    doc = db.collection('problem_statements').document(project_id)
+    
+    if doc is None:
+        logger.warning("get_single_problem_statement end (no results)")
+        return {}
+    else:                                
+        result = problem_statement_to_json(doc)
+        result["id"] = doc.id
+        
+
+        logger.debug(f"get_single_problem_statement end (with result):{result}")
+        return result
+    return {}
+    
 
 # 12 hour cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=43200))
