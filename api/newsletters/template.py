@@ -1,8 +1,6 @@
 
-FIRST_CONTENT = """
-<html>
-<head>
-    <style>
+STYLE = """
+<style>
       /* -------------------------------------
           GLOBAL RESETS
       ------------------------------------- */
@@ -12,7 +10,7 @@ FIRST_CONTENT = """
       img {
         border: none;
         -ms-interpolation-mode: bicubic;
-        max-width: 100%;
+        max-width: 85%;
       }
 
       body {
@@ -336,32 +334,52 @@ FIRST_CONTENT = """
         }
       }
     </style>
-  </head?
-  
-      
-                       """
-FOOTER = """ 
+"""
+HTML = """<html>{content}</html>"""
+HEAD = "<head> "+STYLE + " </head>"
 
-            <!-- START FOOTER -->
-            <div class="footer">
-              <table
-                role="presentation"
-                border="0"
-                cellpadding="0"
-                cellspacing="0"
-              >
-                <tr>
-                  <td class="content-block">
-                    <span class="apple-link"
-                      >Opportunity Hack Inc. is a registered 501c3 nonprofit, EIN: 84-5113049, with the IRS of the United States of America</span
-                    >
-                    <br />
-                    Don't like these emails?
+CONTAINER = """<table class="m_-8969331859947538336email-footer" align="center" width="570" cellpadding="0" cellspacing="0" role="presentation" style="width:570px;margin:0 auto;padding:0;text-align:center">
+                  <tbody><tr>
+                    <td align="center" style="font-family:&quot;Nunito Sans&quot;,Helvetica,Arial,sans-serif;font-size:16px;padding:45px">
+                      {content}
+                    </font></td>
+                  </tr>
+                </tbody></table>"""
+
+BODY = CONTAINER.format(content="""<p style="margin:0.4em 0 1.1875em;font-size:13px;line-height:1.625;color:#000000;text-align:center">
+                      {main_body}
+                      </p>""")
+IMAGE = CONTAINER.format(
+    content="""<img src="https://i.imgur.com/Ih0mbYx.png" alt="Logo" />""")
+
+FOOTER = CONTAINER.format(content="""
+<p style="margin:0.4em 0 1.1875em;font-size:13px;line-height:1.625;color:#a8aaaf;text-align:center">Opportunity Hack Inc. is a registered 501c3 nonprofit, EIN: 84-5113049, with the IRS of the United States of America</p><font color="#888888">
+                      <p style="margin:0.4em 0 1.1875em;font-size:13px;line-height:1.625;color:#a8aaaf;text-align:center">
+                       © 2023 Opportunity Hack
+                        <br>
+                          Don't like these emails?
                     <a href={link}>Unsubscribe</a>.
-                  </td>
-                </tr>
-              </table>
-            </div>
-            <!-- END FOOTER -->
-            </html>
-       """
+                      </p>
+                      """)
+
+BUTTON = """   <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="btn btn-primary">
+                          <tbody>
+                            <tr>
+                              <td align="center">
+                                <table role="presentation" border="0" cellpadding="0" cellspacing="0">
+                                  <tbody>
+                                    <tr>
+                                     <td> <a 
+                                          href={link} 
+                                          target="_blank">
+                                          {text}
+
+                                          </a> </td>
+                                    </tr>
+                                  </tbody>
+                                </table>
+                              </td>
+                            </tr>
+                          </tbody>
+                        </table>
+                        """

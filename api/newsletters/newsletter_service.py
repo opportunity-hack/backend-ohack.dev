@@ -6,8 +6,9 @@ from api.messages.messages_service import (get_db, get_user_from_slack_id, ONE_M
 logger = logging.getLogger("myapp")
 
 class address:
-    def __init__(self,email, name):
+    def __init__(self,email,id, name):
         self.email = email
+        self.id = id
         self.name = name
 
 # Caching is not needed because the parent method already is caching
@@ -20,35 +21,50 @@ def get_subscription_list():
     for doc in docs:
         data = doc.to_dict()
         # TODO DANGER remove not here
-        if "subscribed" not in data and "name" in data:
+        # NOTE: the not is there because no user is subscribed yet
+        # this function theoretically gets the list of all non subscribers
+        # NOTE: "no name" just means the name hasn't been found. It's preferable to have emails sent to users with their names
+        if "subscribed" not in data:
             subscription_list.append(
-                address(data["email_address"],data["name"].split(" ")[0]).__dict__
+                address(data["email_address"],doc.id,"no name".split(" ")[0]).__dict__
             )
-            logger.debug(data["email_address"])
+            logger.debug(doc.id)
     return {"active": subscription_list}
 
 
 @limits(calls=100, period=ONE_MINUTE)
-def add_to_subscription_list(user_id):
-    user_doc = get_user_from_slack_id(user_id)
-    db = get_db()
+def get_full_list():
+    # fetch subscription list from slack
+    all_users = []
+    db = get_db() 
+    docs  = db.collection('users').stream()
+    for doc in docs:
+        data = doc.to_dict()
+        all_users.append(
+             # NOTE: "no name" just means the name hasn't been found. It's preferable to have emails sent to users with their names
+            address(data["email_address"],doc.id,"no name".split(" ")[0]).__dict__
+        )
+    return {"all_users": all_users}
 
-    update_subs = db.collection("users").document(user_doc.id).update(
+@limits(calls=100, period=ONE_MINUTE)
+def add_to_subscription_list(user_id):
+    db = get_db()
+    update_subs = db.collection("users").where("user_id" == user_id).update(
         {
             "subscribe" : True
     })
     logger.debug(f"Update Result: {update_subs}")
-    return user_doc.id
+    return user_id
 
 @limits(calls=100, period=ONE_MINUTE)
-def remove_from_subscription_list(email):
+def remove_from_subscription_list(user_id):
     db = get_db()
-    update_subs = db.collection("users").where("email_address","==", email).update(
+    update_subs = db.collection("users").where("user_id" == user_id).update(
         {
             "subscribe" : False
     })
     logger.debug(f"Update Result: {update_subs}")
-    return email+"unsubscribed"
+    return user_id+"unsubscribed"
 
 @limits(calls=100, period=ONE_MINUTE)
 def check_subscription_list(user_id):
