@@ -1,11 +1,8 @@
+BTN_PRIMARY = "#3498db"
+BTN_SECONDARY = "#3498db"
+BTN_TERTIARY = "#db344d"
 
-STYLE = """
-<style>
-      /* -------------------------------------
-          GLOBAL RESETS
-      ------------------------------------- */
-
-      /*All the styling goes here*/
+STYLE = """ <style>
 
       img {
         border: none;
@@ -190,6 +187,25 @@ STYLE = """
         border-color: #3498db;
         color: #ffffff;
       }
+      .btn-tertiary table td {
+        background-color: #db344d;
+      }
+
+      .btn-tertiary a {
+        background-color: #db344d;
+        border-color: #db344d;
+        color: #ffffff;
+      }
+      
+       .btn-secondary table td {
+        background-color: #3498db;
+      }
+
+      .btn-secondary a {
+        background-color: #3498db;
+        border-color: #3498db;
+        color: #ffffff;
+      }
 
       /* -------------------------------------
           OTHER STYLES THAT MIGHT BE USEFUL
@@ -362,7 +378,7 @@ FOOTER = CONTAINER.format(content="""
                       </p>
                       """)
 
-BUTTON = """   <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="btn btn-primary">
+BUTTON = """   <table role="presentation" border="0" cellpadding="0" cellspacing="0" class="btn {tag}">
                           <tbody>
                             <tr>
                               <td align="center">
