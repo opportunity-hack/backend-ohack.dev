@@ -1,5 +1,5 @@
 BTN_PRIMARY = "#3498db"
-BTN_SECONDARY = "#3498db"
+BTN_SECONDARY = "#43ff8c"
 BTN_TERTIARY = "#db344d"
 
 STYLE = """ <style>
@@ -198,13 +198,13 @@ STYLE = """ <style>
       }
       
        .btn-secondary table td {
-        background-color: #3498db;
+        background-color: #43ff8c;
       }
 
       .btn-secondary a {
-        background-color: #3498db;
-        border-color: #3498db;
-        color: #ffffff;
+        background-color: #43ff8c;
+        border-color: #43ff8c;
+        color: #000000;
       }
 
       /* -------------------------------------
