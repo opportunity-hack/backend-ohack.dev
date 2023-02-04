@@ -12,11 +12,12 @@ NO_EMAIL="noemail@mail.com"
 USER_ROLES = ["volunteer","hacker","mentor", "no role"]
 
 class address:
-    def __init__(self,email,id,name, role):
+    def __init__(self,email,id,name, role, subscribe):
         self.email = email
         self.id = id
         self.name = name
         self.role = role
+        self.subscribe = subscribe
 
 # Caching is not needed because the parent method already is caching
 @limits(calls=100, period=ONE_MINUTE)
@@ -36,10 +37,11 @@ def get_subscription_list():
         user_name =  data["name"]   if "name" in data  else NO_NAME
         user_role = data["role"] if "role" in data   else NO_ROLE
         user_email= data["email_address"] if "email_address" in data else NO_EMAIL
+        user_subscribe= data["subscribe"] if "subscribe" in data else False
         # print(user_role)
         # console.log(d)
         subscription_list[user_role].append(
-            address(user_email,doc.id,user_name, user_role).__dict__
+            address(user_email,doc.id,user_name, user_role, user_subscribe).__dict__
         )
         logger.debug(doc.id)
     return {"active": subscription_list}

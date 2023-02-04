@@ -34,20 +34,6 @@ def newsletter():
 def check_sub(user_id):
     return check_subscription_list(user_id=user_id)
 
-@bp.route("/<subscribe>/<doc_id>", methods=["POST"])
-# @authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
-def newsletter_signup(subscribe, doc_id):
-    if subscribe == "subscribe":
-        return add_to_subscription_list(doc_id)
-    elif subscribe == "verify":
-        # returns a boolean
-        return check_subscription_list(doc_id)
-    elif subscribe == "unsubscribe":
-        return remove_from_subscription_list(doc_id)
-    else: 
-        pass
-
 @bp.route("/send_newsletter", methods=["POST"])
 # @authorization_guard
 # @permissions_guard([admin_messages_permissions.read])
@@ -55,10 +41,10 @@ def send_newsletter():
     data = request.get_json()
     try:
         logger.info(data["addresses"])
-        send_newsletters(addresses=data["addresses"],message=data["body"],subject=data["subject"],is_html=data["is_html"])
+        send_newsletters(addresses=data["addresses"],message=data["body"],subject=data["subject"],role=data["role"])
     except  Exception as e:
-        logger.debug(e)
-        return "some error"
+        logger.debug("Error" + (str(e)))
+        return "False" 
     return "True"
 
 @bp.route("/preview_newsletter", methods=["POST"])
@@ -67,8 +53,24 @@ def preview_newsletter():
     data = request.get_json()
     try:
         # logger.info(data["body"])
-        content = format_message(message=data["body"], is_html=data["is_html"],address={"id": "A_Random_user_id"})
+        content = format_message(message=data["body"], address={"id": "A_Random_user_id"})
     except  Exception as e:
         logger.debug(str(e))
         content =  "Error".format(str(e))
     return content
+
+
+@bp.route("/<subscribe>/<doc_id>", methods=["POST"])
+@authorization_guard
+# @permissions_guard([admin_messages_permissions.read])
+def newsletter_signup(subscribe, doc_id):
+    print("authorized")
+    if subscribe == "subscribe":
+        return add_to_subscription_list(doc_id)
+    elif subscribe == "verify":
+        # returns a boolean
+        return check_subscription_list(doc_id)
+    elif subscribe == "unsubscribe":
+        return remove_from_subscription_list(doc_id)
+    else: 
+        return "errors"
