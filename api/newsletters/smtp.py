@@ -16,7 +16,7 @@ NAME = config('NEWSLETTER_NAME')
 logger = logging.getLogger("myapp")
 
 FRONT_END_URL = safe_get_env_var("CLIENT_ORIGIN_URL")
-# TODO: comment thid line out
+# TODO: comment this line out during production
 FRONT_END_URL = 'http://localhost:3000'
 ROLE_EMAIL = {
     "mentor": "mentors@ohack.dev",
@@ -55,7 +55,6 @@ def send_mail(smtp,address,subject, html, role):
     msg['Subject']=subject
     msg['Reply-To'] = ROLE_EMAIL[role]
     msg.add_header('List-Unsubscribe', FRONT_END_URL+'/newsletters/unsubscribe/'+address["id"])
-    # TODO add replyTo
     msg.attach(MIMEText(html, 'html'))
     try:
         smtp.send_message(msg)      
