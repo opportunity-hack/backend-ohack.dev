@@ -935,7 +935,6 @@ def get_token():
         "audience": f"https://{auth0_domain}/api/v2/"
     }
     x = requests.post(url, data=myobj)
-    logger.debug(x)
     x_j = x.json()
     logger.debug("get_token end")
     return x_j["access_token"]

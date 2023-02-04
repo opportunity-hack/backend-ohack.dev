@@ -4,15 +4,13 @@ import json
 
 import logging
 from flask import (
-    Blueprint,
-    request
+    Blueprint
 )
 from api.security.guards import (
     authorization_guard,
     permissions_guard,
     admin_messages_permissions
 )
-
 
 
 bp_name = 'api-newsletter-subscription'
@@ -25,38 +23,19 @@ logger = logging.getLogger("myapp")
 @authorization_guard
 @permissions_guard([admin_messages_permissions.read])
 def test_net():
-    print("lolololo")
     return {"true": "false"}
 
 @bp.route("/subscribe/<doc_id>", methods=["POST"])
 @authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
 def newsletter_sub(doc_id):
     return add_to_subscription_list(doc_id)
 
 @bp.route("/verify/<doc_id>", methods=["POST"])
 @authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
 def verify_sub(doc_id):
     return check_subscription_list(doc_id)
 
 @bp.route("/unsubscribe/<doc_id>", methods=["POST"])
-# @authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
+@authorization_guard
 def newsletter_un_sub(doc_id):
     return remove_from_subscription_list(doc_id)
-
-# @bp_subs.route("/<subscribe>/<doc_id>", methods=["POST"])
-# @authorization_guard
-# # @permissions_guard([admin_messages_permissions.read])
-# def newsletter_signup(subscribe, doc_id):
-#     print("authorized")
-#     if subscribe == "subscribe":
-#         return add_to_subscription_list(doc_id)
-#     elif subscribe == "verify":
-#         # returns a boolean
-#         return check_subscription_list(doc_id)
-#     elif subscribe == "unsubscribe":
-#         return remove_from_subscription_list(doc_id)
-#     else: 
-#         return "errors"

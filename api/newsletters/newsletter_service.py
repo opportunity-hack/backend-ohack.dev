@@ -32,14 +32,10 @@ def get_subscription_list():
     docs  = db.collection('users').stream()
     for doc in docs:
         data = doc.to_dict() 
-        # if "subscribed" not in data:
-        # NOTE: we can have role here
         user_name =  data["name"]   if "name" in data  else NO_NAME
         user_role = data["role"] if "role" in data   else NO_ROLE
         user_email= data["email_address"] if "email_address" in data else NO_EMAIL
         user_subscribe= data["subscribe"] if "subscribe" in data else False
-        # print(user_role)
-        # console.log(d)
         subscription_list[user_role].append(
             address(user_email,doc.id,user_name, user_role, user_subscribe).__dict__
         )
