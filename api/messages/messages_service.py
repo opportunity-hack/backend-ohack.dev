@@ -1,5 +1,6 @@
 from heapq import merge
-from common.utils import safe_get_env_var, send_slack_audit, send_slack, invite_user_to_channel
+from common.utils import safe_get_env_var
+from common.utils.slack import send_slack_audit, send_slack, invite_user_to_channel
 from api.messages.message import Message
 import json
 import uuid
@@ -1028,7 +1029,7 @@ def save(
 # Caching is not needed because the parent method already is caching
 @limits(calls=100, period=ONE_MINUTE)
 def get_history(db_id):
-    logger.debug("Get Hackathons Start")
+    logger.debug("Get History Start")
     db = get_db()  # this connects to our Firestore database
     collection = db.collection('users')
     doc = collection.document(db_id)
@@ -1043,18 +1044,19 @@ def get_history(db_id):
             problem_statements = []
 
             for n in rec["nonprofits"]:
-                npo_r = n.get().to_dict()
-                
-                if npo_r and "problem_statements" in npo_r:
+                npo_doc = n.get()
+                npo_id = npo_doc.id
+                npo = n.get().to_dict()
+                npo["id"] = npo_id
+                                
+                if npo and "problem_statements" in npo:
                     # This is duplicate date as we should already have this
-                    del npo_r["problem_statements"]
-                nonprofits.append(npo_r)
-            for ps in rec["problem_statements"]:
-                problem_statements.append(ps.get().to_dict())
+                    del npo["problem_statements"]
+                nonprofits.append(npo)
 
+                
             _hackathons.append({
-                "nonprofits": nonprofits,
-                "problem_statements": problem_statements,
+                "nonprofits": nonprofits,                
                 "links": rec["links"],
                 "location": rec["location"],
                 "start_date": rec["start_date"]
@@ -1070,6 +1072,7 @@ def get_history(db_id):
         "user_id": res["user_id"],
         "profile_image": res["profile_image"],
         "email_address" : res["email_address"],
+        "history": res["history"] if "history" in res else "",
         "badges" : _badges,
         "hackathons" : _hackathons        
     }
