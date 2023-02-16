@@ -1,5 +1,5 @@
-from api.newsletters.newsletter_service import(address, get_subscription_list,add_to_subscription_list,check_subscription_list,remove_from_subscription_list)
-from api.newsletters.smtp import (send_newsletters,format_message)
+from .newsletter_service import address, get_subscription_list,add_to_subscription_list,check_subscription_list,remove_from_subscription_list
+#from .smtp import send_newsletters,format_message
 import json
 
 import logging

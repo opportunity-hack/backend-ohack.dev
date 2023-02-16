@@ -42,11 +42,14 @@ logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
 
 
-
+print("1")
 from api import exception_views
+print("2")
 from api.messages import messages_views
+print("3")
 from api.newsletters import newsletter_views
-from api.newsletters import subscription_views
+
+#from api.newsletters import subscription_views
 from api.security.auth0_service import auth0_service
 from common.utils import safe_get_env_var
 
@@ -131,6 +134,6 @@ def create_app():
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
     app.register_blueprint(newsletter_views.bp)
-    app.register_blueprint(subscription_views.bp)
+    #app.register_blueprint(subscription_views.bp)
 
     return app
