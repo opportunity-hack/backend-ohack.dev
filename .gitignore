@@ -10,3 +10,4 @@ test.log
 emulator/2022-11-20T*
 .idea/*
 .vscode/*
+venv
