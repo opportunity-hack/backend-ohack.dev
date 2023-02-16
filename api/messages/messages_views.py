@@ -16,6 +16,7 @@ from api.messages.messages_service import (
     get_single_npo,
     save_problem_statement,
     get_problem_statement_list,
+    get_single_problem_statement,
     save_hackathon,
     get_teams_list,
     save_team,
@@ -113,6 +114,9 @@ def add_problem_statement():
 def get_problem_statments():    
     return get_problem_statement_list()
 
+@bp.route("/problem_statement/<project_id>", methods=["GET"])
+def get_single_problem(project_id):
+    return (get_single_problem_statement(project_id))
 
 @authorization_guard
 @permissions_guard([admin_messages_permissions.read])
