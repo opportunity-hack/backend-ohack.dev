@@ -42,14 +42,13 @@ logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
 
 
-print("1")
-from api import exception_views
-print("2")
-from api.messages import messages_views
-print("3")
-from api.newsletters import newsletter_views
 
+from api import exception_views
+from api.messages import messages_views
+from api.newsletters import newsletter_views
+# Leaving this disabled for now - team can fix this based on fixes for above module import
 #from api.newsletters import subscription_views
+
 from api.security.auth0_service import auth0_service
 from common.utils import safe_get_env_var
 
