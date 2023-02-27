@@ -5,10 +5,12 @@ from api.messages.messages_service import (get_db, get_user_from_slack_id, ONE_M
 
 logger = logging.getLogger("myapp")
 
+# when the data is absent in firebase the following will display
 NO_ROLE="no role"
 NO_NAME="no name"
 NO_EMAIL="noemail@mail.com"
 
+# roles available for ohack
 USER_ROLES = ["volunteer","hacker","mentor", "no role"]
 
 class address:
