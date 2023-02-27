@@ -4,15 +4,17 @@ from string import Template
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
-from api.newsletters.template import *
-from decouple import config
+from .template import *
+from .components import (scan_sentence)
 import logging
-from api.newsletters.components import (scan_sentence)
+
+import sys
+sys.path.append("../") #Since common is a directory up, make it easier to import
 from common.utils import safe_get_env_var
 
-ADDRESS = config('NEWSLETTER_ADDRESS')
-KEY = config('NEWSLETTER_APP_KEY')
-NAME = config('NEWSLETTER_NAME')
+ADDRESS = safe_get_env_var('NEWSLETTER_ADDRESS')
+KEY = safe_get_env_var('NEWSLETTER_APP_KEY')
+NAME = safe_get_env_var('NEWSLETTER_NAME')
 logger = logging.getLogger("myapp")
 
 FRONT_END_URL = safe_get_env_var("CLIENT_ORIGIN_URL")
