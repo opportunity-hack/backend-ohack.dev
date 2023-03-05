@@ -4,7 +4,7 @@ from common.utils.slack import send_slack_audit, send_slack, invite_user_to_chan
 from api.messages.message import Message
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 import time
 
 import logging
@@ -291,18 +291,28 @@ def get_single_npo(npo_id):
 
 
 @limits(calls=100, period=ONE_MINUTE)
-def get_hackathon_list(is_current_only):
+@cached(cache=TTLCache(maxsize=100, ttl=43200))
+def get_hackathon_list(is_current_only=None):
     logger.debug("Hackathon List Start")
     db = get_db()
     
-    if is_current_only:        
-        N_DAYS_LOOK_FORWARD = 4*30
+    if is_current_only == "current":                
         today = datetime.now()        
         today_str = today.strftime("%Y-%m-%d")
         logger.debug(
             f"Looking for any event that finishes after today {today_str} for most current events only.")
         docs = db.collection('hackathons').where("end_date", ">=", today_str).order_by(
             "end_date").stream()  # steam() gets all records
+    elif is_current_only == "previous": 
+        today = datetime.now()
+        today_str = today.strftime("%Y-%m-%d")
+
+        N_DAYS_LOOK_BACKWARD = 12*30*3 # 3 years
+        target_date = datetime.now() + timedelta(days=-N_DAYS_LOOK_BACKWARD)
+        target_date_str = target_date.strftime("%Y-%m-%d")
+        logger.debug(
+            f"Looking for any event that finishes before today {target_date_str} for previous events only.")
+        docs = db.collection('hackathons').where("end_date", ">=", target_date_str).where("end_date", "<=", today_str).order_by("end_date").stream()  # steam() gets all records       
     else:
         docs = db.collection('hackathons').order_by("start_date").stream()  # steam() gets all records
     

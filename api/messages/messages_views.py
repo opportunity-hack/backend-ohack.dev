@@ -100,8 +100,16 @@ def add_hackathon():
 
 @bp.route("/hackathons", methods=["GET"])
 def list_hackathons():
-    is_current = request.args.get("current") != None
-    return get_hackathon_list(is_current)
+    arg = request.args.get("current") 
+    if arg != None and arg.lower() == "current":
+        return get_hackathon_list("current")
+    if arg != None and arg.lower() == "previous":
+        return get_hackathon_list("previous")
+    else:
+        return get_hackathon_list() #all
+
+
+    
 
 # Problem Statement (also called Project) Related Endpoints
 @bp.route("/problem_statement", methods=["POST"])
