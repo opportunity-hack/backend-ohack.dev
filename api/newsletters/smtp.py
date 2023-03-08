@@ -23,7 +23,8 @@ FRONT_END_URL = 'http://localhost:3000'
 ROLE_EMAIL = {
     "mentor": "mentors@ohack.dev",
     "volunteer": "volunteers@ohack.dev",
-    "hacker": "hackers@ohack.dev"
+    "hacker": "hackers@ohack.dev",
+    "no role": "info@ohack.dev"
 }
 
 
