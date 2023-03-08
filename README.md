@@ -83,3 +83,19 @@ flask run
 - [Using Python with Firestore](https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc)
 - [Querying Firestore with Python](https://firebase.google.com/docs/firestore/query-data/get-data)
 - [Auth0 Python Flask boilerplate used to start this repo](https://github.com/auth0-developer-hub/api_flask_python_hello-world)
+
+## Getting Firestore Emulator Running
+- [Setting up a fully functional database in Firebase Emulator](https://medium.com/rpdstartup/setting-up-a-fully-functional-database-in-firebase-emulator-b0199fff0252)
+- [Get gCloud CLI](https://cloud.google.com/docs/authentication/provide-credentials-adc) since the Python code will rely on this to connec to FireStore
+```
+brew install java11
+sudo ln -sfn /usr/local/opt/openjdk\@11/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk.11.jdk
+npm install -g firebase-tools
+gcloud auth application-default login
+```
+- [Connect Firestore](https://firebase.google.com/docs/emulator-suite/connect_firestore)
+- [StackOverflow: How to setup Python to access emulator](https://stackoverflow.com/a/67757110/3746875)
+```
+export FIRESTORE_EMULATOR_HOST="localhost:8080"
+export GCLOUD_PROJECT="any-valid-name"
+```

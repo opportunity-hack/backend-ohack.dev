@@ -19,3 +19,4 @@ ratelimit==2.2.1
 cachetools==5.2.0
 cryptography==35.0.0
 slack_sdk==3.18.1
+markdown==3.4.1
