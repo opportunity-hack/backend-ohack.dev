@@ -37,7 +37,7 @@ def format_message(message,address):
     content = HEAD+IMAGE+BODY.format(main_body = html)+FOOTER.format(link = unsubscribe_link)
     return content
 
-def send_newsletters( message, subject, addresses, role):
+def send( message, subject, addresses, role):
     smtp = smtplib.SMTP(host='smtp.gmail.com', port=587)
     smtp.starttls()
     smtp.login(ADDRESS, KEY)

@@ -1,5 +1,5 @@
 from .newsletter_service import address, get_subscription_list,add_to_subscription_list,check_subscription_list,remove_from_subscription_list
-from .smtp import send_newsletters,format_message
+from .smtp import send,format_message
 import json
 import logging
 from flask import (
@@ -33,14 +33,14 @@ def newsletter():
 def check_sub(user_id):
     return check_subscription_list(user_id=user_id)
 
-@bp.route("/send_newsletter", methods=["POST"])
+@bp.route("/send", methods=["POST"])
 # @authorization_guard
 # @permissions_guard([admin_messages_permissions.read])
-def send_newsletter():
+def send():
     data = request.get_json()
     try:
         logger.info(data["addresses"])
-        send_newsletters(addresses=data["addresses"],message=data["body"],subject=data["subject"],role=data["role"])
+        send(addresses=data["addresses"],message=data["body"],subject=data["subject"],role=data["role"])
     except  Exception as e:
         logger.debug("Error" + (str(e)))
         return "False" 
