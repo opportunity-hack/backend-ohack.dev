@@ -46,8 +46,8 @@ def send_newsletter():
         return "False" 
     return "True"
 
-@bp.route("/preview_newsletter", methods=["POST"])
-def preview_newsletter():
+@bp.route("/preview", methods=["POST"])
+def preview():
     logger.debug("running")
     data = request.get_json()
     try:
