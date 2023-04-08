@@ -5,7 +5,7 @@ from api.messages.messages_service import (get_db, get_user_from_slack_id, ONE_M
 
 logger = logging.getLogger("myapp")
 
-# when the data is absent in firebase the following will display
+# When a user doesn't have a role or a name or email in the beackend, the above values are used in place when sending the email
 NO_ROLE="no role"
 NO_NAME="no name"
 NO_EMAIL="noemail@mail.com"
