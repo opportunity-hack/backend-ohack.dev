@@ -1,3 +1,5 @@
+Hi
+
 # Are you here for Opportunity Hack 2022?
 - Hacker Signup [on DevPost](https://opportunity-hack-2022.devpost.com/)
 - Arizona [In-person RSVP form](https://docs.google.com/forms/d/e/1FAIpQLScTveAW1rOEN_YO-IgI0qmi3aPkFH71O5j1OElqgYUXScKysA/viewform)
