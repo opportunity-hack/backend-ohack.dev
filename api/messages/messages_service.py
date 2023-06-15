@@ -125,12 +125,13 @@ def users_to_json(docid, d):
         for u in d["users"]:            
             u_doc = u.get()
             u_json = u_doc.to_dict()
-            u_json["id"] = u.id
-            u_json["slack_id"] = u_json["user_id"]
-            u_json["profile_image"] = u_json["profile_image"]
-            u_json["badges"] = "" # Don't bother adding this
-            u_json["teams"] = ""  # Don't bother adding this
-            users.append(u_json)
+            res_json = {}
+            res_json["id"] = u.id
+            res_json["slack_id"] = u_json["user_id"]
+            res_json["profile_image"] = u_json["profile_image"]
+            res_json["badges"] = "" # Don't bother adding this
+            res_json["teams"] = ""  # Don't bother adding this
+            users.append(res_json)
     return users
 
 
@@ -345,7 +346,8 @@ def get_hackathon_list(is_current_only=None):
                     "start_date": d["start_date"],
                     "end_date": d["end_date"],
                     "image_url": d["image_url"],
-                    "title": d["title"] if "title" in d else "",                    
+                    "title": d["title"] if "title" in d else "",
+                    "description": d["description"] if "description" in d else "",
                     "donation_goals": d["donation_goals"] if "donation_goals" in d else "",
                     "donation_current": d["donation_current"] if "donation_current" in d else "",
 
@@ -564,8 +566,8 @@ def get_teams_list():
                     "problem_statements": problem_statements_to_json(d_doc.id, d)
                 }
                     
-            )
-        logger.debug(f"Teams List End")
+            )        
+        logger.debug(f"Teams List End, Results:\n{results}")
         return { "teams": results }
 
 
