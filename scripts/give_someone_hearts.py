@@ -208,7 +208,7 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
             os.remove(certificate_filename)
         
     
-    if len(reasons) > 1:
+    if len(reasons) >= 1:
         for reason in reasons:
             add_hearts_for_user(id, amount, reason)
 
@@ -228,10 +228,10 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
         outro_message = "\n_Thank you for taking the time out of your day to support a nonprofit with your talents_!\nMore on our heart system at https://hearts.ohack.dev"
         # Send a DM
         send_slack(channel=f"{slack_user_id}",
-                   message=f"{intro_message}\nHey <@{slack_user_id}> :astronaut-hooray-woohoo-yeahfistpump: You have been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}\nYour profile should now reflect these updates: https://ohack.dev/profile")
+                  message=f"{intro_message}\nHey <@{slack_user_id}> :astronaut-hooray-woohoo-yeahfistpump: You have been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}\nYour profile should now reflect these updates: https://ohack.dev/profile")
         
         # Send to public channel too
-        send_slack(channel="<testtest>",
+        send_slack(channel="general",
                    message=f"{intro_message}\n:astronaut-hooray-woohoo-yeahfistpump: <@{slack_user_id}> has been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}")
     else:
         # Example: ["code_reliability", "iterations_of_code_pushed_to_production
@@ -245,15 +245,16 @@ reasons = [
     "code_reliability",
     "customer_driven_innovation_and_design_thinking",
     "iterations_of_code_pushed_to_production",    
+    
     ## what
     "productionalized_projects",
     "requirements_gathering",
-    "documentation",
-    "design_architecture",
+    # "documentation",
+    # "design_architecture",
     "code_quality",
-    "unit_test_writing",
-    "unit_test_coverage",
-    "observability"    
+    # "unit_test_writing",
+    # "unit_test_coverage",
+    # "observability"    
     ]
     
 

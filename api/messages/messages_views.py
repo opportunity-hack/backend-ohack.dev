@@ -6,6 +6,7 @@ from flask import (
 
 from api.messages.messages_service import (
     get_profile_metadata,
+    get_user_by_id,
     get_public_message,
     get_protected_message,
     get_admin_message,
@@ -17,6 +18,8 @@ from api.messages.messages_service import (
     save_problem_statement,
     get_problem_statement_list,
     get_single_problem_statement,
+    get_single_hackathon_event,
+    get_single_hackathon_id,
     save_hackathon,
     get_teams_list,
     save_team,
@@ -109,7 +112,13 @@ def list_hackathons():
         return get_hackathon_list() #all
 
 
-    
+@bp.route("/hackathon/<event_id>", methods=["GET"])
+def get_single_hackathon_by_event(event_id):
+    return (get_single_hackathon_event(event_id))
+
+@bp.route("/hackathon/id/<id>", methods=["GET"])
+def get_single_hackathon_by_id(id):
+    return (get_single_hackathon_id(id))
 
 # Problem Statement (also called Project) Related Endpoints
 @bp.route("/problem_statement", methods=["POST"])
@@ -135,6 +144,11 @@ def update_problem_statement_events_link():
 @bp.route("/teams", methods=["GET"])
 def get_teams():
     return (get_teams_list())
+
+# Get a single team by id
+@bp.route("/team/<team_id>", methods=["GET"])
+def get_team(team_id):
+    return (get_teams_list(team_id))
 
 
 @authorization_guard
@@ -187,6 +201,10 @@ def profile():
     else:
         return None
 
+# Get user profile by user id
+@bp.route("/profile/<id>", methods=["GET"])
+def get_profile_by_id(id):
+    return get_user_by_id(id)
 
 # Used to provide feedback details - user must be logged in
 @bp.route("/feedback/<user_id>")
