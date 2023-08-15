@@ -180,9 +180,16 @@ def get_single_hackathon_event(hackathon_id):
     if result is None:
         logger.warning("get_single_hackathon_event end (no results)")
         return {}
-    else:                             
-        result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]   
-        result["teams"] = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]        
+    else:                  
+        if "nonprofits" in result:           
+            result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]   
+        else:
+            result["nonprofits"] = []
+        if "teams" in result:
+            result["teams"] = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]        
+        else:
+            result["teams"] = []
+
         logger.info(f"get_single_hackathon_event end (with result):{result}")
         return result
     return {}
