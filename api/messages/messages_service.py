@@ -157,6 +157,8 @@ def get_single_problem_statement(project_id):
         return result
     return {}
 
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
     logger.debug(f"get_single_hackathon_id start id={id}")    
     db = get_db()      
@@ -173,6 +175,8 @@ def get_single_hackathon_id(id):
         return result
     return {}
 
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
     logger.debug(f"get_single_hackathon_event start hackathon_id={hackathon_id}")    
     result = get_hackathon_by_event_id(hackathon_id)
