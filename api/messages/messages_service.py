@@ -408,17 +408,15 @@ def save_team(json):
 
     # Clear the cache
     logger.info(f"Clearing cache for event_id={event_id} problem_statement_id={problem_statement_id} user_doc.id={user_doc.id} doc_id={doc_id}")
-    doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=event_id)), None)
-    doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=problem_statement_id)), None)
-    doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=user_doc.id)), None)
-    doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=doc_id)), None)
+    clear_cache()
+
+    # get the team from get_teams_list
+    team = get_teams_list(doc_id)
+
 
     return {
         "message":"Saved Team",
-        "team": {
-            "name": name,
-            "slack_channel": slack_channel
-        },
+        "team": team,
         "user": {
             "name" : user_dict["name"],
             "profile_image": user_dict["profile_image"],
@@ -462,25 +460,7 @@ def join_team(userid, json):
 
 
     # Clear the cache
-    logger.info(f"Clearing cache for team_id={team_id} and user_doc.id={user_doc.id}")    
-    ##doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=team_id)), None)
-    ##doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=user_doc.id)), None)
-
-    # Loop through team_doc["problem_statements"] and clear cache for each problem statement
-    if "problem_statements" in team_dict:
-        for p in team_dict["problem_statements"]:
-            # log
-            logger.info(f"Clearing cache for problem_statement={p.id}")
-            ##doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=p.id)), None)
-            
-            # Loop through each hackathon event for each problem statement and clear cache        
-            problem_statement_dict = p.get().to_dict()
-            if "events" in problem_statement_dict:
-                for h in problem_statement_dict["events"]:
-                    # log
-                    logger.info(f"Clearing cache for hackathon_event={h.id}")
-                    ##doc_to_json.cache.pop(doc_to_json.cache_key(hash_key(docid=h.id)), None)
-    doc_to_json.cache_clear()
+    logger.info(f"Clearing cache for team_id={team_id} and user_doc.id={user_doc.id}")            
     clear_cache()
 
     logger.debug("Join Team End")
@@ -535,8 +515,7 @@ def unjoin_team(userid, json):
         logger.debug(new_users)
         
     # Clear the cache
-    logger.info(f"Clearing team_id={team_id} cache")    
-    doc_to_json.cache_clear()    
+    logger.info(f"Clearing team_id={team_id} cache")         
     clear_cache()
             
     logger.debug("Unjoin Team End")
@@ -590,6 +569,8 @@ def save_npo(json):
 def clear_cache():        
     get_profile_metadata.cache_clear()
     doc_to_json.cache_clear()
+    get_single_hackathon_event.cache_clear()
+    get_single_hackathon_id.cache_clear()
     
 
 @limits(calls=100, period=ONE_MINUTE)
@@ -660,7 +641,7 @@ def save_helping_status(json):
         "helping": helping_list
     })
 
-    doc_to_json.cache_clear()
+    clear_cache()
     
 
     send_slack_audit(action="helping", message=user_id, payload=to_add)
@@ -721,7 +702,7 @@ def link_problem_statements_to_events(json):
             "events": eventObsList
         });
         
-    doc_to_json.cache_clear()
+    clear_cache()
 
     return Message(
         "Updated Problem Statement to Event Associations"
@@ -734,7 +715,7 @@ def update_npo(json):
     db = get_db()  # this connects to our Firestore database
 
     logger.debug("Clearing cache")    
-    doc_to_json.cache_clear()
+    clear_cache()
 
     logger.debug("Done Clearing cache")
     logger.debug("NPO Edit")
@@ -826,7 +807,7 @@ def save_problem_statement(json):
     logger.debug("Problem Statement Save")
 
     logger.debug("Clearing cache")    
-    doc_to_json.cache_clear()
+    clear_cache()
     logger.debug("Done Clearing cache")
 
 

@@ -162,6 +162,8 @@ def remove_user_from_team(userid, teamid):
         else:
             logger.info(f"Team {teamid} is not in user {userid}, not removing")
 
+
+
 def delete_user_by_id(userid):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Deleting user {userid}")
@@ -544,7 +546,8 @@ def get_problem_statement_reference_by_id(id):
     db = get_db()  # this connects to our Firestore database
     doc = db.collection('problem_statements').document(id).get()
     return doc.reference
-    
+
+
 
 def link_problem_statement_to_hackathon_event(problem_statement_id, hackathon_title):
     db = get_db()  # this connects to our Firestore database
@@ -571,7 +574,13 @@ def link_problem_statement_to_hackathon_event(problem_statement_id, hackathon_ti
     else:
         problem_statement_hackathons.append(hackathon_reference)
         db.collection("problem_statements").document(problem_statement_id).set({"events": problem_statement_hackathons}, merge=True)
-    
+
+def get_nonprofit_by_id(id):
+    db = get_db()  # this connects to our Firestore database
+    doc = db.collection('nonprofits').document(id).get()
+    adict = doc.to_dict()
+    adict["id"] = doc.id
+    return adict
 
 def link_nonprofit_to_problem_statement(nonprofit_name, problem_statement_id):
     db = get_db()  # this connects to our Firestore database
@@ -616,11 +625,94 @@ def link_nonprofit_to_problem_statement(nonprofit_name, problem_statement_id):
         nonprofit_problem_statements.append(problem_statement_reference)
         db.collection("nonprofits").document(nonprofit["id"]).set({"problem_statements": nonprofit_problem_statements}, merge=True)
 
+def add_image_to_nonprofit_by_nonprofit_id(nonprofit_id, image_url):
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Adding image {image_url} to nonprofit {nonprofit_id}")
+
+    # Get nonprofit
+    nonprofit = db.collection("nonprofits").document(nonprofit_id).get()
+
+    if not nonprofit.exists:
+        logger.error(f"**ERROR Nonprofit {nonprofit_id} does not exist")
+        raise Exception(f"Nonprofit {nonprofit_id} does not exist")
+    
+    # Add image to nonprofit
+    db.collection("nonprofits").document(nonprofit_id).set({"image": image_url}, merge=True)
+    #log result
+    logger.info(f"Image {image_url} added to nonprofit {nonprofit_id}")
+
+def add_image_to_nonprofit(nonprofit_name, image_url):
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Adding image {image_url} to nonprofit {nonprofit_name}")
+
+    # Get nonprofit
+    nonprofit = get_nonprofit_by_name(nonprofit_name)
+
+    if not nonprofit:
+        logger.error(f"**ERROR Nonprofit {nonprofit_name} does not exist")
+        raise Exception(f"Nonprofit {nonprofit_name} does not exist")
+    
+    # Make sure there is only one nonprofit with this name
+    if len(nonprofit) > 1:
+        logger.error(f"**ERROR More than one nonprofit with name {nonprofit_name}")
+        raise Exception(f"More than one nonprofit with name {nonprofit_name}")
+    
+    nonprofit = nonprofit[0]
+
+    # Convert nonprofit reference to nonprofit object
+    # Get the ID    
+    nonprofit_doc = nonprofit.get()
+    nonprofit = nonprofit_doc.to_dict()    
+    nonprofit["id"] = nonprofit_doc.id
+
+    # Add image to nonprofit
+    db.collection("nonprofits").document(nonprofit["id"]).set({"image": image_url}, merge=True)
+    #log result
+    logger.info(f"Image {image_url} added to nonprofit {nonprofit_name}")
+
+
+
+def add_nonprofit_to_hackathon(nonprofit_name, hackathon_event_id):
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Adding nonprofit {nonprofit_name} to hackathon {hackathon_event_id}")
+
+    # Get nonprofit
+    nonprofit = get_nonprofit_by_name(nonprofit_name)
+
+    if not nonprofit:
+        logger.error(f"**ERROR Nonprofit {nonprofit_name} does not exist")
+        raise Exception(f"Nonprofit {nonprofit_name} does not exist")
+    
+    # Make sure there is only one nonprofit with this name
+    if len(nonprofit) > 1:
+        logger.error(f"**ERROR More than one nonprofit with name {nonprofit_name}")
+        raise Exception(f"More than one nonprofit with name {nonprofit_name}")
+    
+    nonprofit = nonprofit[0]
+
+    # Convert nonprofit reference to nonprofit object
+    # Get the ID    
+    nonprofit_doc = nonprofit.get()
+    nonprofit = nonprofit_doc.to_dict()    
+    nonprofit["id"] = nonprofit_doc.id
     
     
+    # Get hackathon
+    hackathon = get_hackathon_by_event_id(hackathon_event_id)
 
-
-
+    if not hackathon:
+        logger.error(f"**ERROR Hackathon {hackathon_event_id} does not exist")
+        raise Exception(f"Hackathon {hackathon_event_id} does not exist")
+    
+   # Add nonprofit to hackathon
+    hackathon_nonprofits = hackathon["nonprofits"]
+    if nonprofit["id"] in hackathon_nonprofits:
+        logger.info(f"Nonprofit {nonprofit_name} is already in hackathon {hackathon_event_id}, not adding again")
+    else:
+        hackathon_nonprofits.append(nonprofit_doc.reference)
+        db.collection("hackathons").document(hackathon["id"]).set({"nonprofits": hackathon_nonprofits}, merge=True)
+        #log result
+        logger.info(f"Nonprofit {nonprofit_name} added to hackathon {hackathon_event_id}")
 
 
 
