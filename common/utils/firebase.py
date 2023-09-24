@@ -716,9 +716,9 @@ def add_nonprofit_to_hackathon(nonprofit_name, hackathon_event_id):
 
 
 
-def add_reference_link_to_problem_statement(problem_statement_id, name, link):
+def add_reference_link_to_problem_statement(problem_statement_id, name, link, attribute):
     db = get_db()  # this connects to our Firestore database
-    logger.info(f"Adding reference link {link} to problem statement {problem_statement_id}")
+    logger.info(f"Adding reference link {link} and it's attribute {attribute} to problem statement {problem_statement_id}")
 
     # Get problem statement
     problem_statement = db.collection("problem_statements").document(problem_statement_id).get()
@@ -729,7 +729,7 @@ def add_reference_link_to_problem_statement(problem_statement_id, name, link):
 
     # Add reference link
     reference_links = problem_statement.to_dict()["references"]
-    reference_links.append({"name": name, "link": link})
+    reference_links.append({"name": name, "link": link, "attribute": attribute})
     db.collection("problem_statements").document(problem_statement_id).set(
         {"references": reference_links}, merge=True)
     
