@@ -12,6 +12,7 @@ import pytz
 from typing import *
 
 from api.certificates.certificate import CertificateGenerator
+from api.certificates.scan_repo import GitFameTable, GitFameRow, getGitFameData
 
 # import openai
 
@@ -78,12 +79,22 @@ def _write_stat_to_certificate(certGen: CertificateGenerator, statTextInfo: Dict
         if (startY >= maxY):
             break
 
-def generate_certificate(userInfo: pd.DataFrame) -> str:
+def generate_certificate(repositoryURL: str, username: str) -> bytes:
     """ Automatically generate a certificate and returns the path to it """
     certGen: CertificateGenerator = CertificateGenerator()
 
+    gitFameData: GitFameTable = getGitFameData(repositoryURL)
+    print(gitFameData)
+    authorData: GitFameRow = None
+    for row in gitFameData.authors:
+        if (row.author == username):
+            authorData = row
+            break
+
+    if (not authorData): return b""
+
     certGen.draw_multiline_text_absolute("Certificate of Achievment\nCongratulations", 1024 // 2, 360, GOLD_COLOR, HEADER_FONT, "center")
-    certGen.draw_multiline_text_absolute("John Doe", 1024 // 2, 450, WHITE_COLOR, HEADER_FONT, "center")
+    certGen.draw_multiline_text_absolute(username, 1024 // 2, 450, WHITE_COLOR, HEADER_FONT, "center")
 
     exText = "This certifies that hard work, determination, and extreme learning are innate in this person as they volunteered their summer to help non-profits. They could have been doing anything else, but they chose to do something for their community!"
     wrappedText: str = "\n".join(textwrap.wrap(exText, width=85))
@@ -92,12 +103,9 @@ def generate_certificate(userInfo: pd.DataFrame) -> str:
     certGen.draw_text_absolute("Stats", 1024 // 2, 620, WHITE_COLOR, HEADER_FONT, "center")
 
     stats = [
-        ["Standups", 5],
-        ["Slack Messages", 104],
-        ["Commits", 2],
-        ["LOC Adds", 179],
-        ["LOC Deletes", 0],
-        ["Retrospectives", 1]
+        ["Commits", authorData.commits],
+        ["Lines of Code", authorData.linesOfCode],
+        ["Files", authorData.files],
     ]
 
     statsInfo: Dict[str, int | List[str]] = _get_stat_text_info(certGen, stats, LARGE_FONT)

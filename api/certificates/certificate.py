@@ -62,7 +62,7 @@ class CertificateGenerator:
         if (align == "left"):
             return (xPosition, yPosition - (textHeight // 2))
 
-    def toBase64(self) -> str:
+    def toBase64(self) -> bytes:
         self.certificateTemplate.paste(self.certificateMask, (0, 0), mask=self.certificateMask)
         imgBuff: BytesIO = BytesIO()
         self.certificateTemplate.save(imgBuff, format="png")
