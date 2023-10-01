@@ -83,6 +83,10 @@ def doc_to_json(docid=None, doc=None, depth=0):
     else:        
         return doc
     
+    if d_json is None:
+        logger.warn(f"doc.to_dict() is NoneType | docid={docid} doc={doc}")
+        return
+
     # If any values in d_json is a list, add only the document id to the list for DocumentReference or DocumentSnapshot
     for key, value in d_json.items():
         if isinstance(value, list):
@@ -140,7 +144,7 @@ def get_db():
     #mock_db = MockFirestore()
     return firestore.client()
 
-
+@cached(cache=TTLCache(maxsize=100, ttl=600))
 def get_single_problem_statement(project_id):
     logger.debug(f"get_single_problem_statement start project_id={project_id}")    
     db = get_db()      
