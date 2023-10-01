@@ -1,6 +1,7 @@
 import requests
 from . import safe_get_env_var
-
+import datetime, json
+from ratelimiter import RateLimiter
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
@@ -31,6 +32,51 @@ def send_slack_audit(action="", message="", payload=None):
         }
 
     requests.post(json=json, url=SLACK_URL)
+
+
+@RateLimiter(max_calls=40, period=60)
+def presence(user_id=None):
+    if user_id is None:
+        return
+    client = get_client()
+    return client.users_getPresence(user=user_id)
+
+@RateLimiter(max_calls=20, period=60)
+def userlist():
+    client = get_client()
+    return client.users_list()
+
+
+def get_active_users():
+   
+    aresult = []
+    counter = 0
+    for member in userlist()["members"]:
+        # get updated time in seconds and print as date
+        updated = datetime.datetime.fromtimestamp(
+            member["updated"]).strftime('%Y-%m-%d %H:%M:%S')
+
+        # Print the 5th member raw details
+        here = False        
+        #print(json.dumps(member, indent=4, sort_keys=True))              
+
+        deleted = True if ("deleted" in member and member["deleted"]) else False            
+        if not deleted:            
+            here = presence(user_id=member["id"])["presence"] != "away"
+        
+        
+        is_email_confirmed = member["is_email_confirmed"] if "is_email_confirmed" in member else ""
+        display_name = member["profile"]["display_name_normalized"] if "display_name" in member["profile"] else ""
+        real_name = member["profile"]["real_name_normalized"] if "real_name" in member["profile"] else ""
+
+        # If last updated in the last 30 days, add to list
+        #if (datetime.datetime.now() - datetime.datetime.fromtimestamp(member["updated"])).days < 30:
+        if(here):
+            aresult.append(f"@{real_name} | {member['name']} ({member['id']}) - {updated}")
+        
+    print(len(aresult))        
+
+    return aresult
 
 
 def get_slack_token():

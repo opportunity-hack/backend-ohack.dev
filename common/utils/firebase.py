@@ -349,7 +349,7 @@ def create_team(name):
         db.collection("teams").add(team)
         return team
 
-def create_new_nonprofit(name, description, website, slack_channel, image):
+def create_new_nonprofit(name, description, website, slack_channel, contact_people, image):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Creating nonprofit {name}")
 
@@ -364,6 +364,7 @@ def create_new_nonprofit(name, description, website, slack_channel, image):
             "description": description,
             "website": website,
             "image": image,
+            "contact_people": contact_people,            
             "slack_channel": slack_channel,
             "problem_statements": []
         }
@@ -549,12 +550,19 @@ def get_problem_statement_reference_by_id(id):
 
 
 
-def link_problem_statement_to_hackathon_event(problem_statement_id, hackathon_title):
+def link_problem_statement_to_hackathon_event(problem_statement_id=None, hackathon_title=None, hackathon_event_id=None):
     db = get_db()  # this connects to our Firestore database
-    logger.info(f"Linking problem statement {problem_statement_id} to hackathon {hackathon_title}")
+    logger.info(f"Linking problem statement {problem_statement_id} to hackathon {hackathon_title} {hackathon_event_id}")
 
     # Get hackathon    
-    hackathon_reference = get_hackathon_reference_by_title(hackathon_title)
+    hackathon_reference = None
+    if hackathon_event_id:
+        hackathon_reference = get_hackathon_by_event_id(hackathon_event_id)
+    elif hackathon_title:
+        hackathon_reference = get_hackathon_by_title(hackathon_title)
+    else:
+        logger.error(f"**ERROR No hackathon specified")
+        raise Exception(f"No hackathon specified")        
 
     if not hackathon_reference:
         logger.error(f"**ERROR Hackathon {hackathon_title} does not exist")

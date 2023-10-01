@@ -1,4 +1,3 @@
-from heapq import merge
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, send_slack, invite_user_to_channel
 from common.utils.firebase import get_hackathon_by_event_id
@@ -19,6 +18,8 @@ from cachetools.keys import hashkey
 from ratelimit import limits
 from datetime import datetime, timedelta
 
+from common.utils.github import create_github_repo
+
 
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.INFO)
@@ -29,7 +30,6 @@ auth0_secret = safe_get_env_var("AUTH0_USER_MGMT_SECRET")
 
 ONE_MINUTE = 1*60
 THIRTY_SECONDS = 30
-
 def get_public_message():
     logger.debug("~ Public ~")
     return Message(
@@ -341,7 +341,11 @@ def get_problem_statement_list():
     return { "problem_statements": results }
 
 def save_team(json):
-    send_slack_audit(action="save_team", message="Saving", payload=json)
+    logger.info(json)
+
+    
+    # send_slack_audit(action="save_team", message="Saving", payload=json)
+
     db = get_db()  # this connects to our Firestore database
     logger.debug("Team Save")    
 
@@ -350,11 +354,12 @@ def save_team(json):
 
     name = json["name"]    
     slack_user_id = json["userId"]
+    root_slack_user_id = slack_user_id.replace("oauth2|slack|T1Q7936BH-","")
     event_id = json["eventId"]
     slack_channel = json["slackChannel"]
     problem_statement_id = json["problemStatementId"]
-        
-
+    
+    
     user = get_user_from_slack_id(slack_user_id).reference
     if user is None:
         return
@@ -362,9 +367,64 @@ def save_team(json):
     problem_statement = get_problem_statement_from_id(problem_statement_id)
     if problem_statement is None:
         return
-        
+
+    # Define vars for github repo creation
+    hackathon_event_id = get_single_hackathon_id(event_id)["event_id"]    
+    team_name = name
+    team_slack_channel = slack_channel
+    raw_problem_statement_title = problem_statement.get().to_dict()["title"]
+    
+    # Remove all spaces from problem_statement_title
+    problem_statement_title = raw_problem_statement_title.replace(" ", "").replace("-", "")
+
+    repository_name = f"{team_name}--{problem_statement_title}"
+    
+    # truncate repostory name to first 100 chars to support github limits
+    repository_name = repository_name[:100]
+
+    slack_name_of_creator = user.get().to_dict()["name"]
+
+    project_url = f"https://ohack.dev/project/{problem_statement_id}"
+    # Create github repo
+    try:
+        repo = create_github_repo(repository_name, hackathon_event_id, slack_name_of_creator, team_name, team_slack_channel, problem_statement_id, raw_problem_statement_title)
+    except ValueError as e:
+        return {
+            "message": f"Error: {e}"
+        }
+
+    logger.info(f"Created github repo {repo}")
+
+    # Send a slack message to the team channel
+    slack_message = f'''
+:astronaut-floss-dancedance: Team `{name}` | `#{team_slack_channel}` has been created in support of project `{raw_problem_statement_title}` {project_url} by <@{root_slack_user_id}>.
+
+Github repo: {repo['full_url']}
+- All code should go here!
+- Everything we build is for the public good and carries an MIT license
+
+Questions? join <#C01E5CGDQ74> or use <#C05TVU7HBML> or <#C05TZL13EUD> Slack channels. 
+:partyparrot:
+
+Your next steps:
+1. Add everyone to your GitHub repo like this: https://opportunity-hack.slack.com/archives/C1Q6YHXQU/p1605657678139600
+2. Create your DevPost project https://youtu.be/vCa7QFFthfU?si=bzMQ91d8j3ZkOD03
+ - ASU Students use https://opportunity-hack-2023-asu.devpost.com/
+ - Everyone else use https://opportunity-hack-2023-virtual.devpost.com/
+3. Ask your nonprofit questions and bounce ideas off mentors!
+4. Hack the night away!
+5. Post any pics to your socials with `#ohack2023` and mention `@opportunityhack`
+6. Track any volunteer hours - you are volunteering for a nonprofit!
+7. After the hack, update your LinkedIn profile with your new skills and experience!
+'''
+    send_slack(slack_message, slack_channel)
+    send_slack(slack_message, "log-team-creation")
+
+    repo_name = repo["repo_name"]
+    full_github_repo_url = repo["full_url"]
+
     my_date = datetime.now()
-    collection = db.collection('teams')
+    collection = db.collection('teams')    
     insert_res = collection.document(doc_id).set({
         "team_number" : -1,
         "users": [user],        
@@ -375,8 +435,8 @@ def save_team(json):
         "active": "True",
         "github_links": [
             {
-                "link": "",
-                "name": ""
+                "link": full_github_repo_url,
+                "name": repo_name
             }
         ]
     })
@@ -415,7 +475,8 @@ def save_team(json):
 
 
     return {
-        "message":"Saved Team",
+        "message" : f"Saved Team and GitHub repo created. See your Slack channel #{slack_channel} for more details.",
+        "success" : True,
         "team": team,
         "user": {
             "name" : user_dict["name"],
