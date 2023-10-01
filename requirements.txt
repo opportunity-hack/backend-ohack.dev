@@ -22,4 +22,4 @@ slack_sdk==3.18.1
 markdown==3.4.1
 mock-firestore==0.11.0
 ratelimiter==1.2.0
-pygithub=2.1.1
+pygithub==2.1.1
