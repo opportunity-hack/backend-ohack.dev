@@ -203,7 +203,7 @@ def get_single_hackathon_event(hackathon_id):
     return {}
 
 # 12 hour cache for 100 objects LRU
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=200, period=ONE_MINUTE)
 def get_single_npo(npo_id):    
     logger.debug(f"get_npo start npo_id={npo_id}")    
     db = get_db()      
@@ -222,7 +222,7 @@ def get_single_npo(npo_id):
     return {}
 
 
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=200, period=ONE_MINUTE)
 def get_hackathon_list(is_current_only=None):
     logger.debug("Hackathon List Start")
     db = get_db()
@@ -344,11 +344,8 @@ def get_problem_statement_list():
     logger.debug(results)        
     return { "problem_statements": results }
 
-def save_team(json):
-    logger.info(json)
-
-    
-    # send_slack_audit(action="save_team", message="Saving", payload=json)
+def save_team(json):    
+    send_slack_audit(action="save_team", message="Saving", payload=json)
 
     db = get_db()  # this connects to our Firestore database
     logger.debug("Team Save")    
@@ -397,7 +394,7 @@ def save_team(json):
             "message": f"Error: {e}"
         }
 
-    logger.info(f"Created github repo {repo}")
+    logger.info(f"Created github repo {repo} for {json}")
 
     # Send a slack message to the team channel
     slack_message = f'''
