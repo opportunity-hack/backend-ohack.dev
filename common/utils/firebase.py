@@ -391,7 +391,7 @@ def get_nonprofit_by_name(name):
         return None
 
 
-def create_new_problem_statement(title, description, status, slack_channel, first_thought_of):
+def create_new_problem_statement(title, description, status, slack_channel, first_thought_of, skills):
     db = get_db()  # this connects to our Firestore database
 
     # check if problem statement already exists by title
@@ -421,13 +421,16 @@ def create_new_problem_statement(title, description, status, slack_channel, firs
         "description": description,
         "status": status,
         "slack_channel": slack_channel,
+        "skills": skills,
         "references": [],
         "github": [],
         "first_thought_of": first_thought_of,
         "events": []
     }
     logger.info(f"Adding problem statement {problem_statement}")
-    db.collection("problem_statements").add(problem_statement)
+    db_result = db.collection("problem_statements").add(problem_statement)
+    problem_statement["id"] = db_result[1].id
+    
     return problem_statement
 
 def create_new_hackathon(title, type, links, teams, donation_current, donation_goals, location, nonprofits, start_date, end_date):
@@ -511,22 +514,28 @@ def add_hackathon_to_user_and_teams(hackathon_id):
                 user_hackathons.append(hackathon.reference)
                 db.collection("users").document(user.id).set({"hackathons": user_hackathons}, merge=True)
 
-def get_hackathon_by_event_id(event_id):
+def get_hackathon_by_event_id(event_id, return_reference=False):
     db = get_db()  # this connects to our Firestore database
     docs = db.collection('hackathons').where("event_id", "==", event_id).stream()
 
     for doc in docs:
         adict = doc.to_dict()
         adict["id"] = doc.id
+
+        if return_reference:
+            return doc.reference
         return adict
     
-def get_hackathon_by_title(hackathon_title):
+def get_hackathon_by_title(hackathon_title, return_reference=False):
     db = get_db()  # this connects to our Firestore database
     docs = db.collection('hackathons').where("title", "==", hackathon_title).stream()
 
     for doc in docs:
         adict = doc.to_dict()
         adict["id"] = doc.id
+        if return_reference:
+            return doc.reference
+        
         return adict
 
 def get_hackathon_reference_by_title(hackathon_title):
@@ -557,9 +566,9 @@ def link_problem_statement_to_hackathon_event(problem_statement_id=None, hackath
     # Get hackathon    
     hackathon_reference = None
     if hackathon_event_id:
-        hackathon_reference = get_hackathon_by_event_id(hackathon_event_id)
+        hackathon_reference = get_hackathon_by_event_id(hackathon_event_id, return_reference=True)
     elif hackathon_title:
-        hackathon_reference = get_hackathon_by_title(hackathon_title)
+        hackathon_reference = get_hackathon_by_title(hackathon_title, return_reference=True)
     else:
         logger.error(f"**ERROR No hackathon specified")
         raise Exception(f"No hackathon specified")        
@@ -567,6 +576,7 @@ def link_problem_statement_to_hackathon_event(problem_statement_id=None, hackath
     if not hackathon_reference:
         logger.error(f"**ERROR Hackathon {hackathon_title} does not exist")
         raise Exception(f"Hackathon {hackathon_title} does not exist")
+
     
     # Get problem statement
     problem_statement = get_problem_statement_by_id(problem_statement_id)
