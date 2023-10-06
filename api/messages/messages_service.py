@@ -1,5 +1,5 @@
 from common.utils import safe_get_env_var
-from common.utils.slack import send_slack_audit, send_slack, invite_user_to_channel
+from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
 from common.utils.firebase import get_hackathon_by_event_id
 from api.messages.message import Message
 import json
@@ -393,8 +393,15 @@ def save_team(json):
         return {
             "message": f"Error: {e}"
         }
-
     logger.info(f"Created github repo {repo} for {json}")
+
+    create_slack_channel(slack_channel)
+    invite_user_to_channel(slack_user_id, slack_channel)
+    
+    # Add all Slack admins too  
+    slack_admins = ["UC31XTRT5", "UCQKX6LPR", "U035023T81Z", "UC31XTRT5", "UC2JW3T3K", "UPD90QV17", "U05PYC0LMHR"]
+    for admin in slack_admins:
+        invite_user_to_channel(admin, slack_channel)
 
     # Send a slack message to the team channel
     slack_message = f'''

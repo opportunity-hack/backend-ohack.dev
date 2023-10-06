@@ -48,7 +48,6 @@ def userlist():
 
 
 def get_active_users():
-   
     aresult = []
     counter = 0
     for member in userlist()["members"]:
@@ -120,6 +119,10 @@ def invite_user_to_channel(user_id, channel_name):
     channel_id = get_channel_id_from_channel_name(channel_name)
     logger.info(f"Channel ID: {channel_id}")
 
+    # If user_id has a - in it, use split to get the last part
+    if "-" in user_id:
+        user_id = user_id.split("-")[1]        
+
     try:
         client.conversations_join(channel=channel_id)
         result = client.conversations_invite(channel=channel_id, users=user_id)        
@@ -130,6 +133,25 @@ def invite_user_to_channel(user_id, channel_name):
         logger.error(e)
 
     logger.debug("invite_user_to_channel end")
+
+def create_slack_channel(channel_name):
+    logger.debug("create_slack_channel start")
+    client = get_client()
+    
+    # See if channel exists
+    channel_id = get_channel_id_from_channel_name(channel_name)
+    if channel_id is not None:
+        logger.info(f"Channel {channel_name} already exists with id {channel_id}")
+        return channel_id
+
+    try:
+        result = client.conversations_create(name=channel_name)
+        logger.info(f"Created channel {channel_name} with id {result['channel']['id']}")
+        return result["channel"]["id"]
+    except Exception as e:
+        logger.error("Caught exception")
+        logger.error(e)
+    logger.debug("create_slack_channel end")
 
 
 def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"):
