@@ -6,7 +6,7 @@ from github import GithubException
 
 load_dotenv()
 
-def create_github_repo(repository_name, hackathon_event_id, slack_name_of_creator, team_name, team_slack_channel, problem_statement_id, problem_statement_title):
+def create_github_repo(repository_name, hackathon_event_id, slack_name_of_creator, team_name, team_slack_channel, problem_statement_id, problem_statement_title, github_username):
     if hackathon_event_id == "2023_fall":
         org_name = "2023-opportunity-hack"
     else:
@@ -23,6 +23,9 @@ def create_github_repo(repository_name, hackathon_event_id, slack_name_of_creato
         raise ValueError(e.data['message'])
     
     github_admins = ["bmysoreshankar", "jotpowers", "nemathew", "pkakathkar", "vertex", "gregv", "mosesj1914", "ananay", "leonkoech", "axeljonson"]
+    if github_username is not None and github_username != "":
+        github_admins.append(github_username)
+
     # Add all admins to repo
     for admin in github_admins:
         try:
