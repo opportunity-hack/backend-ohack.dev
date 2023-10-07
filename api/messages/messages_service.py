@@ -359,6 +359,7 @@ def save_team(json):
     event_id = json["eventId"]
     slack_channel = json["slackChannel"]
     problem_statement_id = json["problemStatementId"]
+    github_username = json["githubUsername"]
     
     
     user = get_user_from_slack_id(slack_user_id).reference
@@ -388,7 +389,7 @@ def save_team(json):
     project_url = f"https://ohack.dev/project/{problem_statement_id}"
     # Create github repo
     try:
-        repo = create_github_repo(repository_name, hackathon_event_id, slack_name_of_creator, team_name, team_slack_channel, problem_statement_id, raw_problem_statement_title)
+        repo = create_github_repo(repository_name, hackathon_event_id, slack_name_of_creator, team_name, team_slack_channel, problem_statement_id, raw_problem_statement_title, github_username)
     except ValueError as e:
         return {
             "message": f"Error: {e}"
