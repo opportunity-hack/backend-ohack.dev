@@ -97,4 +97,4 @@ def getGitFameData(repositoryURL: str) -> GitFameTable:
 
 
 if __name__ == "__main__":
-    getGitFameData("https://github.com/casperdcl/git-fame.git")
+    print(getGitFameData("https://github.com/whemminger/backend-ohack.dev"))
