@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import uuid
 from dataclasses import dataclass
-from typing import Any, List
+from typing import List
 
 from git import Repo
 
@@ -69,14 +69,16 @@ def _parseGitFameResults(gitFameOutput: bytes) -> List[GitFameRow]:
     )
 
 
-def pullRepository(repoUrl: str) -> str:
+def _pullRepository(repoUrl: str) -> str:
+    """Downloads a remote Github repository locally."""
     saveLoc: str = os.path.join("/tmp", f"GitPull-{uuid.uuid4()}")
     Repo.clone_from(repoUrl, saveLoc)
     return saveLoc
 
 
-def runGitFame(repoLoc: str) -> GitFameTable:
-    result: subprocess.CompletedProcess[Any] = subprocess.run(
+def _runGitFame(repoLoc: str) -> GitFameTable:
+    """Scans a local repository with the GitFame tool"""
+    result: subprocess.CompletedProcess[bytes] = subprocess.run(
         ["git-fame", repoLoc], stdout=subprocess.PIPE)
     if (result.stderr):
         print("Something wrong")
@@ -84,15 +86,24 @@ def runGitFame(repoLoc: str) -> GitFameTable:
     return _parseGitFameResults(result.stdout)
 
 
-def removePulledRepo(repoLoc: str) -> None:
+def _removePulledRepo(repoLoc: str) -> None:
+    """Helper function that deletes a directory and all subfolders."""
     shutil.rmtree(repoLoc)
 
 
 def getGitFameData(repositoryURL: str) -> GitFameTable:
-    saveLoc: str = pullRepository(repositoryURL)
+    """Pull and scan a GitHub repository using the Gitfame tool.
+
+    Parameters:
+        repositoryURL (str): a string representation of the GitHub URL to be scraped
+    
+    Returns:
+        A GitFameTable dataclass object containing the parsed GitFame output
+    """
+    saveLoc: str = _pullRepository(repositoryURL)
     print(f"Saved at: {saveLoc}")
-    results: GitFameTable = runGitFame(saveLoc)
-    removePulledRepo(saveLoc)
+    results: GitFameTable = _runGitFame(saveLoc)
+    _removePulledRepo(saveLoc)
     return results
 
 
