@@ -105,7 +105,3 @@ def getGitFameData(repositoryURL: str) -> GitFameTable:
     results: GitFameTable = _runGitFame(saveLoc)
     _removePulledRepo(saveLoc)
     return results
-
-
-if __name__ == "__main__":
-    print(getGitFameData("https://github.com/whemminger/backend-ohack.dev"))

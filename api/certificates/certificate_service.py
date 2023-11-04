@@ -1,21 +1,21 @@
 import uuid
-import pandas as pd
 
 from PIL import ImageFont
-from os import path, getenv
+from os import getenv
 from typing import *
 from datetime import datetime
 import sys
 from dotenv import load_dotenv
 import textwrap
 import pytz
+import base64
 from typing import *
 
 from api.certificates.certificate import CertificateGenerator
 from api.certificates.scan_repo import GitFameTable, GitFameRow, getGitFameData
+from api.certificates.certificate_cryptography import signCertificate, verifyCertificate
 
 # import openai
-
 sys.path.append("../")
 load_dotenv()
 
@@ -79,19 +79,18 @@ def _write_stat_to_certificate(certGen: CertificateGenerator, statTextInfo: Dict
         if (startY >= maxY):
             break
 
-def generate_certificate(repositoryURL: str, username: str) -> bytes:
+def generate_certificate(repositoryURL: str, username: str) -> str:
     """ Automatically generate a certificate and returns the path to it """
     certGen: CertificateGenerator = CertificateGenerator()
 
     gitFameData: GitFameTable = getGitFameData(repositoryURL)
-    print(gitFameData)
     authorData: GitFameRow = None
     for row in gitFameData.authors:
         if (row.author == username):
             authorData = row
             break
 
-    if (not authorData): return b""
+    if (not authorData): return ""
 
     certGen.draw_multiline_text_absolute("Certificate of Achievment\nCongratulations", 1024 // 2, 360, GOLD_COLOR, HEADER_FONT, "center")
     certGen.draw_multiline_text_absolute(username, 1024 // 2, 450, WHITE_COLOR, HEADER_FONT, "center")
@@ -119,4 +118,11 @@ def generate_certificate(repositoryURL: str, username: str) -> bytes:
     bottom_text = iso_date + " " + file_id.hex
     certGen.draw_text_absolute(bottom_text, 1024 // 2, 1024 - 25, WHITE_COLOR, SMALLER_FONT, "center")
 
-    return certGen.toBase64()
+    certificateBytes: bytes = certGen.toBytes()
+    signedCertificate: bytes = signCertificate(certificateBytes)
+    certificateBase64Bytes: bytes = base64.b64encode(signedCertificate)
+    return certificateBase64Bytes.decode()
+
+def validateCertificate(certificateBase64Str: str) -> bool:
+    certificateBytes = base64.b64decode(certificateBase64Str)
+    return verifyCertificate(certificateBytes)
