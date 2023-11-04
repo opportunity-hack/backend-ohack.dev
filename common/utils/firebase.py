@@ -819,6 +819,8 @@ def add_hearts_for_user(user_id, hearts, reason):
         user_history["how"]["iterations_of_code_pushed_to_production"] = 0
     if "standups_completed" not in user_history["how"]:
         user_history["how"]["standups_completed"] = 0    
+    
+    
     # 8 things in "what"
     if "what" not in user_history:
         user_history["what"] = {}                                
@@ -838,6 +840,10 @@ def add_hearts_for_user(user_id, hearts, reason):
         user_history["what"]["unit_test_coverage"] = 0
     if "unit_test_writing" not in user_history["what"]:
         user_history["what"]["unit_test_writing"] = 0
+    if "judge" not in user_history["what"]:
+        user_history["what"]["judge"] = 0
+    if "mentor" not in user_history["what"]:
+        user_history["what"]["mentor"] = 0
         
         
 
@@ -870,6 +876,10 @@ def add_hearts_for_user(user_id, hearts, reason):
         user_history["what"]["unit_test_coverage"] += hearts
     elif reason == "unit_test_writing":
         user_history["what"]["unit_test_writing"] += hearts
+    elif reason == "judge":
+        user_history["what"]["judge"] += hearts
+    elif reason == "mentor":
+        user_history["what"]["mentor"] += hearts
     else:
         raise Exception(f"Invalid reason: {reason}")                
 
