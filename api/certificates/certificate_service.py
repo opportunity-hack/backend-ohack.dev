@@ -80,7 +80,7 @@ def _write_stat_to_certificate(certGen: CertificateGenerator, statTextInfo: Dict
             break
 
 def generate_certificate(repositoryURL: str, username: str) -> str:
-    """ Automatically generate a certificate and returns the path to it """
+    """ Automatically generate a certificate and returns the base64 representation of it"""
     certGen: CertificateGenerator = CertificateGenerator()
 
     gitFameData: GitFameTable = getGitFameData(repositoryURL)
