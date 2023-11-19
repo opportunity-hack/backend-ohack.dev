@@ -73,8 +73,8 @@ def _pullRepository(repoUrl: str) -> str:
     """Downloads a remote Github repository locally."""
     saveLoc: str = os.path.join("/tmp", f"GitPull-{uuid.uuid4()}")
     # WARNING: Possible command injection, testing needed!
-    Repo.clone_from(repoUrl, saveLoc)
-    return saveLoc
+    repo: Repo = Repo.clone_from(repoUrl, saveLoc)    
+    return saveLoc if (repo is not None) else ""
 
 
 def _runGitFame(repoLoc: str) -> GitFameTable:
