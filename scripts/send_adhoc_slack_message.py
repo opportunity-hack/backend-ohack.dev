@@ -1,18 +1,13 @@
+from common.utils.slack import send_slack_audit, send_slack, invite_user_to_channel, slack_id_from_user_id
 import sys
 sys.path.append("../")
 #
-from common.utils.slack import send_slack_audit, send_slack, invite_user_to_channel
 from common.utils.firebase import get_team_by_name, get_users_in_team_by_name
 
 from dotenv import load_dotenv
 load_dotenv()
 
-def slack_id_from_user_id(user_id):
-    if user_id is None:
-        return
-    else:
-        # Example user_id = oauth2|slack|T2Q7222BH-U012127EYAQ
-        return user_id.split("|")[2].split("-")[1]
+
 
 
 # Ref: https: // api.slack.com/reference/surfaces/formatting  # linking-urls

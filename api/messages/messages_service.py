@@ -1,6 +1,6 @@
-from heapq import merge
 from common.utils import safe_get_env_var
-from common.utils.slack import send_slack_audit, send_slack, invite_user_to_channel
+from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
+from common.utils.firebase import get_hackathon_by_event_id
 from api.messages.message import Message
 import json
 import uuid
@@ -18,15 +18,18 @@ from cachetools.keys import hashkey
 from ratelimit import limits
 from datetime import datetime, timedelta
 
+from common.utils.github import create_github_repo
+
 
 logger = logging.getLogger("myapp")
+logger.setLevel(logging.INFO)
 
 auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
 auth0_client = safe_get_env_var("AUTH0_USER_MGMT_CLIENT_ID")
 auth0_secret = safe_get_env_var("AUTH0_USER_MGMT_SECRET")
 
 ONE_MINUTE = 1*60
-
+THIRTY_SECONDS = 30
 def get_public_message():
     logger.debug("~ Public ~")
     return Message(
@@ -49,204 +52,99 @@ def get_admin_message():
         "This is an admin message."
     )
 
-
-def problem_statement_key(docid, document):
+def hash_key(docid, doc=None, depth=0):
     return hashkey(docid)
 
-# 12 hour cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
-def nonprofit_to_json(docid, d):            
-    e_json = {}
+
+
+# Generically handle a DocumentSnapshot or a DocumentReference
+#@cached(cache=TTLCache(maxsize=1000, ttl=43200), key=hash_key)
+@cached(cache=LRUCache(maxsize=640*1024), key=hash_key)
+def doc_to_json(docid=None, doc=None, depth=0):
+    # Log
+    logger.debug(f"doc_to_json start docid={docid} doc={doc}")
+        
+    if not docid:
+        logger.debug("docid is NoneType")
+        return
+    if not doc:
+        logger.debug("doc is NoneType")
+        return
+        
+    # Check if type is DocumentSnapshot
+    if isinstance(doc, firestore.DocumentSnapshot):
+        logger.debug("doc is DocumentSnapshot")
+        d_json = doc.to_dict()
+    # Check if type is DocumentReference
+    elif isinstance(doc, firestore.DocumentReference):
+        logger.debug("doc is DocumentReference")
+        d = doc.get()
+        d_json = d.to_dict()    
+    else:        
+        return doc
     
-    if not d:
-        logger.error("Dict is NoneType")
+    if d_json is None:
+        logger.warn(f"doc.to_dict() is NoneType | docid={docid} doc={doc}")
         return
 
-    if "name" in d:        
-        e_json["problem_statements"] = ""  # Don't bother adding this
-        e_json["id"] = docid 
-        e_json["name"] = d["name"]
-    return e_json
-
-
-@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
-def events_to_json(docid, d):
-    events = []
-    if "events" in d:
-        logger.debug("Events:")
-        logger.debug(d["events"])
-
-        for e in d["events"]:            
-            logger.debug("Event:")
-            logger.debug(e)
+    # If any values in d_json is a list, add only the document id to the list for DocumentReference or DocumentSnapshot
+    for key, value in d_json.items():
+        if isinstance(value, list):
+            logger.debug(f"doc_to_json - key={key} value={value}")
+            for i, v in enumerate(value):
+                logger.debug(f"doc_to_json - i={i} v={v}")
+                if isinstance(v, firestore.DocumentReference):
+                    logger.debug(f"doc_to_json - v is DocumentReference")
+                    value[i] = v.id
+                elif isinstance(v, firestore.DocumentSnapshot):
+                    logger.debug(f"doc_to_json - v is DocumentSnapshot")
+                    value[i] = v.id
+                else:
+                    logger.debug(f"doc_to_json - v is not DocumentReference or DocumentSnapshot")
+                    value[i] = v
+            d_json[key] = value
+    
             
+    
+    d_json["id"] = docid
+    return d_json
 
-            e_doc = e.get()
-            if not e or not e_doc or not e_doc.to_dict():
-                logger.warning("No event object found for this reference in the DB")
-            else:
-                e_json = e_doc.to_dict()
-                logger.debug("Event JSON:")
-                logger.debug(e_json)
+from firebase_admin.firestore import DocumentReference, DocumentSnapshot
 
-                e_json["id"] = e.id            
-                e_json["nonprofits"] = ""  # Don't bother adding this
-
-                _teams = []
-                # You want to try and handle cases where the DB might have some weird stuff in it
-                # This is defensive coding
-                teamsa = e_json["teams"] if "teams" in e_json else []
-                if teamsa:
-                    for t in teamsa:
-                        for t in e_json["teams"]:
-                            try:
-                                t_doc = t.get()
-                                t_dict = t_doc.to_dict()
-                                _teams.append({
-                                    "id": t_doc.id,
-                                    "name": t_dict["name"],
-                                    "active": t_dict["active"],
-                                    "slack_channel": t_dict["slack_channel"],
-                                    "users" : users_to_json(f"t_doc.id_users", t_dict["users"])
-                                })
-                            except e:
-                                logger.debug(f"Could not add this to teams list: {e}")
-
-                logger.debug(f"Teams: {teamsa}")
-                e_json["teams"] = _teams  # Don't bother adding this
-                events.append(e_json)
-    return events
-
-
-@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
-def users_to_json(docid, d):
-    users = []
-    if "users" in d:
-        for u in d["users"]:            
-            u_doc = u.get()
-            u_json = u_doc.to_dict()
-            u_json["id"] = u.id
-            u_json["slack_id"] = u_json["user_id"]
-            u_json["profile_image"] = u_json["profile_image"]
-            u_json["badges"] = "" # Don't bother adding this
-            u_json["teams"] = ""  # Don't bother adding this
-            users.append(u_json)
-    return users
-
-
-
-def problem_statement_to_json(ps):    
-    logger.debug("Problem Statement:")
-    logger.debug(ps)
-
-    ps_doc = ps.get()
-    ps_json = ps_doc.to_dict()
-    ps_json["id"] = ps_doc.id
-    logger.debug(f"* Found Problem Statement {ps_doc.id}")
-
-    event_list = []
-    if "events" in ps_json:                
-        for e in ps_json["events"]:
-            logger.debug("Events: ")
-            logger.debug(ps_json["events"])
-
-            event_doc = e.get()
-            event_id = event_doc.id 
-            logger.debug(f"Event ID: {event_id}")
-            
-            event = event_doc.to_dict()
-            
-            if not event:
-                logger.warning(f"Unable to find event reference for problem statement {ps_doc.id}")
-                continue
-
-            team_list = []
-            if "teams" in event:
-                for t in event["teams"]:
-                    logger.debug("Teams:")
-                    logger.debug(event["teams"])
-
-                    team_doc = t.get()
-                    team_id = team_doc.id 
-                    logger.debug(f"Team ID: {team_id}")
-
-                    team = team_doc.to_dict()
-                    user_list = []
-                    for u in team["users"]:
-                        logger.debug("Users Within Team: ")
-                        logger.debug(team["users"])
-                        user_doc = u.get()
-                        user_doc_json = user_doc.to_dict()
-                        user_list.append({
-                                    "user_id": user_doc.id,
-                                    "slack_id": user_doc_json["user_id"],
-                                    "profile_image": user_doc_json["profile_image"],
-                                    "name": user_doc_json["name"] if "name" in user_doc_json else "",
-                                    "nickname": user_doc_json["nickname"] if "nickname" in user_doc_json else ""
-                                }
-                            )
-
-                    team_problem_statements = []
-                    for p in team["problem_statements"]:
-                        problem_statement_doc = p.get()
-                        team_problem_statements.append(problem_statement_doc.id)
-                        #team_problem_statements.append(
-                        #    {"id": problem_statement_doc.id})
-
-
-                    slack_channel = team["slack_channel"] if "slack_channel" in team else ""
-                    team_list.append({
-                        "id": team_doc.id,
-                        "active": team["active"],
-                        "name": team["name"],
-                        "slack_channel": slack_channel,
-                        "github_links": team["github_links"],
-                        "team_number": team["team_number"],
-                        "users": user_list,
-                        "problem_statements": team_problem_statements
-                    }
-                    )
-
-            event_list.append({
-                "id": event_doc.id,
-                "teams": team_list,
-                "type": event["type"],
-                "location": event["location"],
-                
-                "devpost_url": event["devpost_url"] if "devpost_url" in event else "",
-                "links": event["links"] if "links" in event else "",
-                "start_date": event["start_date"],
-                "end_date": event["end_date"],
-                "image_url": event["image_url"]                        
-            }
-            )
-    ps_json["events"] = event_list
-
-    ps_json["description"] = ps_json["description"]
-    return ps_json
-
-# 12 hour cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=43200), key=problem_statement_key)
-def problem_statements_to_json(docid, d):
-    problem_statements = []
-
-    if "problem_statements" in d:
-        start = time.time()
-        for ps in d["problem_statements"]:            
-            ps_json = problem_statement_to_json(ps)
-            problem_statements.append(ps_json)  
-
-        total_time = time.time() - start             
-        logger.debug(f"{total_time} sec")
-
-    return problem_statements
+# handle DocumentReference or DocumentSnapshot and recursefuly call doc_to_json
+def doc_to_json_recursive(doc=None):
+    # Log
+    logger.debug(f"doc_to_json_recursive start doc={doc}")          
+    
+    if not doc:
+        logger.debug("doc is NoneType")
+        return
+        
+    docid = ""
+    # Check if type is DocumentSnapshot
+    if isinstance(doc, DocumentSnapshot):
+        logger.debug("doc is DocumentSnapshot")
+        d_json = doc_to_json(docid=doc.id, doc=doc)
+        docid = doc.id
+    # Check if type is DocumentReference
+    elif isinstance(doc, DocumentReference):
+        logger.debug("doc is DocumentReference")
+        d = doc.get()
+        docid = d.id
+        d_json = doc_to_json(docid=doc.id, doc=d)               
+    else:
+        logger.debug(f"Not DocumentSnapshot or DocumentReference, skipping - returning: {doc}")
+        return doc
+    
+    d_json["id"] = docid
+    return d_json
 
 
 def get_db():
     #mock_db = MockFirestore()
     return firestore.client()
 
-
+@cached(cache=TTLCache(maxsize=100, ttl=600))
 def get_single_problem_statement(project_id):
     logger.debug(f"get_single_problem_statement start project_id={project_id}")    
     db = get_db()      
@@ -256,18 +154,56 @@ def get_single_problem_statement(project_id):
         logger.warning("get_single_problem_statement end (no results)")
         return {}
     else:                                
-        result = problem_statement_to_json(doc)
+        result = doc_to_json(docid=doc.id, doc=doc)
         result["id"] = doc.id
         
-
-        logger.debug(f"get_single_problem_statement end (with result):{result}")
+        logger.info(f"get_single_problem_statement end (with result):{result}")
         return result
     return {}
+
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=2000, period=ONE_MINUTE)
+def get_single_hackathon_id(id):
+    logger.debug(f"get_single_hackathon_id start id={id}")    
+    db = get_db()      
+    doc = db.collection('hackathons').document(id)
     
+    if doc is None:
+        logger.warning("get_single_hackathon_id end (no results)")
+        return {}
+    else:                                
+        result = doc_to_json(docid=doc.id, doc=doc)
+        result["id"] = doc.id
+        
+        logger.info(f"get_single_hackathon_id end (with result):{result}")
+        return result
+    return {}
+
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=2000, period=ONE_MINUTE)
+def get_single_hackathon_event(hackathon_id):
+    logger.debug(f"get_single_hackathon_event start hackathon_id={hackathon_id}")    
+    result = get_hackathon_by_event_id(hackathon_id)
+    
+    if result is None:
+        logger.warning("get_single_hackathon_event end (no results)")
+        return {}
+    else:                  
+        if "nonprofits" in result:           
+            result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]   
+        else:
+            result["nonprofits"] = []
+        if "teams" in result:
+            result["teams"] = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]        
+        else:
+            result["teams"] = []
+
+        logger.info(f"get_single_hackathon_event end (with result):{result}")
+        return result
+    return {}
 
 # 12 hour cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=43200))
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=200, period=ONE_MINUTE)
 def get_single_npo(npo_id):    
     logger.debug(f"get_npo start npo_id={npo_id}")    
     db = get_db()      
@@ -277,21 +213,16 @@ def get_single_npo(npo_id):
         logger.warning("get_npo end (no results)")
         return {}
     else:                        
-        d_doc = doc.get()
-        d = d_doc.to_dict()
-        result = d
-        result["id"] = doc.id
-        result["problem_statements"] = problem_statements_to_json(d_doc.id, d)
+        result = doc_to_json(docid=doc.id, doc=doc)
 
-        logger.debug(f"get_npo end (with result):{result}")
+        logger.info(f"get_npo end (with result):{result}")
         return {
             "nonprofits": result
         }
     return {}
 
 
-@limits(calls=100, period=ONE_MINUTE)
-@cached(cache=TTLCache(maxsize=100, ttl=43200))
+@limits(calls=200, period=ONE_MINUTE)
 def get_hackathon_list(is_current_only=None):
     logger.debug("Hackathon List Start")
     db = get_db()
@@ -323,44 +254,99 @@ def get_hackathon_list(is_current_only=None):
     else:
         results = []
         for doc in docs:
-            d_doc = doc
-            d = d_doc.to_dict()
+            d = doc_to_json(doc.id, doc)
+            # If any value from the keys is a DocumentReference or DocumentSnapshot, call doc_to_json
+            for key in d.keys():
+                logger.debug(f"Checking key {key}")
+                #print type of key
+                logger.debug(f"Type of key {type(d[key])}")
+                
+                # If type is list, iterate through list and call doc_to_json
+                if isinstance(d[key], list):
+                    logger.debug(f"Found list for key {key}...")
+                    # Process all items in list and convert with doc_to_json if they are DocumentReference or DocumentSnapshot
+                    for i in range(len(d[key])):
+                        logger.debug(f"Processing list item {i}: {d[key][i]}")
+                        d[key][i] = doc_to_json_recursive(d[key][i])
+                                                                        
+                # If type is DocumentReference or DocumentSnapshot, call doc_to_json
+                elif isinstance(d[key], DocumentReference) or isinstance(d[key], DocumentSnapshot):
+                    logger.debug(f"Found DocumentReference or DocumentSnapshot for key {key}...")
+                    d[key] = doc_to_json_recursive(d[key])
+                    
+                              
+            results.append(d)     
 
-            nonprofits = []
-            if "nonprofits" in d:
-                logger.debug("Found these nonprofits:")
-                logger.debug(d["nonprofits"])
-                for npo in d["nonprofits"]:                    
-                    npo_doc = npo.get()
-                    logger.debug(npo_doc.id)
-                    nonprofits.append(nonprofit_to_json(
-                        npo_doc.id, npo_doc.to_dict()))
+    num_results = len(results)
+    logger.debug(f"Found {num_results} results")
+    logger.debug(f"Results: {results}")
+    logger.debug(f"Hackathon List End")
+    return {"hackathons": results}
 
-            results.append(
-                {
-                    "id": doc.id,
-                    "type": d["type"],
-                    "location": d["location"],                    
-                    "links": d["links"] if "links" in d else "",
-                    "start_date": d["start_date"],
-                    "end_date": d["end_date"],
-                    "image_url": d["image_url"],
-                    "title": d["title"] if "title" in d else "",                    
-                    "donation_goals": d["donation_goals"] if "donation_goals" in d else "",
-                    "donation_current": d["donation_current"] if "donation_current" in d else "",
 
-                    "nonprofits": nonprofits,
-                    "teams":[] #TODO
-                }
+@limits(calls=2000, period=THIRTY_SECONDS)
+def get_teams_list(id=None):
+    logger.debug(f"Teams List Start team_id={id}")
+    db = get_db() 
+    if id is not None:
+        # Get by id
+        doc = db.collection('teams').document(id).get()
+        if doc is None:
+            return {}
+        else:
+            #log
+            logger.info(f"Teams List team_id={id} | End (with result):{doc_to_json(docid=doc.id, doc=doc)}")
+            return doc_to_json(docid=doc.id, doc=doc)
+    else:
+        # Get all        
+        docs = db.collection('teams').stream() # steam() gets all records   
+        if docs is None:
+            return {[]}
+        else:                
+            results = []
+            for doc in docs:
+                results.append(doc_to_json(docid=doc.id, doc=doc))
+                                
+            return { "teams": results }
 
-            )
-        num_results = len(results)
-        logger.debug(f"Found {num_results} results")
-        logger.debug(f"Hackathon List End")
-        return {"hackathons": results}
+@limits(calls=20, period=ONE_MINUTE)
+def get_npo_list(word_length=30):
+    logger.debug("NPO List Start")
+    db = get_db()  
+    # steam() gets all records
+    docs = db.collection('nonprofits').order_by("name").stream()
+    if docs is None:
+        return {[]}
+    else:                
+        results = []
+        for doc in docs:
+            logger.debug(f"Processing doc {doc.id} {doc}")
+            results.append(doc_to_json_recursive(doc=doc))
+           
+    # log result
+    logger.debug(f"Found {len(results)} results {results}")
+    return { "nonprofits": results }
+    
 
-def save_team(json):
+@limits(calls=100, period=ONE_MINUTE)
+def get_problem_statement_list():
+    logger.debug("Problem Statements List")
+    db = get_db()
+    docs = db.collection('problem_statements').stream()  # steam() gets all records
+    if docs is None:
+        return {[]}
+    else:
+        results = []
+        for doc in docs:
+            results.append(doc_to_json(docid=doc.id, doc=doc))
+
+    # log result
+    logger.debug(results)        
+    return { "problem_statements": results }
+
+def save_team(json):    
     send_slack_audit(action="save_team", message="Saving", payload=json)
+
     db = get_db()  # this connects to our Firestore database
     logger.debug("Team Save")    
 
@@ -369,11 +355,13 @@ def save_team(json):
 
     name = json["name"]    
     slack_user_id = json["userId"]
+    root_slack_user_id = slack_user_id.replace("oauth2|slack|T1Q7936BH-","")
     event_id = json["eventId"]
     slack_channel = json["slackChannel"]
     problem_statement_id = json["problemStatementId"]
-
-
+    github_username = json["githubUsername"]
+    
+    
     user = get_user_from_slack_id(slack_user_id).reference
     if user is None:
         return
@@ -381,9 +369,71 @@ def save_team(json):
     problem_statement = get_problem_statement_from_id(problem_statement_id)
     if problem_statement is None:
         return
+
+    # Define vars for github repo creation
+    hackathon_event_id = get_single_hackathon_id(event_id)["event_id"]    
+    team_name = name
+    team_slack_channel = slack_channel
+    raw_problem_statement_title = problem_statement.get().to_dict()["title"]
     
+    # Remove all spaces from problem_statement_title
+    problem_statement_title = raw_problem_statement_title.replace(" ", "").replace("-", "")
+
+    repository_name = f"{team_name}--{problem_statement_title}"
+    
+    # truncate repostory name to first 100 chars to support github limits
+    repository_name = repository_name[:100]
+
+    slack_name_of_creator = user.get().to_dict()["name"]
+
+    project_url = f"https://ohack.dev/project/{problem_statement_id}"
+    # Create github repo
+    try:
+        repo = create_github_repo(repository_name, hackathon_event_id, slack_name_of_creator, team_name, team_slack_channel, problem_statement_id, raw_problem_statement_title, github_username)
+    except ValueError as e:
+        return {
+            "message": f"Error: {e}"
+        }
+    logger.info(f"Created github repo {repo} for {json}")
+
+    create_slack_channel(slack_channel)
+    invite_user_to_channel(slack_user_id, slack_channel)
+    
+    # Add all Slack admins too  
+    slack_admins = ["UC31XTRT5", "UCQKX6LPR", "U035023T81Z", "UC31XTRT5", "UC2JW3T3K", "UPD90QV17", "U05PYC0LMHR"]
+    for admin in slack_admins:
+        invite_user_to_channel(admin, slack_channel)
+
+    # Send a slack message to the team channel
+    slack_message = f'''
+:astronaut-floss-dancedance: Team `{name}` | `#{team_slack_channel}` has been created in support of project `{raw_problem_statement_title}` {project_url} by <@{root_slack_user_id}>.
+
+Github repo: {repo['full_url']}
+- All code should go here!
+- Everything we build is for the public good and carries an MIT license
+
+Questions? join <#C01E5CGDQ74> or use <#C05TVU7HBML> or <#C05TZL13EUD> Slack channels. 
+:partyparrot:
+
+Your next steps:
+1. Add everyone to your GitHub repo like this: https://opportunity-hack.slack.com/archives/C1Q6YHXQU/p1605657678139600
+2. Create your DevPost project https://youtu.be/vCa7QFFthfU?si=bzMQ91d8j3ZkOD03
+ - ASU Students use https://opportunity-hack-2023-asu.devpost.com/
+ - Everyone else use https://opportunity-hack-2023-virtual.devpost.com/
+3. Ask your nonprofit questions and bounce ideas off mentors!
+4. Hack the night away!
+5. Post any pics to your socials with `#ohack2023` and mention `@opportunityhack`
+6. Track any volunteer hours - you are volunteering for a nonprofit!
+7. After the hack, update your LinkedIn profile with your new skills and experience!
+'''
+    send_slack(slack_message, slack_channel)
+    send_slack(slack_message, "log-team-creation")
+
+    repo_name = repo["repo_name"]
+    full_github_repo_url = repo["full_url"]
+
     my_date = datetime.now()
-    collection = db.collection('teams')
+    collection = db.collection('teams')    
     insert_res = collection.document(doc_id).set({
         "team_number" : -1,
         "users": [user],        
@@ -394,8 +444,8 @@ def save_team(json):
         "active": "True",
         "github_links": [
             {
-                "link": "",
-                "name": ""
+                "link": full_github_repo_url,
+                "name": repo_name
             }
         ]
     })
@@ -404,7 +454,8 @@ def save_team(json):
 
     # Look up the new team object that was just created
     new_team_doc = db.collection('teams').document(doc_id)
-    user_dict = user.get().to_dict()
+    user_doc = user.get()
+    user_dict = user_doc.to_dict()    
     user_teams = user_dict["teams"]
     user_teams.append(new_team_doc)
     user.set({
@@ -424,15 +475,18 @@ def save_team(json):
         "teams" : new_teams
     }, merge=True)
 
-
+    # Clear the cache
+    logger.info(f"Clearing cache for event_id={event_id} problem_statement_id={problem_statement_id} user_doc.id={user_doc.id} doc_id={doc_id}")
     clear_cache()
 
+    # get the team from get_teams_list
+    team = get_teams_list(doc_id)
+
+
     return {
-        "message":"Saved Team",
-        "team": {
-            "name": name,
-            "slack_channel": slack_channel
-        },
+        "message" : f"Saved Team and GitHub repo created. See your Slack channel #{slack_channel} for more details.",
+        "success" : True,
+        "team": team,
         "user": {
             "name" : user_dict["name"],
             "profile_image": user_dict["profile_image"],
@@ -445,7 +499,7 @@ def join_team(userid, json):
     db = get_db()  # this connects to our Firestore database
     logger.debug("Join Team Start")
 
-    logger.debug(f"UserId: {userid} Json: {json}")
+    logger.info(f"Join Team UserId: {userid} Json: {json}")
     team_id = json["teamId"]
 
     team_doc = db.collection('teams').document(team_id)
@@ -472,14 +526,15 @@ def join_team(userid, json):
 
     team_doc.set({
         "users": new_users_set
-    }, merge=True)
+    }, merge=True)    
 
-    problem_statements_to_json.cache_clear()
-    users_to_json.cache_clear()
+
+    # Clear the cache
+    logger.info(f"Clearing cache for team_id={team_id} and user_doc.id={user_doc.id}")            
+    clear_cache()
 
     logger.debug("Join Team End")
-    return Message(
-    "Joined Team")
+    return Message("Joined Team")
 
 
 
@@ -489,11 +544,10 @@ def unjoin_team(userid, json):
     db = get_db()  # this connects to our Firestore database
     logger.debug("Unjoin Team Start")
     
-    logger.debug(f"UserId: {userid} Json: {json}")
+    logger.info(f"Unjoin for UserId: {userid} Json: {json}")
     team_id = json["teamId"]
 
-    ## 1. Lookup Team, Remove User
- 
+    ## 1. Lookup Team, Remove User 
     doc = db.collection('teams').document(team_id)
     
     if doc:
@@ -505,7 +559,8 @@ def unjoin_team(userid, json):
         # Look up a team associated with this user and remove that team from their list of teams
         new_users = []
         for u in user_list:
-            user_dict = u.get().to_dict()
+            user_doc = u.get()
+            user_dict = user_doc.to_dict()
 
             new_teams = []
             if userid == user_dict["user_id"]:
@@ -523,128 +578,20 @@ def unjoin_team(userid, json):
             u.set({
                 "teams": new_teams
                 }, merge=True) # merging allows to only update this column and not blank everything else out
-        
+                    
         doc.set({
             "users": new_users
         }, merge=True)
         logger.debug(new_users)
-        clear_cache()
+        
+    # Clear the cache
+    logger.info(f"Clearing team_id={team_id} cache")         
+    clear_cache()
             
-
     logger.debug("Unjoin Team End")
 
     return Message(
         "Removed from Team")
-
-    
-
-
-@limits(calls=100, period=ONE_MINUTE)
-def get_teams_list():
-    logger.debug("Teams List Start")
-    db = get_db()  
-    docs = db.collection('teams').stream() # steam() gets all records   
-    if docs is None:
-        return {[]}
-    else:                
-        results = []
-        for doc in docs:
-            d_doc = doc
-            d = d_doc.to_dict()
-
-            results.append(
-                {
-                    "id": doc.id,
-                    "name": d["name"],
-                    "active": d["active"],
-                    "slack_channel": d["slack_channel"],
-                    "github_links": d["github_links"],
-                    "team_number": d["team_number"],
-                    "users": users_to_json(d_doc.id, d),
-                    "problem_statements": problem_statements_to_json(d_doc.id, d)
-                }
-                    
-            )
-        logger.debug(f"Teams List End")
-        return { "teams": results }
-
-
-
-@limits(calls=20, period=ONE_MINUTE)
-@cached(cache=TTLCache(maxsize=100, ttl=43200))  # 12 hr cache
-def get_npo_list(word_length=30):
-    logger.debug("NPO List Start")
-    db = get_db()  
-    # steam() gets all records
-    docs = db.collection('nonprofits').order_by("name").stream()
-    if docs is None:
-        return {[]}
-    else:                
-        results = []
-        for doc in docs:            
-            d_doc = doc
-            d = d_doc.to_dict()
-            npo_name = d["name"]
-
-            logger.debug(f"Nonprofit Name: {npo_name}")            
-
-            description = d["description"]
-            words = description.split(" ")
-            only_first_words = " ".join(words[0:word_length])
-            if len(only_first_words) < len(description):
-                only_first_words = only_first_words.rstrip(',').strip() + "..."
-
-            slack_channel = d["slack_channel"] if "slack_channel" in d else ""
-            results.append(
-                {
-                    "id": doc.id,
-                    "name": d["name"],
-                    "description": only_first_words,
-                    "slack_channel": slack_channel,
-                    "website": d["website"],
-                    "contact_people": ", ".join(d["contact_people"]),
-                    "problem_statements": problem_statements_to_json(d_doc.id, d)
-                }
-                    
-            )
-        logger.debug(f"NPO List End")
-        return { "nonprofits": results }
-    
-
-@limits(calls=100, period=ONE_MINUTE)
-def get_problem_statement_list():
-    logger.debug("Problem Statements List")
-    db = get_db()
-    docs = db.collection('problem_statements').stream()  # steam() gets all records
-    if docs is None:
-        return {[]}
-    else:
-        results = []
-        for doc in docs:
-            d_doc = doc
-            d = d_doc.to_dict()
-
-            slack_channel = d["slack_channel"] if "slack_channel" in d else ""
-            github = d["github"] if "github" in d else ""
-            helping_list = d["helping"] if "helping" in d else ""
-            
-
-            results.append(
-                {
-                    "id": doc.id,
-                    "title": d["title"],
-                    "slack_channel": slack_channel,
-                    "description": d["description"],
-                    "first_thought_of": d["first_thought_of"],
-                    "github": github,
-                    "references": d["references"],
-                    "status": d["status"],
-                    "helping": helping_list,
-                    "events": events_to_json(d_doc.id, d)
-                }
-
-            )
-        return { "problem_statements": results }
 
 
 @limits(calls=100, period=ONE_MINUTE)
@@ -689,13 +636,12 @@ def save_npo(json):
         "Saved NPO"
     )
 
-def clear_cache():
-    problem_statements_to_json.cache_clear()
-    get_single_npo.cache_clear()
-    get_npo_list.cache_clear()
-    events_to_json.cache_clear()
+def clear_cache():        
     get_profile_metadata.cache_clear()
-    users_to_json.cache_clear()
+    doc_to_json.cache_clear()
+    get_single_hackathon_event.cache_clear()
+    get_single_hackathon_id.cache_clear()
+    
 
 @limits(calls=100, period=ONE_MINUTE)
 def remove_npo(json):
@@ -766,6 +712,7 @@ def save_helping_status(json):
     })
 
     clear_cache()
+    
 
     send_slack_audit(action="helping", message=user_id, payload=to_add)
 
@@ -779,7 +726,7 @@ def save_helping_status(json):
     if npo_id == "":
         url = f"for project https://ohack.dev/project/{problem_statement_id}"
     else:
-        url = f"for project https://ohack.dev/project/{npo_id} and nonprofit: https://ohack.dev/nonprofit/{npo_id}"
+        url = f"for project https://ohack.dev/project/{problem_statement_id} and nonprofit: https://ohack.dev/nonprofit/{npo_id}"
 
     if "helping" == helping_status:
         slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
@@ -812,7 +759,7 @@ def link_problem_statements_to_events(json):
         eventObsList = []
         
         for event in eventList:
-            print(f"Checking event: {event}")
+            logger.info(f"Checking event: {event}")
             if "|" in event:
                 eventId = event.split("|")[1]
             else:
@@ -820,7 +767,7 @@ def link_problem_statements_to_events(json):
             event_doc = db.collection('hackathons').document(eventId)
             eventObsList.append(event_doc)
 
-        print(f" Events to add: {eventObsList}")
+        logger.info(f" Events to add: {eventObsList}")
         problem_result = problem_statement_doc.update({
             "events": eventObsList
         });
@@ -837,9 +784,8 @@ def link_problem_statements_to_events(json):
 def update_npo(json):
     db = get_db()  # this connects to our Firestore database
 
-    logger.debug("Clearing cache")
-    problem_statements_to_json.cache_clear()
-    get_single_npo.cache_clear()
+    logger.debug("Clearing cache")    
+    clear_cache()
 
     logger.debug("Done Clearing cache")
     logger.debug("NPO Edit")
@@ -930,9 +876,8 @@ def save_problem_statement(json):
     db = get_db()  # this connects to our Firestore database
     logger.debug("Problem Statement Save")
 
-    logger.debug("Clearing cache")
-    problem_statements_to_json.cache_clear()
-    get_single_npo.cache_clear()
+    logger.debug("Clearing cache")    
+    clear_cache()
     logger.debug("Done Clearing cache")
 
 
@@ -1006,7 +951,9 @@ cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
 #We don't want this to be a file, we want to use env variables for security (we would have to check in this file)
 #cred = credentials.Certificate("./api/messages/ohack-dev-firebase-adminsdk-hrr2l-933367ee29.json")
 cred = credentials.Certificate(cert_env)
-firebase_admin.initialize_app(credential=cred)
+# Check if firebase is already initialized
+if not firebase_admin._apps:
+    firebase_admin.initialize_app(credential=cred)
 
 
 @limits(calls=50, period=ONE_MINUTE)
@@ -1017,7 +964,7 @@ def save(
         profile_image=None,
         name=None,
         nickname=None):
-    logger.debug("User Save Start")
+    logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
 
 
@@ -1035,7 +982,7 @@ def save(
     
     for doc in docs:
         res = doc.to_dict()
-        print(res)        
+        logger.debug(res)
         if res:
             # Found result already in DB, update
             logger.debug(f"Found user (_id={doc.id}), updating last_login")
@@ -1148,7 +1095,22 @@ def get_auth0_details_by_slackid(slack_user_id):
     nickname = x_j["nickname"]
     return email, user_id, last_login, profile_image, name, nickname
 
+def get_user_by_id(id):
+    # Log
+    logger.debug(f"Get User By ID: {id}")
+    db = get_db()  # this connects to our Firestore database
+    collection = db.collection('users')
+    doc = collection.document(id)
+    doc_get = doc.get()
+    res = doc_get.to_dict()
+    # Only keep these fields since this is a public api
+    fields = ["name", "profile_image", "user_id", "nickname"]
+    # Check if the field is in the response first
+    res = {k: res[k] for k in fields if k in res}
 
+    
+    logger.debug(f"Get User By ID Result: {res}")
+    return res    
 
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
