@@ -1,10 +1,8 @@
+import pytest
 import base64
 import random
 from typing import List
 from api.certificates.certificate_service import generate_certificate, validateCertificate
-
-TEST_REPO_URL: str = "https://github.com/whemminger/backend-ohack.dev.git"
-TEST_USERNAME: str = "Squibb"
 
 def modify_byte_at_index(obj: bytes, index: int, newVal: int) -> bytes:
     intList: List[int] = list(obj)
@@ -13,13 +11,13 @@ def modify_byte_at_index(obj: bytes, index: int, newVal: int) -> bytes:
 
 
 def test_valid_certificate():
-    certificateBase64: str = generate_certificate(TEST_REPO_URL, TEST_USERNAME)
+    certificateBase64: str = generate_certificate(pytest.CERTIFICATE_TEST_REPO_URL, pytest.CERTIFICATE_TEST_USERNAME)
     assert certificateBase64 is not None and len(certificateBase64) > 0
     assert validateCertificate(certificateBase64)
 
 
 def test_tampered_changes_certifcate():
-    origCertificateBase64: str = generate_certificate(TEST_REPO_URL, TEST_USERNAME)
+    origCertificateBase64: str = generate_certificate(pytest.CERTIFICATE_TEST_REPO_URL, pytest.CERTIFICATE_TEST_USERNAME)
     for _ in range(100):
         tamperedCopy: str = str(origCertificateBase64)
         tamperedCopyBytes: bytes = base64.b64decode(tamperedCopy)
