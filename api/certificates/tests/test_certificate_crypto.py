@@ -1,14 +1,22 @@
 import base64
 import random
+from typing import List
 from api.certificates.certificate_service import generate_certificate, validateCertificate
 
 TEST_REPO_URL: str = "https://github.com/whemminger/backend-ohack.dev.git"
 TEST_USERNAME: str = "Squibb"
 
+def modify_byte_at_index(obj: bytes, index: int, newVal: int) -> bytes:
+    intList: List[int] = list(obj)
+    intList[index] = newVal
+    return bytes(intList)
+
+
 def test_valid_certificate():
     certificateBase64: str = generate_certificate(TEST_REPO_URL, TEST_USERNAME)
     assert certificateBase64 is not None and len(certificateBase64) > 0
     assert validateCertificate(certificateBase64)
+
 
 def test_tampered_changes_certifcate():
     origCertificateBase64: str = generate_certificate(TEST_REPO_URL, TEST_USERNAME)
@@ -20,10 +28,11 @@ def test_tampered_changes_certifcate():
         origByte: int = tamperedCopyBytes[randIndex]
         randByte: int = random.randint(0, 255)
         expected: bool = origByte == randByte
-        tamperedCopyBytes: bytes = tamperedCopyBytes[:randIndex] + bytes(randByte) + tamperedCopyBytes[randIndex + 1:]
+        tamperedCopyBytes: bytes = modify_byte_at_index(tamperedCopyBytes, randIndex, randByte)
 
         tamperedBase64: str = base64.b64encode(tamperedCopyBytes).decode()
         assert validateCertificate(tamperedBase64) == expected
+
 
 def test_forged_certifcate():
     for _ in range(100):
