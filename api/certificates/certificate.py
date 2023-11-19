@@ -1,10 +1,8 @@
 from typing import *
 from PIL import Image, ImageFont, ImageDraw, ImageEnhance
-from os import path
 import base64
 from io import BytesIO
 
-# CERTIFICATE_TEMPLATE_PATH: str = "./assets/certificateTemplate.jpg"
 CERTIFICATE_MASK_PATH:     str = "./api/certificates/assets/cert_mask_1024.png"
 
 FONT_DEFAULT: ImageFont = ImageFont.load_default()
@@ -13,12 +11,10 @@ FONT_COLOR_DEFAULT: str = "#000000"
 OUT_DIRECTORY: str = "./certificates"
 
 
-# Sample Certificate: https://media.licdn.com/dms/image/C5622AQGSGOf0g8fUTw/feedshare-shrink_2048_1536/0/1597446630591?e=1683158400&v=beta&t=ICzKDT_6y-BS24FldIpAL7UzHnYUCtB_I-pjGHT49Qc
 # Greg's Example: https://github.com/opportunity-hack/backend-ohack.dev/pull/23/files#diff-9290f3f2480035f4c8cce6994884d997aa22397fbd26925bfd28d3fc9f53a8e1R166
 class CertificateGenerator:
 
     def __init__(self):
-        # self.certificateTemplate: Image = Image.new("RGBA", (1024, 1024), (255, 255, 255, 255))
         self.certificateTemplate: Image = Image.open("./api/certificates/assets/generated_image.png")
         enhancer = ImageEnhance.Brightness(self.certificateTemplate)
         self.certificateTemplate = enhancer.enhance(0.35)
