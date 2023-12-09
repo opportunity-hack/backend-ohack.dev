@@ -21,4 +21,4 @@ def verifyCertificate() -> Dict[str, str]:
     form = request.form
     if ("image" not in form): return {}
     imgData = form["image"]
-    return {"img data": validateCertificate(imgData)}
+    return {"valid": validateCertificate(imgData)}

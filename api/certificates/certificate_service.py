@@ -15,11 +15,9 @@ from api.certificates.certificate import CertificateGenerator
 from api.certificates.scan_repo import GitFameTable, GitFameRow, getGitFameData
 from api.certificates.certificate_cryptography import signCertificate, verifyCertificate
 
-# import openai
 sys.path.append("../")
 load_dotenv()
 
-# openai.api_key = getenv("OPENAI_API_KEY")
 CDN_SERVER = getenv("CDN_SERVER")
 GCLOUD_CDN_BUCKET = getenv("GCLOUD_CDN_BUCKET")
 
