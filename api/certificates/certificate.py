@@ -2,24 +2,48 @@ from typing import *
 from PIL import Image, ImageFont, ImageDraw, ImageEnhance
 import base64
 from io import BytesIO
+import os
+import openai
+import urllib
 
-CERTIFICATE_MASK_PATH:     str = "./api/certificates/assets/cert_mask_1024.png"
+CERTIFICATE_MASK_PATH: str = "./api/certificates/assets/cert_mask_1024.png"
+BACKGROUND_SAVE_LOC: str   = "/tmp/generated_image.png"
+BACKUP_BACKGROUND_LOC: str = "./api/certificates/assets/generated_image.png"
 
 FONT_DEFAULT: ImageFont = ImageFont.load_default()
 FONT_COLOR_DEFAULT: str = "#000000"
 
 OUT_DIRECTORY: str = "./certificates"
 
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
-# Greg's Example: https://github.com/opportunity-hack/backend-ohack.dev/pull/23/files#diff-9290f3f2480035f4c8cce6994884d997aa22397fbd26925bfd28d3fc9f53a8e1R166
+
 class CertificateGenerator:
 
     def __init__(self):
-        self.certificateTemplate: Image = Image.open("./api/certificates/assets/generated_image.png")
+        self.certificateTemplate: Image = self._get_background_image()
         enhancer = ImageEnhance.Brightness(self.certificateTemplate)
         self.certificateTemplate = enhancer.enhance(0.35)
         self.certificateMask: Image = Image.open(CERTIFICATE_MASK_PATH)
         self.imageDrawer: ImageDraw = ImageDraw.Draw(self.certificateTemplate)
+
+    def _get_background_image(self) -> Image:
+        try:
+            response = openai.Image.create(
+                prompt="without text a mesmerizing background with geometric shapes and fireworks no text high resolution 4k",
+                n=1,
+                size="1024x1024"
+            )
+            image_url = response['data'][0]['url']
+            urllib.request.urlretrieve(image_url, BACKGROUND_SAVE_LOC)
+        except:
+            ...
+        
+        if (os.path.exists(BACKGROUND_SAVE_LOC)):
+            return Image.open(BACKGROUND_SAVE_LOC)
+    
+        return Image.open(BACKUP_BACKGROUND_LOC)
+
 
     def draw_multiline_text_relative(self, text: str, xPosPercentage: float, yPosPercentage: float, fontColor: str = FONT_COLOR_DEFAULT, font: ImageFont = FONT_DEFAULT, align: str = "center") -> None:
         xPosition, yPosition = self.percentageToPixelCoords(xPosPercentage, yPosPercentage)
