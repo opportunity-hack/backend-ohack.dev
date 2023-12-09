@@ -12,3 +12,5 @@ emulator/2022-11-20T*
 .vscode/*
 venv
 scripts/Nonprofit Tracking - Nonprofits.csv
+scripts/nonprofits_round_3_from_pdf.csv
+scripts/slagenciesfy1819.pdf
