@@ -8,7 +8,7 @@ from dotenv import load_dotenv
 sys.path.append("../")
 load_dotenv()
 
-KEY_PATH: str       = "./api/certificates/assets/.privateKey.pem"
+KEY_STR: str        = "CERTIFICATE_KEY"
 KEY_PASSWORD: str   = os.getenv("PRIVATE_KEY_PASSWORD") or "DEBUG"
 KEY_PASSWORD: bytes = KEY_PASSWORD.encode()
 
@@ -27,12 +27,11 @@ def _getPublicKey(privateKey: rsa.RSAPrivateKey) -> rsa.RSAPublicKey:
 
 def _getPrivateKey() -> rsa.RSAPrivateKey:
     # Load Key if exists
-    if (os.path.exists(KEY_PATH)):
-        with open(KEY_PATH, "rb") as keyFile:
-            return serialization.load_pem_private_key(
-                keyFile.read(),
-                password=KEY_PASSWORD
-            )
+    if (KEY_STR in os.environ):
+        return serialization.load_pem_private_key(
+            os.environ[KEY_STR].encode(),
+            password=KEY_PASSWORD
+        )
 
     # Generate Key
     private_key = rsa.generate_private_key(
@@ -40,10 +39,9 @@ def _getPrivateKey() -> rsa.RSAPrivateKey:
         key_size=2048,
     )
 
-    with open(KEY_PATH, "wb") as f:
-        keyBytes: bytes = _getPrivateKeyBytes(private_key)
-        f.write(keyBytes)
-    
+    private_key_bytes = _getPrivateKeyBytes(private_key)
+    os.environ[KEY_STR] = private_key_bytes.decode()
+
     return private_key
 
 def signCertificate(certificateBytes: bytes) -> bytes:
