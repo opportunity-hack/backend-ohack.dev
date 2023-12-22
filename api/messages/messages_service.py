@@ -232,8 +232,7 @@ def get_hackathon_list(is_current_only=None):
         today_str = today.strftime("%Y-%m-%d")
         logger.debug(
             f"Looking for any event that finishes after today {today_str} for most current events only.")
-        docs = db.collection('hackathons').where("end_date", ">=", today_str).order_by(
-            "end_date").stream()  # steam() gets all records
+        docs = db.collection('hackathons').where("end_date", ">=", today_str).order_by("end_date", direction=firestore.Query.DESCENDING).stream()  # steam() gets all records
     elif is_current_only == "previous": 
         today = datetime.now()
         today_str = today.strftime("%Y-%m-%d")
@@ -243,7 +242,7 @@ def get_hackathon_list(is_current_only=None):
         target_date_str = target_date.strftime("%Y-%m-%d")
         logger.debug(
             f"Looking for any event that finishes before today {target_date_str} for previous events only.")
-        docs = db.collection('hackathons').where("end_date", ">=", target_date_str).where("end_date", "<=", today_str).order_by("end_date").stream()  # steam() gets all records       
+        docs = db.collection('hackathons').where("end_date", ">=", target_date_str).where("end_date", "<=", today_str).order_by("end_date", direction=firestore.Query.DESCENDING).limit(3).stream()  # steam() gets all records       
     else:
         docs = db.collection('hackathons').order_by("start_date").stream()  # steam() gets all records
     
