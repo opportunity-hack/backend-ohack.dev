@@ -3,6 +3,8 @@ from firebase_admin import credentials, firestore
 from . import safe_get_env_var
 import json
 from mockfirestore import MockFirestore
+import datetime
+import re
 
 cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
 cred = credentials.Certificate(cert_env)
@@ -906,3 +908,72 @@ def get_project_application_by_id(id):
     adict = doc.to_dict()
     adict["id"] = doc.id
     return adict
+
+def upsert_news(news):
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Adding news {news}")
+
+    # Remove any quoted strings or backlashes on title
+    news["title"] = news["title"].replace('"', "")
+    news["title"] = news["title"].replace("'", "")
+    news["title"] = news["title"].replace("\\", "")
+
+
+    # Convert Slack TS to datetime, store as slack_ts_human_readable
+    slack_ts = news["slack_ts"]
+    slack_ts = float(slack_ts)
+    slack_ts = datetime.datetime.fromtimestamp(slack_ts)
+    slack_ts = slack_ts.strftime("%Y-%m-%d %H:%M:%S")
+    news["slack_ts_human_readable"] = slack_ts
+
+    # Convert links from list with markdown to list
+    '''
+    Example:
+    1. Name: ASU DevPost, URL: <https://opportunity-hack-2023-asu.devpost.com/#prizes|see the ASU DevPost>\n2. Name: Virtual DevPost , URL: <https://opportunity-hack-2023-virtual.devpost.com/#prizes|see the Virtual DevPost >\n3. Name: Example signoff, URL: <https://opportunity-hack.slack.com/archives/C06006ZSLSJ/p1697816779616299|Example signoff>\n4. Name: #2023-1st-virtual-reactenjoyers, URL: <#C060974UX8C|2023-1st-virtual-reactenjoyers>\n5. Name: #2023-2nd-virtual-huskies-and-skyler, URL: <#C05VD0GT0J2|2023-2nd-virtual-huskies-and-skyler>\n6. Name: #2023-3rd-virtual-codefusion-collective, URL: <#C060UMW02P2|2023-3rd-virtual-codefusion-collective>\n
+    '''
+    if "links" in news:
+        links = news["links"]
+        links = links.split("\n")
+        
+        links1_dict = []
+        links2_dict = []
+
+        for link in links:
+            try:
+                # Use regex for each link with example:  [ASU DevPost](https://opportunity-hack-2023-asu.devpost.com/#prizes)
+                match1 = re.search(r'\[(.*?)\]\((.*?)\)', link)
+                if match1:
+                    links1_dict.append({"name": match1.group(1), "url": match1.group(2)})
+                
+                # Use regex for each link with example: <https://opportunity-hack-2023-asu.devpost.com/#prizes|see the ASU DevPost>
+                match2 = re.search(r'<(.*?)\|(.*?)>', link)
+                if match2:
+                    links2_dict.append({"name": match2.group(2), "url": match2.group(1)})
+            except AttributeError:
+                # Handle case where regex pattern is not found in the string
+                pass
+
+        # Log links1_dict and links2_dict
+        logger.info(f"links1_dict: {links1_dict}")
+        logger.info(f"links2_dict: {links2_dict}")
+
+        # Combine links1_dict and links2_dict
+        links = links1_dict + links2_dict
+        news["links"] = links        
+
+
+
+    # Check if news["messageTs"] already exists
+    slack_ts = news["slack_ts"]
+    news_messageTs = db.collection("news").where("slack_ts", "==", slack_ts).get()
+    if news_messageTs:
+        logger.info(f"news with slack_ts {news_messageTs} already exists")
+        # Update it instead 
+        news_messageTs = news_messageTs[0]
+        news_messageTs = news_messageTs.reference
+        db.collection("news").document(news_messageTs.id).set(news, merge=True)        
+        return news_messageTs
+    else:
+        logger.info("news does not exist")
+
+    db.collection("news").add(news)
