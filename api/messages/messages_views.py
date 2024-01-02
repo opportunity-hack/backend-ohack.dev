@@ -232,4 +232,13 @@ def store_news():
     
 @bp.route("/news", methods=["GET"])
 def read_news():
-    return vars(get_news())
+    limit_arg = request.args.get("limit")  # Get the value of the 'limit' parameter from the query string
+    # Log
+    print(f"limit_arg: {limit_arg}")
+
+    # If limit is set, convert to int
+    limit=3
+    if limit_arg:
+        limit = int(limit_arg)
+    
+    return vars(get_news(news_limit=limit))  # Pass the 'limit' parameter to the get_news() function

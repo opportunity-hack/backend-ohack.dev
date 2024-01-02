@@ -1157,11 +1157,11 @@ def save_news(json):
     return Message("Saved News")
 
 
-def get_news(limit=3):
+def get_news(news_limit=3):
     logger.debug("Get News")
     db = get_db()  # this connects to our Firestore database
     collection = db.collection('news')
-    docs = collection.order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(limit).stream()
+    docs = collection.order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(news_limit).stream()
     results = []
     for doc in docs:
         results.append(doc.to_dict())
