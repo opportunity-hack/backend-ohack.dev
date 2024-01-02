@@ -1,6 +1,6 @@
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
-from common.utils.firebase import get_hackathon_by_event_id
+from common.utils.firebase import get_hackathon_by_event_id, upsert_news
 from api.messages.message import Message
 import json
 import uuid
@@ -1143,3 +1143,27 @@ def get_profile_metadata(slack_user_id):
 
 
     return Message(response)
+
+def save_news(json):
+    # Take in Slack message and summarize it using GPT-3.5
+    # Make sure these fields exist title, description, links (optional), slack_ts, slack_permalink, slack_channel
+    check_fields = ["title", "description", "slack_ts", "slack_permalink", "slack_channel"]
+    for field in check_fields:
+        if field not in json:
+            logger.error(f"Missing field {field} in {json}")
+            return Message("Missing field")
+    upsert_news(json)
+
+    return Message("Saved News")
+
+
+def get_news(limit=3):
+    logger.debug("Get News")
+    db = get_db()  # this connects to our Firestore database
+    collection = db.collection('news')
+    docs = collection.order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(limit).stream()
+    results = []
+    for doc in docs:
+        results.append(doc.to_dict())
+    logger.debug(f"Get News Result: {results}")
+    return Message(results)

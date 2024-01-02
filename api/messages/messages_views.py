@@ -1,3 +1,5 @@
+import os 
+
 from flask import (
     Blueprint,
     request,
@@ -27,7 +29,9 @@ from api.messages.messages_service import (
     join_team,
     get_hackathon_list,
     link_problem_statements_to_events,
-    save_helping_status
+    save_helping_status,
+    save_news,
+    get_news
 )
 from api.security.guards import (
     authorization_guard,
@@ -212,3 +216,20 @@ def get_profile_by_id(id):
 def feedback(user_id):
     # TODO: This is stubbed out, need to change with new function for get_feedback
     return vars(get_profile_metadata(user_id))
+
+# Used to provide feedback details - public with key needed
+@bp.route("/news", methods=["POST"])
+def store_news():    
+    # Check header for token
+    # if token is valid, store news
+    # else return 401
+    token = request.headers.get("X-Api-Key")
+    # Check BACKEND_NEWS_TOKEN
+    if token == None or token != os.getenv("BACKEND_NEWS_TOKEN"):
+        return "Unauthorized", 401
+    else:
+        return vars(save_news(request.get_json()))
+    
+@bp.route("/news", methods=["GET"])
+def read_news():
+    return vars(get_news())
