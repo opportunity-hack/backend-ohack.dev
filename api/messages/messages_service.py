@@ -1156,7 +1156,7 @@ def save_news(json):
 
     return Message("Saved News")
 
-
+@cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit: f"get_news_{news_limit}")
 def get_news(news_limit=3):
     logger.debug("Get News")
     db = get_db()  # this connects to our Firestore database
