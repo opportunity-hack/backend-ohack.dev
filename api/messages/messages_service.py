@@ -203,7 +203,7 @@ def get_single_hackathon_event(hackathon_id):
     return {}
 
 # 12 hour cache for 100 objects LRU
-@limits(calls=200, period=ONE_MINUTE)
+@limits(calls=1000, period=ONE_MINUTE)
 def get_single_npo(npo_id):    
     logger.debug(f"get_npo start npo_id={npo_id}")    
     db = get_db()      
