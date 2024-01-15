@@ -93,7 +93,10 @@ def create_app():
 
     @app.after_request
     def add_headers(response):
-        client_origin_url = safe_get_env_var("CLIENT_ORIGIN_URL")
+        client_origin_url = safe_get_env_var("CLIENT_ORIGIN_URL")                
+        if "," in client_origin_url:
+            client_origin_url = client_origin_url.split(",")
+
         if client_origin_url == "*":
             logger.debug(
                 "Using wildcard for Access-Control-Allow-Origin - pretty dangerous, just for development purposes only")
@@ -110,6 +113,9 @@ def create_app():
     ##########################################
     # CORS
     ##########################################
+
+    if "," in client_origin_url:
+        client_origin_url = client_origin_url.split(",")
 
     if client_origin_url == "*":
         logger.debug(
