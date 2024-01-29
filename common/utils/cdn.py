@@ -1,9 +1,11 @@
 import logging
 from google.cloud import storage
+from google.oauth2 import service_account
 from dotenv import load_dotenv
 import os
 import sys
 import logging
+import json
 
 # add logger
 logger = logging.getLogger(__name__)
@@ -21,6 +23,7 @@ load_dotenv()
 
 CDN_SERVER = os.getenv("CDN_SERVER")
 GCLOUD_CDN_BUCKET = os.getenv("GCLOUD_CDN_BUCKET")
+GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 def upload_to_cdn(directory, source_file_name):
     """Uploads a file to the bucket."""
@@ -30,7 +33,10 @@ def upload_to_cdn(directory, source_file_name):
     # source_file_name = "local/path/to/file"
     # The ID of your GCS object
     # destination_blob_name = "storage-object-name"
-    storage_client = storage.Client()
+    gcp_json_credentials_dict = json.loads(GOOGLE_APPLICATION_CREDENTIALS)
+    creds = service_account.Credentials.from_service_account_info(gcp_json_credentials_dict)
+    project_name = GCLOUD_CDN_BUCKET.split("_")[0]
+    storage_client = storage.Client(project=project_name,credentials=creds)
     bucket = storage_client.bucket(GCLOUD_CDN_BUCKET)
     blob = bucket.blob(f"{directory}/{source_file_name}")
 
