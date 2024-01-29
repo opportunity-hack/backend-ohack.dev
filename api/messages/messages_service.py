@@ -1167,17 +1167,28 @@ def save_news(json):
 
     get_news.cache_clear()
     logger.info("Cleared cache for get_news")
-    
+
     return Message("Saved News")
 
-@cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit: f"get_news_{news_limit}")
-def get_news(news_limit=3):
+@cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
+def get_news(news_limit=3, news_id=None):
     logger.debug("Get News")
     db = get_db()  # this connects to our Firestore database
-    collection = db.collection('news')
-    docs = collection.order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(news_limit).stream()
-    results = []
-    for doc in docs:
-        results.append(doc.to_dict())
-    logger.debug(f"Get News Result: {results}")
-    return Message(results)
+    if news_id is not None:
+        logger.info(f"Getting single news item for news_id={news_id}")
+        collection = db.collection('news')
+        doc = collection.document(news_id).get()
+        if doc is None:
+            return Message({})
+        else:
+            return Message(doc.to_dict())
+    else:
+        collection = db.collection('news')
+        docs = collection.order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(news_limit).stream()
+        results = []
+        for doc in docs:
+            doc_json = doc.to_dict()
+            doc_json["id"] = doc.id
+            results.append(doc_json)
+        logger.debug(f"Get News Result: {results}")
+        return Message(results)

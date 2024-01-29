@@ -241,4 +241,9 @@ def read_news():
     if limit_arg:
         limit = int(limit_arg)
     
-    return vars(get_news(news_limit=limit))  # Pass the 'limit' parameter to the get_news() function
+    return vars(get_news(news_limit=limit, news_id=None))  # Pass the 'limit' parameter to the get_news() function
+
+# Get news by id
+@bp.route("/news/<id>", methods=["GET"])
+def get_single_news(id):
+    return vars(get_news(news_limit=1,news_id=id))
