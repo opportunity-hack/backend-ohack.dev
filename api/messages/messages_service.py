@@ -317,7 +317,7 @@ def get_npo_list(word_length=30):
     logger.debug("NPO List Start")
     db = get_db()  
     # steam() gets all records
-    docs = db.collection('nonprofits').order_by("name").stream()
+    docs = db.collection('nonprofits').order_by( "rank" ).stream()
     if docs is None:
         return {[]}
     else:                
