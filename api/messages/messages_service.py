@@ -1,6 +1,9 @@
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
 from common.utils.firebase import get_hackathon_by_event_id, upsert_news
+from common.utils.openai_api import generate_and_save_image_to_cdn
+from common.utils.github import create_github_repo
+
 from api.messages.message import Message
 import json
 import uuid
@@ -17,8 +20,8 @@ from cachetools.keys import hashkey
 
 from ratelimit import limits
 from datetime import datetime, timedelta
+import os
 
-from common.utils.github import create_github_repo
 
 
 logger = logging.getLogger("myapp")
@@ -28,6 +31,7 @@ auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
 auth0_client = safe_get_env_var("AUTH0_USER_MGMT_CLIENT_ID")
 auth0_secret = safe_get_env_var("AUTH0_USER_MGMT_SECRET")
 
+CDN_SERVER = os.getenv("CDN_SERVER")
 ONE_MINUTE = 1*60
 THIRTY_SECONDS = 30
 def get_public_message():
@@ -1152,18 +1156,39 @@ def save_news(json):
         if field not in json:
             logger.error(f"Missing field {field} in {json}")
             return Message("Missing field")
+        
+    cdn_dir = "ohack.dev/news"
+    news_image = generate_and_save_image_to_cdn(cdn_dir,json["title"])
+    json["image"] = f"{CDN_SERVER}/{cdn_dir}/{news_image}"
+    json["last_updated"] = datetime.now().isoformat()
     upsert_news(json)
+
+    logger.info("Updated news successfully")
+
+    get_news.cache_clear()
+    logger.info("Cleared cache for get_news")
 
     return Message("Saved News")
 
-@cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit: f"get_news_{news_limit}")
-def get_news(news_limit=3):
+@cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
+def get_news(news_limit=3, news_id=None):
     logger.debug("Get News")
     db = get_db()  # this connects to our Firestore database
-    collection = db.collection('news')
-    docs = collection.order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(news_limit).stream()
-    results = []
-    for doc in docs:
-        results.append(doc.to_dict())
-    logger.debug(f"Get News Result: {results}")
-    return Message(results)
+    if news_id is not None:
+        logger.info(f"Getting single news item for news_id={news_id}")
+        collection = db.collection('news')
+        doc = collection.document(news_id).get()
+        if doc is None:
+            return Message({})
+        else:
+            return Message(doc.to_dict())
+    else:
+        collection = db.collection('news')
+        docs = collection.order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(news_limit).stream()
+        results = []
+        for doc in docs:
+            doc_json = doc.to_dict()
+            doc_json["id"] = doc.id
+            results.append(doc_json)
+        logger.debug(f"Get News Result: {results}")
+        return Message(results)

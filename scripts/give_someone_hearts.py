@@ -1,7 +1,9 @@
 import logging
 from google.cloud import storage
 from PIL import ImageFont
-import openai
+from openai import OpenAI
+
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 from PIL import ImageDraw
 from PIL import Image, ImageEnhance
 import urllib.request
@@ -15,7 +17,6 @@ import pytz
 
 sys.path.append("../")
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
 CDN_SERVER = os.getenv("CDN_SERVER")
 GCLOUD_CDN_BUCKET = os.getenv("GCLOUD_CDN_BUCKET")
 
@@ -24,7 +25,7 @@ logger = logging.getLogger(__name__)
 # set logger to standard out
 logger.addHandler(logging.StreamHandler())
 # set log level
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 #
 from common.utils.firebase import add_hearts_for_user, get_user_by_user_id, add_certificate
 from common.utils.slack import send_slack
@@ -86,7 +87,11 @@ def get_reason_pretty(reason):
     if reason == "unit_test_coverage":
         reasons_string = "Unit Test Coverage"
     if reason == "unit_test_writing":
-        reasons_string = "Unit Test Writing"            
+        reasons_string = "Unit Test Writing"
+    if reason == "judge":
+        reasons_string = "Judging Projects"
+    if reason == "mentor":
+        reasons_string = "Mentoring Teams"
 
     if reasons_string is None:
         raise Exception(f"Reason {reason} is not valid")    
@@ -163,11 +168,9 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
 
     # Generate a unique background image
     if generate_backround_image:
-        response = openai.Image.create(
-            prompt="without text a mesmerizing background with geometric shapes and fireworks no text high resolution 4k",
-            n=1,
-            size="1024x1024"
-        )
+        response = client.images.generate(prompt="without text a mesmerizing background with geometric shapes and fireworks no text high resolution 4k",
+        n=1,
+        size="1024x1024")
         image_url = response['data'][0]['url']
 
         urllib.request.urlretrieve(image_url, "./generated_image.png")
@@ -176,7 +179,12 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
     enhancer = ImageEnhance.Brightness(background_image)
     background_image_darker = enhancer.enhance(0.35)
 
-    text_img = Image.new('RGBA', (1024, 1024), (0, 0, 0, 0))
+    # Randonly pick a Color that is always dark enough to see the text
+    import random
+    color = (random.randint(0, 255), random.randint(0, 255), random.randint(0, 255))
+    text_img = Image.new('RGBA', (1024, 1024), color)
+    text_img = ImageEnhance.Brightness(text_img).enhance(0.35)
+    
     text_img.paste(background_image_darker, (0, 0))
     text_img.paste(foreground_image, (0, 0), mask=foreground_image)
     text_img.save(filename, format="png")
@@ -188,6 +196,11 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
 # Given a user_id, give them hearts for the reason
 def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image=False, cleanup=True, generate_backround_image=False):
     user = get_user_by_user_id(slack_user_id)
+    if user is None:
+        error_string = f"User with slack id {slack_user_id} not found"
+        logger.error(error_string)
+        raise Exception(error_string)
+    
     if "id" not in user:
         error_string = f"User with slack id {slack_user_id} not found"
         logger.error(error_string)
@@ -225,7 +238,7 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
 
         # Intro Message to Opportunity Hack community to encourage more hearts        
         intro_message = ":heart_eyes: *Heart Announcement*! :heart_eyes:\n"
-        outro_message = "\n_Thank you for taking the time out of your day to support a nonprofit with your talents_!\nMore on our heart system at https://hearts.ohack.dev"
+        outro_message = "\n_Thank you for taking the time out of your day to support a nonprofit with your talents_!\nMore on our heart system at https://hearts.ohack.dev and check your profile at https://ohack.dev/profile to see them!"
         # Send a DM
         send_slack(channel=f"{slack_user_id}",
                   message=f"{intro_message}\nHey <@{slack_user_id}> :astronaut-hooray-woohoo-yeahfistpump: You have been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}\nYour profile should now reflect these updates: https://ohack.dev/profile")
@@ -242,33 +255,37 @@ hearts = 1
 reasons = [
     ## how
     "standups_completed",
-    "code_reliability",
+    # "code_reliability",
     "customer_driven_innovation_and_design_thinking",
     "iterations_of_code_pushed_to_production",    
     
     ## what
-    "productionalized_projects",
+    # "productionalized_projects",
     "requirements_gathering",
-    # "documentation",
-    # "design_architecture",
-    "code_quality",
+    "documentation",
+    "design_architecture",
+    # "code_quality",
     # "unit_test_writing",
     # "unit_test_coverage",
     # "observability"    
     ]
-    
 
-people = ["UC_______"]
+reasons = ["judge"]
+#reasons = ["mentor"]
+
+people = ["U____"]
 
 for slack_id in people:
-    give_hearts_to_user(
-        slack_user_id=slack_id,
-        amount=hearts,
-        reasons=reasons,
-        create_certificate_image=True,
-        cleanup=True,
-        generate_backround_image=True)
-
+    try:
+        give_hearts_to_user(
+            slack_user_id=slack_id,
+            amount=hearts,
+            reasons=reasons,
+            create_certificate_image=True,
+            cleanup=True,
+            generate_backround_image=True)
+    except Exception as e:
+        logger.error(f"Error giving hearts to {slack_id}: {e}")
 
 
 
