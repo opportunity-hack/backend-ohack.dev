@@ -40,10 +40,9 @@ def upload_to_cdn(directory, source_file_name):
     # object that does not yet exist, set the if_generation_match precondition to 0.
     # If the destination object already exists in your bucket, set instead a
     # generation-match precondition using its generation number.
-    generation_match_precondition = 0
+    # generation_match_precondition = 0 # Don't use this because we want to overwrite files
 
-    blob.upload_from_filename(
-        source_file_name, if_generation_match=generation_match_precondition)
+    blob.upload_from_filename(source_file_name)
 
     logger.info(
         f"File {source_file_name} uploaded to {directory}/{source_file_name}."
