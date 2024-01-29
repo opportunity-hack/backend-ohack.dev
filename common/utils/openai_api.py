@@ -35,16 +35,9 @@ def generate_and_save_image_to_cdn(directory, text):
         prompt=prompt,
         n=1,
         size="1024x1024"       
-    )
-    # Print response
-    print(openai_response)
-    # Print response methods
-    print(dir(openai_response))
+    ) 
 
     image_url = openai_response.data[0].url
-    # Output file should end with generated_image.png, but should have a generated short hash to make it unique
-    #
-    unique_short_hash = openai_response.created    
     
     # Create a short filename from input text
     filename = text.replace(" ", "_").replace(".", "").replace(",", "").replace("?", "").replace("!", "").replace(":", "").replace(";", "").replace("(", "").replace(")", "").replace("\"", "").replace("\'", "").replace("/", "").replace("\\", "")
@@ -55,7 +48,6 @@ def generate_and_save_image_to_cdn(directory, text):
 
     print(f"Saving to {filename}...")
     urllib.request.urlretrieve(image_url, filename)
-    
     
     print(f"Saving to CDN: {directory}/{filename}...")
     
