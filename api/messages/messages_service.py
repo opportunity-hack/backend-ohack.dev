@@ -3,7 +3,6 @@ from common.utils.slack import send_slack_audit, create_slack_channel, send_slac
 from common.utils.firebase import get_hackathon_by_event_id, upsert_news
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
-
 from api.messages.message import Message
 import json
 import uuid
@@ -30,6 +29,7 @@ logger.setLevel(logging.INFO)
 auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
 auth0_client = safe_get_env_var("AUTH0_USER_MGMT_CLIENT_ID")
 auth0_secret = safe_get_env_var("AUTH0_USER_MGMT_SECRET")
+google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
 
 CDN_SERVER = os.getenv("CDN_SERVER")
 ONE_MINUTE = 1*60
@@ -114,6 +114,7 @@ def doc_to_json(docid=None, doc=None, depth=0):
     return d_json
 
 from firebase_admin.firestore import DocumentReference, DocumentSnapshot
+
 
 # handle DocumentReference or DocumentSnapshot and recursefuly call doc_to_json
 def doc_to_json_recursive(doc=None):
@@ -1169,6 +1170,56 @@ def save_news(json):
     logger.info("Cleared cache for get_news")
 
     return Message("Saved News")
+
+async def save_lead(json):
+    token = json["token"]
+
+    # If any field is missing, return False
+    if "name" not in json or "email" not in json:
+        # Log which fields are missing
+        logger.error(f"Missing field name or email {json}")        
+        return False
+    
+    # If name or email length is not long enough, return False
+    if len(json["name"]) < 2 or len(json["email"]) < 3:
+        # Log
+        logger.error(f"Name or email too short name:{json['name']} email:{json['email']}")
+        return False
+    
+    recaptcha_response = requests.post(
+        f"https://www.google.com/recaptcha/api/siteverify?secret={google_recaptcha_key}&response={token}")
+    recaptcha_response_json = recaptcha_response.json()
+    logger.info(f"Recaptcha Response: {recaptcha_response_json}")    
+
+    if recaptcha_response_json["success"] == False:
+        return False
+    else:
+        logger.info("Recaptcha Success, saving...")
+        # Save lead to Firestore
+        db = get_db()
+        collection = db.collection('leads')
+        # Remove token from json
+        del json["token"]
+
+        # Add timestamp
+        json["timestamp"] = datetime.now().isoformat()
+        insert_res = collection.add(json) 
+        # Log name and email as success
+        logger.info(f"Lead saved for {json}")
+
+        # Sent slack message to #ohack-dev-leads
+        slack_message = f"New lead! Name:`{json['name']}` Email:`{json['email']}`"
+        send_slack(slack_message, "ohack-dev-leads")
+        return True
+
+# Create an event loop and run the save_lead function asynchronously
+@limits(calls=30, period=ONE_MINUTE)
+async def save_lead_async(json):
+    await save_lead(json)
+
+
+    
+    
 
 @cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
 def get_news(news_limit=3, news_id=None):
