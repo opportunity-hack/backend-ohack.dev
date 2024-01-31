@@ -31,6 +31,7 @@ from api.messages.messages_service import (
     link_problem_statements_to_events,
     save_helping_status,
     save_news,
+    save_lead_async,
     get_news
 )
 from api.security.guards import (
@@ -247,3 +248,11 @@ def read_news():
 @bp.route("/news/<id>", methods=["GET"])
 def get_single_news(id):
     return vars(get_news(news_limit=1,news_id=id))
+
+
+@bp.route("/lead", methods=["POST"])
+async def store_lead():    
+    if await save_lead_async(request.get_json()) == False:
+        return "Unauthorized", 401
+    else:
+        return "OK", 200
