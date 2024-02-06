@@ -13,7 +13,7 @@ logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.INFO)
 #
 from common.utils.slack import send_slack, get_active_users
-from common.utils.firebase import get_hackathon_by_event_id, add_reference_link_to_problem_statement, create_new_problem_statement, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_id, add_image_to_nonprofit_by_nonprofit_id, add_image_to_nonprofit, add_nonprofit_to_hackathon, create_new_problem_statement, create_new_nonprofit, create_new_hackathon, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_name, create_team, add_user_by_email_to_team, add_user_by_slack_id_to_team, add_team_to_hackathon, add_problem_statement_to_team, get_user_by_user_id, add_reference_link_to_problem_statement, get_user_by_email, create_user, add_user_to_team, delete_user_by_id, get_team_by_name, get_user_by_id, remove_user_from_team
+from common.utils.firebase import get_hackathon_by_event_id, create_new_hackathon, add_reference_link_to_problem_statement, create_new_problem_statement, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_id, add_image_to_nonprofit_by_nonprofit_id, add_image_to_nonprofit, add_nonprofit_to_hackathon, create_new_problem_statement, create_new_nonprofit, create_new_hackathon, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_name, create_team, add_user_by_email_to_team, add_user_by_slack_id_to_team, add_team_to_hackathon, add_problem_statement_to_team, get_user_by_user_id, add_reference_link_to_problem_statement, get_user_by_email, create_user, add_user_to_team, delete_user_by_id, get_team_by_name, get_user_by_id, remove_user_from_team
 from common.utils.cdn import upload_to_cdn
 import re
 import urllib.request
@@ -55,7 +55,7 @@ def util_add_image_to_nonprofit(nonprofit_id=None, nonprofit_name=None, image_ur
         logger.error(f"Image {image_name} does not exist")
         return
     else:
-        logger.info(f"Image {image_name} downloaded")
+        logger.info(f"Image {image_name} downloaded") 
     
     # Upload image to CDN
     upload_to_cdn("nonprofit_images", image_name)
@@ -99,7 +99,19 @@ parser.add_argument('--problem_statement_skills', type=str, help='problem statem
 parser.add_argument('--problem_statement_reference_name', type=str, help='problem statement reference name')
 parser.add_argument('--problem_statement_reference_url', type=str, help='problem statement reference url')
 
-
+parser.add_argument('--hackathon_title', type=str, help='hackathon title')
+parser.add_argument('--hackathon_description', type=str, help='hackathon description')
+parser.add_argument('--hackathon_type', type=str, help='hackathon type')
+parser.add_argument('--donation_current_food', type=str, help='donation current food')
+parser.add_argument('--donation_current_prize', type=str, help='donation current prize')
+parser.add_argument('--donation_current_swag', type=str, help='donation current swag')
+parser.add_argument('--donation_current_thank_you', type=str, help='donation current thank you')
+parser.add_argument('--donation_goals_food', type=str, help='donation goals food')
+parser.add_argument('--donation_goals_prize', type=str, help='donation goals prize')
+parser.add_argument('--donation_goals_swag', type=str, help='donation goals swag')
+parser.add_argument('--hackathon_location', type=str, help='hackathon location')
+parser.add_argument('--hackathon_start_date', type=str, help='hackathon start date')
+parser.add_argument('--hackathon_end_date', type=str, help='hackathon end date')
 
 
 parser.add_argument('--slack_channel', type=str, help='user slack channel')
@@ -132,7 +144,8 @@ elif args.action == "create_problem_statement":
         args.problem_statement_status,
         args.problem_statement_slack_channel,
         args.problem_statement_first_though_of,
-        args.problem_statement_skills.split(","))
+        args.problem_statement_skills.split(",") if args.problem_statement_skills else []
+    )
     
     if args.nonprofit_name is not None:        
         link_nonprofit_to_problem_statement(args.nonprofit_name, result["id"])
@@ -145,9 +158,125 @@ elif args.action == "create_problem_statement":
             problem_statement_id=result["id"],
             name=args.problem_statement_reference_name,
             link=args.problem_statement_reference_url)
-        
+elif args.action == "create_new_hackathon":
+    # take donation_current_food, donation_current_prize, donation_current_swag, donation_current_thank_you and put into json
+    # take donation_goals_food, donation_goals_prize, donation_goals_swag and put into json
+    donation_current = {
+        "food": args.donation_current_food,
+        "prize": args.donation_current_prize,
+        "swag": args.donation_current_swag,
+        "thank_you": args.donation_current_thank_you
+    }
+    donation_goals = {
+        "food": args.donation_goals_food,
+        "prize": args.donation_goals_prize,
+        "swag": args.donation_goals_swag
+    }
+
+
+    create_new_hackathon(title=args.hackathon_title,
+        type=args.hackathon_type,
+        donation_current=donation_current,
+        donation_goals=donation_goals,
+        location=args.hackathon_location,
+        start_date=args.hackathon_start_date,
+        end_date=args.hackathon_end_date,
+        links=[],
+        teams=[],
+        nonprofits=[]
+        )
+elif args.action == "link_problem_statement_to_nonprofit":
+    link_nonprofit_to_problem_statement(args.nonprofit_name, args.problem_statement_id)
+    
+elif args.action == "link_problem_statement_to_hackathon_event":
+    link_problem_statement_to_hackathon_event(hackathon_event_id=args.hackathon_event_id, problem_statement_id=args.problem_statement_id)
 
 else:
     # Print help
     parser.print_help()
+
+# create_new_hackathon with
+    # hackathon_title = High School Hack for UN's 17 Goals
+    # hackathon_description = Hack for any of the United Nations' 17 goals to transform our world
+    # hackathon_type = hackathon
+    # donation_current_food = 0
+    # donation_current_prize = 1
+    # donation_current_swag = 1
+    # donation_current_thank_you = ""    
+    
+    # donation_goals_food = 0
+    # donation_goals_prize = 5000
+    # donation_goals_swag = 1000
+    
+    
+    # hackathon_location = Online
+    # hackathon_start_date = 2024-02-05
+    # hackathon_end_date = 2024-02-29
+# create_new_nonprofit with
+    # name = UN
+    # description = United Nations
+    # website = https://www.un.org/
+    # slack_channel = #npo-un
+    # contact_people = ""
+    # image = https://upload.wikimedia.org/wikipedia/commons/2/2f/United_Nations_logo.svg
+# create_problem_statement for all of the 17 UN problems with:
+    # problem_statement_title = "Goal 1: No Poverty"
+    # problem_statement_description = "End poverty in all its forms everywhere"
+    # problem_statement_status = "hackathon"
+    # problem_statement_slack_channel = "#goal-1-no-poverty"
+    # problem_statement_first_though_of = "2024"
+    # problem_statement_reference_name = "UN Goal 1"
+    # problem_statement_reference_url = "https://www.un.org/sustainabledevelopment/poverty/"
+
+# python util.py create_problem_statement --problem_statement_title="Goal 1: No Poverty" --problem_statement_description="End poverty in all its forms everywhere" --problem_statement_status="hackathon" --problem_statement_slack_channel="#goal-1-no-poverty" --problem_statement_first_though_of="2024" --problem_statement_reference_name="UN Goal 1" --problem_statement_reference_url="https://www.un.org/sustainabledevelopment/poverty/"
+### python util.py create_problem_statement --problem_statement_title="Goal 2: Zero Hunger" --problem_statement_description="End hunger, achieve food security and improved nutrition and promote sustainable agriculture" --problem_statement_status="hackathon" --problem_statement_slack_channel="#goal-2-zero-hunger" --problem_statement_first_though_of="2024" --problem_statement_reference_name="UN Goal 2" --problem_statement_reference_url="https://www.un.org/sustainabledevelopment/hunger/"
+# python util.py create_problem_statement --problem_statement_title="Goal 3: Good Health and Well-being" --problem_statement_description="Ensure healthy lives and promote well-being for all at all ages" --problem_statement_status="hackathon" --problem_statement_slack_channel="#goal-3-good-health-and-well-being" --problem_statement_first_though_of="2024" --problem_statement_reference_name="UN Goal 3" --problem_statement_reference_url="https://www.un.org/sustainabledevelopment/health/"
+# 
+# python util.py create_problem_statement 
+# --problem_statement_title="Goal 4: Quality Education" 
+# --problem_statement_description="Ensure inclusive and equitable quality education and promote lifelong learning opportunities for all" 
+# --problem_statement_status="hackathon" 
+# --problem_statement_slack_channel="#goal-4-quality-education" 
+# --problem_statement_first_though_of="2024" 
+# --problem_statement_reference_name="UN Goal 4" 
+# --problem_statement_reference_url="https://www.un.org/sustainabledevelopment/education/"
+# --nonprofit_name="United Nations"
+# --hackathon_event_id="2024_winter"
+
+# Problem Statement Ids
+# x5sl87SE54FSJtY022pa
+# vheNMsrykldjt0JGtGVh
+# FzF4DZh3oKeBXH1oGNVt
+# xullBGkztebfk480uxCg
+# 9QUi30iptyWWfO6DE7F8
+# XIQvOxMwLEX2tjI1ZfXl
+# BsK8iPBOwsbI4nGEaiwl
+# ahepei53KAS8S2cCMVVx
+# qeDhOUeaGZiBGAnYvNYx
+# lbrLUzHipbXL85j724jr
+# VVbx6qTuMz5qEN011FE7
+# NOSDaHTJRqusUNX5dXBc
+# O2LVSrXNzjMCZxmDc39f
+# zcNan5lwz7XRKnHspcmo
+# pRpsWokurZwqz33YcldM
+# huV4pRfGvVkuzZcdLxR7
+# python util.py link_problem_statement_to_hackathon_event --hackathon_event_id="2024_winter" --problem_statement_id="huV4pRfGvVkuzZcdLxR7"
+
+
+# Output util.py commands with the following arguments using an equals sign between the argument and the value:
+# python util.py create_new_hackathon --hackathon_title="High School Hack for UN's 17 Goals" --hackathon_description="Hack for any of the United Nations' 17 goals to transform our world" --hackathon_type="hackathon" --donation_current_food="0" --donation_current_prize="1" --donation_current_swag="1" --donation_current_thank_you="" --donation_goals_food="0" --donation_goals_prize="5000" --donation_goals_swag="1000" --hackathon_location="Online" --hackathon_start_date="2024-02-05" --hackathon_end_date="2024-02-29"
+
+# Create new nonprofit
+# python util.py create_new_nonprofit --nonprofit_name="UN" --description="United Nations" --website="https://www.un.org/" --slack_channel="#npo-un" --contact_name="" --image=""    
+    
+
+
+# Link problem statement to nonprofit name="United Nations" for problem statement ids: [x5sl87SE54FSJtY022pa, qeDhOUeaGZiBGAnYvNYx, lbrLUzHipbXL85j724jr, VVbx6qTuMz5qEN011FE7]
+# python util.py link_problem_statement_to_nonprofit --nonprofit_name="United Nations" --problem_statement_id="x5sl87SE54FSJtY022pa"
+# python util.py link_problem_statement_to_nonprofit --nonprofit_name="United Nations" --problem_statement_id="qeDhOUeaGZiBGAnYvNYx"
+# python util.py link_problem_statement_to_nonprofit --nonprofit_name="United Nations" --problem_statement_id="lbrLUzHipbXL85j724jr"
+# python util.py link_problem_statement_to_nonprofit --nonprofit_name="United Nations" --problem_statement_id="VVbx6qTuMz5qEN011FE7"
+
+# Add United Nations add_nonprofit_to_hackathon for hackathon event id: 2tGAUC5VODdP2EPM4GpG
+# python util.py add_nonprofit_to_hackathon --nonprofit_name="United Nations" --hackathon_event_id="2024_winter"
 

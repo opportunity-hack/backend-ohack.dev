@@ -30,7 +30,7 @@ def summarize_text(text, max_tokens=100):
     return openai_request.choices[0].message
 
 def generate_and_save_image_to_cdn(directory, text):
-    prompt = f"without text: a mesmerizing image with geometric shapes, no text, high resolution 4k for this text:{text}"
+    prompt = f"You are an artist that sometimes paints, sometimes sketches, sometimes does something abstract, but you never use letters or text.  Create a mesmerizing image, no text, high resolution 4k with this as your inspiration:{text}"
     openai_response = client.images.generate(
         prompt=prompt,
         n=1,
