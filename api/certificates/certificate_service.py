@@ -28,7 +28,7 @@ GOLD_COLOR:  Tuple[int, int, int] = (255, 215, 0)
 BLACK_COLOR: Tuple[int, int, int] = (0, 0, 0)
 
 
-def _get_stat_text_info(certGen: CertificateGenerator, stats: List[Tuple[int, Any]], font: ImageFont) -> Dict[str, int | List[str]]:
+def _get_stat_text_info(certGen: CertificateGenerator, stats: List[Tuple[Union[int, Any]]], font: ImageFont) -> Dict[str, Union[int, List[str]]]:
     maxStatWidth: int = 0
     maxStatHeight: int = 0
     maxValWidth: int = 0
