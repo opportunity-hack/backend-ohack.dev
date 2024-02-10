@@ -9,8 +9,8 @@ bp_url_prefix = "/api/certificates"
 bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
 
 @bp.route("/generate", methods=["POST"])
-def generateCertificate(username, repoUrl) -> Dict[str, str]:
-    form = request.form
+def generateCertificate():        
+    form = request.get_json()
     if ("repoURL" not in form or "username" not in form): return {}
     repoUrl: str = form["repoURL"]
     username: str = form["username"]

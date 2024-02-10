@@ -25,3 +25,7 @@ ratelimiter==1.2.0
 pygithub==2.1.1
 openai==1.10.0
 asgiref==3.7.2
+GitPython==3.1.41
+typing==3.7.4.3
+dataclasses==0.6
+git-fame==2.0.1

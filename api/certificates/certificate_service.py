@@ -9,13 +9,10 @@ from dotenv import load_dotenv
 import textwrap
 import pytz
 import base64
-from typing import *
 
 from api.certificates.certificate import CertificateGenerator
 from api.certificates.scan_repo import GitFameTable, GitFameRow, getGitFameData
 from api.certificates.certificate_cryptography import signCertificate, verifyCertificate
-
-sys.path.append("../")
 load_dotenv()
 
 CDN_SERVER = getenv("CDN_SERVER")
@@ -61,7 +58,7 @@ def _get_stat_text_info(certGen: CertificateGenerator, stats: List[Tuple[int, An
     }
 
 
-def _write_stat_to_certificate(certGen: CertificateGenerator, statTextInfo: Dict[str, int | List[str]], startY: int, font: ImageFont, maxY: int = None) -> None:
+def _write_stat_to_certificate(certGen: CertificateGenerator, statTextInfo: Dict[str, Union[int, List[str]]], startY: int, font: ImageFont, maxY: int = None) -> None:
     if (maxY is None):
         maxY = 999999
     
@@ -82,6 +79,9 @@ def generate_certificate(repositoryURL: str, username: str) -> str:
     certGen: CertificateGenerator = CertificateGenerator()
 
     gitFameData: GitFameTable = getGitFameData(repositoryURL)
+    print(f"gitFameData: {gitFameData}")
+    print(f"gitFameData.authors: {gitFameData.authors}")
+
     authorData: GitFameRow = None
     for row in gitFameData.authors:
         if (row.author == username):
