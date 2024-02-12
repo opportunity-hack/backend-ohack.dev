@@ -30,3 +30,4 @@ typing==3.7.4.3
 dataclasses==0.6
 git-fame==2.0.1
 qrcode==7.4.2
+pillow==10.2.0
