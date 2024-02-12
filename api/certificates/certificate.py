@@ -81,6 +81,12 @@ class CertificateGenerator:
             return (xPosition - (textWidth // 2), yPosition - (textHeight // 2))
         if (align == "left"):
             return (xPosition, yPosition - (textHeight // 2))
+        
+    def draw_image(self, img: Image, xPosition: int, yPosition: int) -> None:
+        imageWidth, imageHeight = img.size
+        box = (xPosition, yPosition, xPosition + imageWidth, yPosition + imageHeight)
+        self.certificateTemplate.paste(img, box)        
+
 
     def toBytes(self) -> bytes:
         self.certificateTemplate.paste(self.certificateMask, (0, 0), mask=self.certificateMask)

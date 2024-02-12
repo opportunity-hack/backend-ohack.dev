@@ -4,8 +4,6 @@ from cryptography.exceptions import InvalidSignature
 import os
 import sys
 from dotenv import load_dotenv
-
-sys.path.append("../")
 load_dotenv()
 
 KEY_STR: str        = "CERTIFICATE_KEY"
@@ -44,6 +42,8 @@ def _getPrivateKey() -> rsa.RSAPrivateKey:
 
     return private_key
 
+from cryptography.exceptions import InvalidSignature
+
 def signCertificate(certificateBytes: bytes) -> bytes:
     privateKey: rsa.RSAPrivateKey = _getPrivateKey()
     signature: bytes = privateKey.sign(
@@ -57,13 +57,21 @@ def signCertificate(certificateBytes: bytes) -> bytes:
     return certificateBytes + signature + (len(signature)).to_bytes(SIGNATURE_LEN_INT_SIZE, "little", signed=False)
 
 def verifyCertificate(certificateBytes: bytes) -> bool:
+    print("Verifying certificate...")
     privateKey: rsa.RSAPrivateKey = _getPrivateKey()
     publicKey:  rsa.RSAPublicKey = _getPublicKey(privateKey)
     certificateLen: int = len(certificateBytes)
-    if (certificateLen < 4): return False
+    print(f"Certificate Length: {certificateLen}")
+    if (certificateLen < 4): 
+        print("Certificate Length < 4")
+        return False
+    
     signatureLen: int = int.from_bytes(certificateBytes[-SIGNATURE_LEN_INT_SIZE:], "little", signed=False)
     
-    if (certificateLen <= signatureLen + SIGNATURE_LEN_INT_SIZE): return False
+    if (certificateLen <= signatureLen + SIGNATURE_LEN_INT_SIZE): 
+        print("Certificate Length <= Signature Length + Signature Length Integer Size")
+        return False
+    
     data: bytes = certificateBytes[:-signatureLen - SIGNATURE_LEN_INT_SIZE]
     signature: bytes = certificateBytes[-signatureLen - SIGNATURE_LEN_INT_SIZE:-SIGNATURE_LEN_INT_SIZE]
     try:
@@ -77,5 +85,13 @@ def verifyCertificate(certificateBytes: bytes) -> bool:
             hashes.SHA256()
         )
         return True
-    except InvalidSignature:
+    except InvalidSignature as e:
+        print(f"Invalid Signature, error: {e}")
+        # Print error message
+        
+        # Print stacktrace and error 
+        import traceback
+        traceback.print_exc()
+        
+
         return False

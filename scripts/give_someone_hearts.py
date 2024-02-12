@@ -216,7 +216,7 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
             reasons=reasons,
             hearts=amount,
             generate_backround_image=generate_backround_image)
-        certificate_text = f"\nCertificate: {CDN_SERVER}{certificate_filename}"
+        certificate_text = f"\nCertificate: {CDN_SERVER}/{certificate_filename}"
         if cleanup:
             os.remove(certificate_filename)
         

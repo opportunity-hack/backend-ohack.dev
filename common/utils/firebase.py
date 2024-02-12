@@ -435,6 +435,33 @@ def create_new_problem_statement(title, description, status, slack_channel, firs
     
     return problem_statement
 
+
+def save_certificate(certificate):
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Saving certificate {certificate}")
+
+    db.collection("certificates").add(certificate)
+
+def get_certficate_by_file_id(file_id):
+    db = get_db()  # this connects to our Firestore database
+    # Get the last certificate by date with this file_id
+    docs = db.collection('certificates').where("file_id", "==", file_id).order_by("date", direction=firestore.Query.DESCENDING).limit(1).stream()
+
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        return adict
+    
+
+def get_team_by_slack_channel(slack_channel):
+    db = get_db()  # this connects to our Firestore database
+    docs = db.collection('teams').where("slack_channel", "==", slack_channel).stream()
+
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        return adict
+
 def create_new_hackathon(title, type, links, teams, donation_current, donation_goals, location, nonprofits, start_date, end_date):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Creating hackathon {title}")
