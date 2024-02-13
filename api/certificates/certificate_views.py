@@ -2,7 +2,7 @@ from typing import Dict
 
 from flask import Blueprint
 from flask import request
-from api.certificates.certificate_service import generate_certificate, validateCertificate, generate_certificate_from_slack, get_cert_info
+from api.certificates.certificate_service import generate_certificate, validateCertificate, generate_certificate_from_slack, get_cert_info, get_recent_certs
 
 bp_name = "api-certificates"
 bp_url_prefix = "/api/certificates"
@@ -30,3 +30,9 @@ def verifyCertificate():
 @bp.route("/<id>", methods=["GET"])
 def getCert(id):    
     return get_cert_info(id)
+
+@bp.route("/recent", methods=["GET"])
+def getRecentCerts():    
+    return {
+        "certs": get_recent_certs()
+    }
