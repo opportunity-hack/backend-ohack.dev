@@ -12,7 +12,7 @@ import base64
 import hashlib
 
 # Import get_team_by_slack_channel
-from common.utils.firebase import get_team_by_slack_channel, save_certificate, get_certficate_by_file_id
+from common.utils.firebase import get_team_by_slack_channel, save_certificate, get_certficate_by_file_id, get_recent_certs_from_db
 from common.utils.cdn import upload_to_cdn
 
 # Import QR code generator
@@ -38,6 +38,8 @@ BLACK_COLOR: Tuple[int, int, int] = (0, 0, 0)
 def get_cert_info(id):
     return get_certficate_by_file_id(id)
 
+def get_recent_certs():
+    return get_recent_certs_from_db()
 
 def _get_stat_text_info(certGen: CertificateGenerator, stats: List[Tuple[Union[int, Any]]], font: ImageFont) -> Dict[str, Union[int, List[str]]]:
     maxStatWidth: int = 0

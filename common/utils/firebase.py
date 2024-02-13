@@ -452,6 +452,23 @@ def get_certficate_by_file_id(file_id):
         adict["id"] = doc.id
         return adict
     
+def get_recent_certs_from_db():
+    db = get_db()  # this connects to our Firestore database
+    # Get the last 10 certificates by date
+    docs = db.collection('certificates').order_by("date", direction=firestore.Query.DESCENDING).limit(10).stream()
+
+    # dedupe by file_id
+    certs = []
+    file_ids = []
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        if adict["file_id"] not in file_ids:
+            certs.append(adict)
+            file_ids.append(adict["file_id"])
+    return certs
+
+    
 
 def get_team_by_slack_channel(slack_channel):
     db = get_db()  # this connects to our Firestore database
