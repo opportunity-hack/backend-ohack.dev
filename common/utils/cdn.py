@@ -48,8 +48,17 @@ def upload_to_cdn(directory, source_file_name):
     # generation-match precondition using its generation number.
     # generation_match_precondition = 0 # Don't use this because we want to overwrite files
 
+    # See if file already exists
+    if blob.exists():
+        logger.info(f"File {source_file_name} already exists in {directory}/{source_file_name}. Overwriting...")
+    else:
+        logger.info(f"File {source_file_name} does not exist in {directory}/{source_file_name}. Uploading...")
+    
+    # Upload the file
     blob.upload_from_filename(source_file_name)
 
     logger.info(
         f"File {source_file_name} uploaded to {directory}/{source_file_name}."
     )
+
+    return f"{CDN_SERVER}/{directory}/{source_file_name}"
