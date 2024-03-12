@@ -1070,8 +1070,16 @@ def get_history(db_id):
         "email_address" : res["email_address"],
         "history": res["history"] if "history" in res else "",
         "badges" : _badges,
-        "hackathons" : _hackathons        
+        "hackathons" : _hackathons,
+        "expertise": res["expertise"] if "expertise" in res else "",
+        "education": res["education"] if "education" in res else "",
+        "shirt_size": res["shirt_size"] if "shirt_size" in res else "",
+        "role": res["role"] if "role" in res else "",
+        "company": res["company"] if "company" in res else ""
+
     }
+
+    # Clear cache    
 
     logger.debug(f"RESULT\n{result}")
     return result
@@ -1115,6 +1123,39 @@ def get_user_by_id(id):
     
     logger.debug(f"Get User By ID Result: {res}")
     return res    
+
+def save_profile_metadata(slack_user_id, json):
+    send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Save Profile Metadata for {slack_user_id} {json}")
+
+
+    json = json["metadata"]
+        
+    # See if the user exists
+    user = get_user_from_slack_id(slack_user_id)
+    if user is None:
+        return
+    else:
+        logger.info(f"User exists: {user.id}")        
+    
+    # Only update metadata that is in the json
+    metadataList = ["role", "expertise", "education", "company", "shirt_size"]
+
+    for m in metadataList:        
+        if m in json:
+            logger.info(f"Metadata: {m}={json[m]}")
+            update_res = db.collection("users").document(user.id).set( {m: json[m] }, merge=True)
+            
+            logger.info(f"Update Result: {update_res}")
+    
+    # Clear cache for get_profile_metadata
+    get_profile_metadata.cache_clear()
+            
+    return Message(
+        "Saved Profile Metadata"
+    )
+
 
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
