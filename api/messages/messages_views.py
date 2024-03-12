@@ -8,6 +8,7 @@ from flask import (
 
 from api.messages.messages_service import (
     get_profile_metadata,
+    save_profile_metadata,
     get_user_by_id,
     get_public_message,
     get_protected_message,
@@ -192,7 +193,7 @@ def register_helping_status():
     return vars(save_helping_status(request.get_json()))
 
 # Used to provide profile details - user must be logged in
-@bp.route("/profile")
+@bp.route("/profile", methods=["GET"])
 @authorization_guard
 def profile():    
     # We should get the user information passed into the context,
@@ -205,6 +206,22 @@ def profile():
         return vars(get_profile_metadata(user_id))
     else:
         return None
+
+@bp.route("/profile", methods=["POST"])
+@authorization_guard
+def save_profile():    
+    # We should get the user information passed into the context,
+    #  and not honored by the parameter
+    #  that is, don't allow for someone to pass in a <user_id>
+    #  but instead, look it up via auth token so this is secure
+    token = g.get("access_token")
+    
+    if token:
+        user_id = token["sub"]
+        return vars(save_profile_metadata(user_id, request.get_json()))
+    else:
+        return None
+
 
 # Get user profile by user id
 @bp.route("/profile/<id>", methods=["GET"])
