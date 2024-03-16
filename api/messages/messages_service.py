@@ -26,9 +26,7 @@ import os
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.INFO)
 
-auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
-auth0_client = safe_get_env_var("AUTH0_USER_MGMT_CLIENT_ID")
-auth0_secret = safe_get_env_var("AUTH0_USER_MGMT_SECRET")
+USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-" #the followed by UXXXXX for slack
 google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
 
 CDN_SERVER = os.getenv("CDN_SERVER")
@@ -348,9 +346,11 @@ def get_problem_statement_list():
     logger.debug(results)        
     return { "problem_statements": results }
 
-def save_team(json):    
+def save_team(propel_user_id, json):    
     send_slack_audit(action="save_team", message="Saving", payload=json)
-
+    slack_user = get_user_from_slack_id(propel_user_id)
+    slack_user_id = slack_user["sub"]
+    
     db = get_db()  # this connects to our Firestore database
     logger.debug("Team Save")    
 
@@ -358,7 +358,7 @@ def save_team(json):
     doc_id = uuid.uuid1().hex # Generate a new team id
 
     name = json["name"]    
-    slack_user_id = json["userId"]
+    
     root_slack_user_id = slack_user_id.replace("oauth2|slack|T1Q7936BH-","")
     event_id = json["eventId"]
     slack_channel = json["slackChannel"]
@@ -498,12 +498,15 @@ Your next steps:
         }
         
 
-def join_team(userid, json):
+def join_team(propel_user_id, json):
     send_slack_audit(action="join_team", message="Adding", payload=json)
     db = get_db()  # this connects to our Firestore database
     logger.debug("Join Team Start")
 
-    logger.info(f"Join Team UserId: {userid} Json: {json}")
+    logger.info(f"Join Team UserId: {propel_user_id} Json: {json}")
+    slack_user = get_user_from_slack_id(propel_user_id)
+    userid = slack_user["sub"]
+
     team_id = json["teamId"]
 
     team_doc = db.collection('teams').document(team_id)
@@ -543,13 +546,16 @@ def join_team(userid, json):
 
 
 
-def unjoin_team(userid, json):
+def unjoin_team(propel_user_id, json):
     send_slack_audit(action="unjoin_team", message="Removing", payload=json)
     db = get_db()  # this connects to our Firestore database
     logger.debug("Unjoin Team Start")
     
-    logger.info(f"Unjoin for UserId: {userid} Json: {json}")
+    logger.info(f"Unjoin for UserId: {propel_user_id} Json: {json}")
     team_id = json["teamId"]
+
+    slack_user = get_user_from_slack_id(propel_user_id)
+    userid = slack_user["sub"]
 
     ## 1. Lookup Team, Remove User 
     doc = db.collection('teams').document(team_id)
@@ -667,11 +673,13 @@ def remove_npo(json):
 
 
 @limits(calls=100, period=ONE_MINUTE)
-def save_helping_status(json):
-    logger.debug(f"save_helping_status {json}")
+def save_helping_status(propel_user_id, json):
+    logger.info(f"save_helping_status {propel_user_id} // {json}")
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    user_id = slack_user["sub"]
 
     helping_status = json["status"] # helping or not_helping
-    user_id = json["user_id"] # Slack user id
+    
     problem_statement_id = json["problem_statement_id"]
     mentor_or_hacker = json["type"]
 
@@ -730,7 +738,7 @@ def save_helping_status(json):
     if npo_id == "":
         url = f"for project https://ohack.dev/project/{problem_statement_id}"
     else:
-        url = f"for project https://ohack.dev/project/{problem_statement_id} and nonprofit: https://ohack.dev/nonprofit/{npo_id}"
+        url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
 
     if "helping" == helping_status:
         slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
@@ -916,21 +924,6 @@ def save_problem_statement(json):
     )
 
 
-def get_token():
-    logger.debug("get_token start")
-
-    url = f"https://{auth0_domain}/oauth/token"
-    myobj = {
-        "client_id": auth0_client,
-        "client_secret": auth0_secret,
-        "grant_type": "client_credentials",
-        "audience": f"https://{auth0_domain}/api/v2/"
-    }
-    x = requests.post(url, data=myobj)
-    x_j = x.json()
-    logger.debug("get_token end")
-    return x_j["access_token"]
-
 def get_problem_statement_from_id(problem_id):
     db = get_db()    
     doc = db.collection('problem_statements').document(problem_id)
@@ -1085,27 +1078,66 @@ def get_history(db_id):
     return result
 
 
-def get_auth0_details_by_slackid(slack_user_id):
-    token = get_token()
+def get_slack_user_from_token(token):
+    resp = requests.get(
+        "https://slack.com/api/openid.connect.userInfo", 
+        headers={"Authorization": f"Bearer {token}"}
+    )
+    '''
+    {'ok': True, 'sub': 'UC31XTRT5', 'https://slack.com/user_id': 'UC31XTRT5', 'https://slack.com/team_id': 'T1Q7936BH', 'email': 'greg.vannoni@gmail.com', 'email_verified': True, 'date_email_verified': 1632009763, 'name': 'Greg V [Staff/Mentor]', 'picture': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'given_name': 'Greg', 'family_name': 'V [Staff/Mentor]', 'locale': 'en-US', 'https://slack.com/team_name': 'Opportunity Hack', 'https://slack.com/team_domain': 'opportunity-hack', 'https://slack.com/user_image_24': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_24.png', 'https://slack.com/user_image_32': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_32.png', 'https://slack.com/user_image_48': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_48.png', 'https://slack.com/user_image_72': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_72.png', 'https://slack.com/user_image_192': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_192.png', 'https://slack.com/user_image_512': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'https://slack.com/user_image_1024': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_1024.png', 'https://slack.com/team_image_34': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_34.png', 'https://slack.com/team_image_44': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_44.png', 'https://slack.com/team_image_68': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_68.png', 'https://slack.com/team_image_88': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_88.png', 'https://slack.com/team_image_102': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_102.png', 'https://slack.com/team_image_132': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_132.png', 
+    'https://slack.com/team_image_230': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_230.png', 'https://slack.com/team_image_default': False}
+    '''
+    
+    json = resp.json()
+    if not json["ok"]:
+        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
+        return None    
+    
+    if "sub" not in json:
+        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
+        return None
 
-    # Call Auth0 to get user metadata about the Slack account they used to login
-    url = f"https://{auth0_domain}/api/v2/users/{slack_user_id}"
-    headers = {
-        "Authorization": f"Bearer {token}",
-        "Content-Type": "application/json"
-    }
-    x = requests.get(url, headers=headers)
-    x_j = x.json()
+    # Add prefix to sub 
+    json["sub"] = USER_ID_PREFIX + json["sub"]
 
-    logger.debug(f"Auth0 Metadata Response: {x_j}")
+    logger.info(f"Slack RESP: {json}")
+    return json
 
-    email = x_j["email"]
-    user_id = x_j["user_id"]    
-    last_login = x_j["last_login"]
-    profile_image = x_j["image_192"]
-    name = x_j["name"]
-    nickname = x_j["nickname"]
+def get_slack_user_from_propel_user_id(propel_id):
+    resp = requests.get(
+        f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token", headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
+        
+        )    
+    json = resp.json()    
+    logger.debug(f"Propel RESP: {json}")
+    
+    slack_token = json['slack']['access_token']
+    return get_slack_user_from_token(slack_token)
+    
+
+
+
+def get_propel_user_details_by_id(propel_id):    
+    slack_user = get_slack_user_from_propel_user_id(propel_id)    
+    user_id = slack_user["sub"]
+    
+
+    email = slack_user["email"]
+    # Use todays date in UTC  (Z)
+    last_login = datetime.now().isoformat() + "Z"
+    # Print the last login in native format and in Arizona time
+    import pytz
+    logger.debug(f"Last Login: {last_login} {datetime.now().astimezone(pytz.timezone('US/Arizona')).isoformat()}")  
+
+    
+    # https://slack.com/user_image_192
+    profile_image = slack_user["https://slack.com/user_image_192"]
+    name = slack_user["name"]
+    nickname = slack_user["given_name"]
+
     return email, user_id, last_login, profile_image, name, nickname
+
+
 
 def get_user_by_id(id):
     # Log
@@ -1124,11 +1156,13 @@ def get_user_by_id(id):
     logger.debug(f"Get User By ID Result: {res}")
     return res    
 
-def save_profile_metadata(slack_user_id, json):
+def save_profile_metadata(propel_id, json):
     send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
     db = get_db()  # this connects to our Firestore database
-    logger.info(f"Save Profile Metadata for {slack_user_id} {json}")
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
 
+    logger.info(f"Save Profile Metadata for {slack_user_id} {json}")
 
     json = json["metadata"]
         
@@ -1160,16 +1194,16 @@ def save_profile_metadata(slack_user_id, json):
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=100, period=ONE_MINUTE)
-def get_profile_metadata(slack_user_id):
+def get_profile_metadata(propel_id):
     logger.debug("Profile Metadata")
     
-    email, user_id, last_login, profile_image, name, nickname = get_auth0_details_by_slackid(slack_user_id)
+    email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_id)
     
     send_slack_audit(
         action="login", message=f"User went to profile: {user_id} with email: {email}")
     
 
-    logger.debug(f"Auth0 Account Details:\
+    logger.debug(f"Account Details:\
             \nEmail: {email}\nSlack User ID: {user_id}\n\
             Last Login:{last_login}\
             Image:{profile_image}")

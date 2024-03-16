@@ -35,11 +35,13 @@ from api.messages.messages_service import (
     save_lead_async,
     get_news
 )
-from api.security.guards import (
-    authorization_guard,
-    permissions_guard,
-    admin_messages_permissions
-)
+
+from propelauth_flask import init_auth, current_user
+auth = init_auth(
+    os.getenv("PROPEL_AUTH_URL"),
+    os.getenv("PROPEL_AUTH_KEY"),
+)    
+
 
 bp_name = 'api-messages'
 bp_url_prefix = '/api/messages'
@@ -52,14 +54,14 @@ def public():
 
 
 @bp.route("/protected")
-@authorization_guard
+@auth.require_user
 def protected():
     return vars(get_protected_message())
 
 
 @bp.route("/admin")
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def admin():    
     return vars(get_admin_message())
 
@@ -68,20 +70,20 @@ def admin():
 # Nonprofit Related Endpoints
 
 @bp.route("/npo", methods=["POST"])
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def add_npo(): 
     return vars(save_npo(request.get_json()))
 
 @bp.route("/npo/edit", methods=["PATCH"])
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def edit_npo(): 
     return vars(update_npo(request.get_json()))
 
 @bp.route("/npo", methods=["DELETE"])
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def delete_npo():        
     return vars(remove_npo(request.get_json()))
 
@@ -101,8 +103,8 @@ def get_npo(npo_id):
 # Hackathon Related Endpoints
 
 @bp.route("/hackathon", methods=["POST"])
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def add_hackathon():
     return vars(save_hackathon(request.get_json()))
 
@@ -128,8 +130,8 @@ def get_single_hackathon_by_id(id):
 
 # Problem Statement (also called Project) Related Endpoints
 @bp.route("/problem_statement", methods=["POST"])
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def add_problem_statement():
     return vars(save_problem_statement(request.get_json()))
 
@@ -141,8 +143,8 @@ def get_problem_statments():
 def get_single_problem(project_id):
     return (get_single_problem_statement(project_id))
 
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 @bp.route("/problem_statements/events", methods=["PATCH"])
 def update_problem_statement_events_link():    
     return vars(link_problem_statements_to_events(request.get_json()))
@@ -157,68 +159,63 @@ def get_team(team_id):
     return (get_teams_list(team_id))
 
 
-@authorization_guard
+@auth.require_user
 @bp.route("/team", methods=["POST"])
 def add_team():
-    return save_team(request.get_json())
+    if current_user and current_user.user_id:
+        return save_team(current_user.user_id, request.get_json())
+    else:
+        print("** ERROR Could not obtain user details for POST /team")
+        return None
 
 
 @bp.route("/team", methods=["DELETE"])
-@authorization_guard
+@auth.require_user
 def remove_user_from_team():
-    token = g.get("access_token")
-    if token:
-        user_id = token["sub"]
-        return vars(unjoin_team(user_id, request.get_json()))
+    
+    if current_user and current_user.user_id:        
+        return vars(unjoin_team(current_user.user_id, request.get_json()))
     else:
-        print("** ERROR Could not obtain token for DELETE /team")
+        print("** ERROR Could not obtain user details for DELETE /team")
         return None
 
 
 @bp.route("/team", methods=["PATCH"])
-@authorization_guard
+@auth.require_user
 def add_user_to_team():
-    token = g.get("access_token")
-    if token:
-        user_id = token["sub"]
-        return vars(join_team(user_id, request.get_json()))
+    if current_user and current_user.user_id:
+        return vars(join_team(current_user.user_id, request.get_json()))
     else:
-        print("** ERROR Could not obtain token for PATCH /team")
+        print("** ERROR Could not obtain user details for PATCH /team")
         return None
+
+
 
 # Used to register when person says they are helping, not helping
 @bp.route("/profile/helping", methods=["POST"])
-@authorization_guard
+@auth.require_user
 def register_helping_status():
-    return vars(save_helping_status(request.get_json()))
+    if current_user and current_user.user_id:    
+        return vars(save_helping_status(current_user.user_id, request.get_json()))
+    else:
+        print("** ERROR Could not obtain user details for POST /profile/helping")
+        return None
 
 # Used to provide profile details - user must be logged in
 @bp.route("/profile", methods=["GET"])
-@authorization_guard
-def profile():    
-    # We should get the user information passed into the context,
-    #  and not honored by the parameter
-    #  that is, don't allow for someone to pass in a <user_id>
-    #  but instead, look it up via auth token so this is secure
-    token = g.get("access_token")
-    if token:
-        user_id = token["sub"]
-        return vars(get_profile_metadata(user_id))
+@auth.require_user
+def profile():            
+    # user_id is a uuid from Propel Auth
+    if current_user and current_user.user_id:        
+        return vars(get_profile_metadata(current_user.user_id))
     else:
         return None
 
 @bp.route("/profile", methods=["POST"])
-@authorization_guard
-def save_profile():    
-    # We should get the user information passed into the context,
-    #  and not honored by the parameter
-    #  that is, don't allow for someone to pass in a <user_id>
-    #  but instead, look it up via auth token so this is secure
-    token = g.get("access_token")
-    
-    if token:
-        user_id = token["sub"]
-        return vars(save_profile_metadata(user_id, request.get_json()))
+@auth.require_user
+def save_profile():        
+    if current_user and current_user.user_id:        
+        return vars(save_profile_metadata(current_user.user_id, request.get_json()))
     else:
         return None
 
@@ -230,7 +227,7 @@ def get_profile_by_id(id):
 
 # Used to provide feedback details - user must be logged in
 @bp.route("/feedback/<user_id>")
-@authorization_guard
+@auth.require_user
 def feedback(user_id):
     # TODO: This is stubbed out, need to change with new function for get_feedback
     return vars(get_profile_metadata(user_id))
