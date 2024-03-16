@@ -32,3 +32,4 @@ git-fame==2.0.1
 qrcode==7.4.2
 pillow==10.2.0
 pytz==2023.4
+propelauth_flask==2.1.11

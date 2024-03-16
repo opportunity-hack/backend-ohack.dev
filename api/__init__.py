@@ -42,16 +42,14 @@ logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
 
 
-
+print("Starting Flask")
 from api import exception_views
 from api.messages import messages_views
 from api.newsletters import newsletter_views
-
 # Leaving this disabled for now - team can fix this based on fixes for above module import
 #from api.newsletters import subscription_views
 from api.certificates import certificate_views
 
-from api.security.auth0_service import auth0_service
 from common.utils import safe_get_env_var
 
 
@@ -60,8 +58,7 @@ def create_app():
     # Environment Variables
     ##########################################
     client_origin_url = safe_get_env_var("CLIENT_ORIGIN_URL")
-    auth0_audience = safe_get_env_var("AUTH0_AUDIENCE")
-    auth0_domain = safe_get_env_var("AUTH0_DOMAIN")
+    
 
     ##########################################
     # Flask App Instance
@@ -90,8 +87,6 @@ def create_app():
         x_xss_protection=False,
         x_content_type_options=True
     )
-
-    auth0_service.initialize(auth0_domain, auth0_audience)
 
     @app.after_request
     def add_headers(response):

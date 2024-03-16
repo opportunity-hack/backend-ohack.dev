@@ -1,17 +1,18 @@
 from api.newsletters.newsletter_service import address, get_subscription_list,add_to_subscription_list,check_subscription_list,remove_from_subscription_list
 from .smtp import send_newsletters,format_message
 import json
-
+import os
 import logging
 from flask import (
     Blueprint,
     request
 )
-from api.security.guards import (
-    authorization_guard,
-    permissions_guard,
-    admin_messages_permissions
-)
+
+from propelauth_flask import init_auth, current_user
+auth = init_auth(
+    os.getenv("PROPEL_AUTH_URL"),
+    os.getenv("PROPEL_AUTH_KEY"),
+)    
 
 
 bp_name = 'api-newsletter'
@@ -22,21 +23,21 @@ logger = logging.getLogger("myapp")
 
 
 @bp.route("/")
-@authorization_guard
-@permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def newsletter():
     return get_subscription_list()
 
 
 @bp.route("/<user_id>")
-# @authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
+# @auth.require_user
+# @auth.require_org_member_with_permission("admin_permissions")
 def check_sub(user_id):
     return check_subscription_list(user_id=user_id)
 
 @bp.route("/send_newsletter", methods=["POST"])
-# @authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
+# @auth.require_user
+# @auth.require_org_member_with_permission("admin_permissions")
 def send_newsletter():
     data = request.get_json()
     try:
@@ -61,8 +62,8 @@ def preview_newsletter():
 
 
 @bp.route("/<subscribe>/<doc_id>", methods=["POST"])
-@authorization_guard
-# @permissions_guard([admin_messages_permissions.read])
+@auth.require_user
+# @auth.require_org_member_with_permission("admin_permissions")
 def newsletter_signup(subscribe, doc_id):
     print("authorized")
     if subscribe == "subscribe":
