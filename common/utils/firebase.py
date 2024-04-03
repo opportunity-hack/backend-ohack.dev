@@ -34,6 +34,15 @@ def get_team_by_name(team_name):
     for doc in docs:
         adict = doc.to_dict()
         return adict["slack_channel"]
+    
+def get_team_by_name(name):
+    db = get_db()  # this connects to our Firestore database
+    docs = db.collection('teams').where("name", "==", name).stream()
+
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        return adict
 
 
 def get_users_in_team_by_name(team_name):
@@ -54,6 +63,20 @@ def get_user_by_id(id):
     adict = doc.to_dict()
     adict["id"] = doc.id
     return adict
+
+def get_user_by_user_id(user_id):
+    SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
+    slack_user_id = f"{SLACK_PREFIX}{user_id}"
+    # log slack_user_id
+    logger.info(f"Looking up user {slack_user_id}")
+    
+    db = get_db()  # this connects to our Firestore database
+    docs = db.collection('users').where("user_id", "==", slack_user_id).stream()
+
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        return adict
 
 def get_user_by_email(email_address):
     db = get_db()  # this connects to our Firestore database
@@ -524,16 +547,6 @@ def create_new_hackathon(title, type, links, teams, donation_current, donation_g
     db.collection("hackathons").add(hackathon)
     return hackathon
 
-
-def get_team_by_name(name):
-    db = get_db()  # this connects to our Firestore database
-    docs = db.collection('teams').where("name", "==", name).stream()
-
-    for doc in docs:
-        adict = doc.to_dict()
-        adict["id"] = doc.id
-        return adict
-
 def add_hackathon_to_user_and_teams(hackathon_id):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Adding hackathon {hackathon_id} to user and teams")
@@ -797,23 +810,6 @@ def add_reference_link_to_problem_statement(problem_statement_id, name, link):
     db.collection("problem_statements").document(problem_statement_id).set(
         {"references": reference_links}, merge=True)
     
-
-
-def get_user_by_user_id(user_id):
-    SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
-    slack_user_id = f"{SLACK_PREFIX}{user_id}"
-    # log slack_user_id
-    logger.info(f"Looking up user {slack_user_id}")
-    
-    db = get_db()  # this connects to our Firestore database
-    docs = db.collection('users').where("user_id", "==", slack_user_id).stream()
-
-    for doc in docs:
-        adict = doc.to_dict()
-        adict["id"] = doc.id
-        return adict
-
-
 def add_certificate(user_id, certificate):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Adding certificate {certificate} to user {user_id}")

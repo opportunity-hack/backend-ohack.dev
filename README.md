@@ -82,7 +82,7 @@ flask run
 
 ## Getting Firestore Emulator Running
 - [Setting up a fully functional database in Firebase Emulator](https://medium.com/rpdstartup/setting-up-a-fully-functional-database-in-firebase-emulator-b0199fff0252)
-- [Get gCloud CLI](https://cloud.google.com/docs/authentication/provide-credentials-adc) since the Python code will rely on this to connec to FireStore
+- [Get gCloud CLI](https://cloud.google.com/docs/authentication/provide-credentials-adc) since the Python code will rely on this to connect to FireStore
 ```
 brew install java11
 sudo ln -sfn /usr/local/opt/openjdk\@11/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk.11.jdk

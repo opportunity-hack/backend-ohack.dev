@@ -1,0 +1,2 @@
+class Hackathon:
+    id = None

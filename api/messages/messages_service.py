@@ -931,13 +931,9 @@ def get_problem_statement_from_id(problem_id):
 
 def get_user_from_slack_id(user_id):
     db = get_db()  # this connects to our Firestore database
-    # Even though there is 1 record, we always will need to iterate on it
     docs = db.collection('users').where("user_id", "==", user_id).stream()
-    
-    for doc in docs:
-        return doc
-        
-    return None
+    user, *rest = docs
+    return user
 
 
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
@@ -953,65 +949,6 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(credential=cred)
 
 
-@limits(calls=50, period=ONE_MINUTE)
-def save(
-        user_id=None,
-        email=None,
-        last_login=None,
-        profile_image=None,
-        name=None,
-        nickname=None):
-    logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
-    # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
-
-
-    if user_id is None or email is None or last_login is None or profile_image is None:
-        logger.error(
-            f"Empty values provided for user_id: {user_id},\
-                email: {email}, or last_login: {last_login}\
-                    or profile_image: {profile_image}")
-        return
-
-    db = get_db()  # this connects to our Firestore database
-    
-    # Even though there is 1 record, we always will need to iterate on it
-    docs = db.collection('users').where("user_id","==",user_id).stream()
-    
-    for doc in docs:
-        res = doc.to_dict()
-        logger.debug(res)
-        if res:
-            # Found result already in DB, update
-            logger.debug(f"Found user (_id={doc.id}), updating last_login")
-            update_res = db.collection("users").document(doc.id).update(
-                {
-                    "last_login": last_login,
-                    "profile_image": profile_image,
-                    "name": name,
-                    "nickname": nickname
-            })
-            logger.debug(f"Update Result: {update_res}")
-        
-        logger.debug("User Save End")
-        return doc.id # Should only have 1 record, but break just for safety 
-
-    default_badge = db.collection('badges').document("fU7c3ne90Rd1TB5P7NTV")
-
-    doc_id = uuid.uuid1().hex
-    insert_res = db.collection('users').document(doc_id).set({
-        "email_address": email,
-        "last_login": last_login,
-        "user_id": user_id,
-        "profile_image": profile_image,
-        "name": name,
-        "nickname": nickname,
-        "badges": [
-            default_badge
-        ],
-        "teams": []
-    })
-    logger.debug(f"Insert Result: {insert_res}")
-    return doc_id
     
 
 
@@ -1209,7 +1146,7 @@ def get_profile_metadata(propel_id):
             Image:{profile_image}")
 
     # Call firebase to see if account exists and save these details
-    db_id = save(
+    db_id = save_user(
             user_id=user_id,
             email=email,
             last_login=last_login,
