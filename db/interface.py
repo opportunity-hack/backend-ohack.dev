@@ -8,7 +8,12 @@ class DatabaseInterface(metaclass=abc.ABCMeta):
                 hasattr(__subclass, 'save_user') and
                 callable(__subclass.save_user) and
                 hasattr(__subclass, 'upsert_user') and
-                callable(__subclass.upsert_user))
+                callable(__subclass.upsert_user) and
+                hasattr(__subclass, 'get_user_by_doc_id') and
+                callable(__subclass.get_user_by_doc_id) and
+                #TODO: Kill with fire. Leaky abstraction
+                hasattr(__subclass, 'get_user_doc_reference') and
+                callable(__subclass.get_user_doc_reference))
     
     #Team:
     #get_team_by_name

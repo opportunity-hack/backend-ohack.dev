@@ -4,6 +4,7 @@ from common.utils.firebase import get_hackathon_by_event_id, upsert_news
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
 from api.messages.message import Message
+from api.users.users_service import get_propel_user_details_by_id, get_slack_user_from_propel_user_id, save_user
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -21,12 +22,14 @@ from ratelimit import limits
 from datetime import datetime, timedelta
 import os
 
+from db.db import get_user, get_user_doc_reference
+
 
 
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.INFO)
 
-USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-" #the followed by UXXXXX for slack
+
 google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
 
 CDN_SERVER = os.getenv("CDN_SERVER")
@@ -348,7 +351,7 @@ def get_problem_statement_list():
 
 def save_team(propel_user_id, json):    
     send_slack_audit(action="save_team", message="Saving", payload=json)
-    slack_user = get_user_from_slack_id(propel_user_id)
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     slack_user_id = slack_user["sub"]
     
     db = get_db()  # this connects to our Firestore database
@@ -365,8 +368,8 @@ def save_team(propel_user_id, json):
     problem_statement_id = json["problemStatementId"]
     github_username = json["githubUsername"]
     
-    
-    user = get_user_from_slack_id(slack_user_id).reference
+    #TODO: This is not the way
+    user = get_user_doc_reference(slack_user_id)
     if user is None:
         return
 
@@ -504,7 +507,7 @@ def join_team(propel_user_id, json):
     logger.debug("Join Team Start")
 
     logger.info(f"Join Team UserId: {propel_user_id} Json: {json}")
-    slack_user = get_user_from_slack_id(propel_user_id)
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     userid = slack_user["sub"]
 
     team_id = json["teamId"]
@@ -512,7 +515,7 @@ def join_team(propel_user_id, json):
     team_doc = db.collection('teams').document(team_id)
     team_dict = team_doc.get().to_dict()
 
-    user_doc = get_user_from_slack_id(userid).reference
+    user_doc = get_user_doc_reference(userid)
     user_dict = user_doc.get().to_dict()
     new_teams = []
     for t in user_dict["teams"]:
@@ -554,7 +557,7 @@ def unjoin_team(propel_user_id, json):
     logger.info(f"Unjoin for UserId: {propel_user_id} Json: {json}")
     team_id = json["teamId"]
 
-    slack_user = get_user_from_slack_id(propel_user_id)
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     userid = slack_user["sub"]
 
     ## 1. Lookup Team, Remove User 
@@ -685,7 +688,7 @@ def save_helping_status(propel_user_id, json):
 
     npo_id =  json["npo_id"] if "npo_id" in json else ""
     
-    user_obj = get_user_from_slack_id(user_id)
+    user_obj = get_user(user_id)
     my_date = datetime.now()
 
 
@@ -929,12 +932,6 @@ def get_problem_statement_from_id(problem_id):
     doc = db.collection('problem_statements').document(problem_id)
     return doc
 
-def get_user_from_slack_id(user_id):
-    db = get_db()  # this connects to our Firestore database
-    docs = db.collection('users').where("user_id", "==", user_id).stream()
-    user, *rest = docs
-    return user
-
 
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
 # Instead of giving the code a json file, we use environment variables so we don't have to source control a secrets file
@@ -1015,83 +1012,6 @@ def get_history(db_id):
     return result
 
 
-def get_slack_user_from_token(token):
-    resp = requests.get(
-        "https://slack.com/api/openid.connect.userInfo", 
-        headers={"Authorization": f"Bearer {token}"}
-    )
-    '''
-    {'ok': True, 'sub': 'UC31XTRT5', 'https://slack.com/user_id': 'UC31XTRT5', 'https://slack.com/team_id': 'T1Q7936BH', 'email': 'greg.vannoni@gmail.com', 'email_verified': True, 'date_email_verified': 1632009763, 'name': 'Greg V [Staff/Mentor]', 'picture': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'given_name': 'Greg', 'family_name': 'V [Staff/Mentor]', 'locale': 'en-US', 'https://slack.com/team_name': 'Opportunity Hack', 'https://slack.com/team_domain': 'opportunity-hack', 'https://slack.com/user_image_24': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_24.png', 'https://slack.com/user_image_32': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_32.png', 'https://slack.com/user_image_48': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_48.png', 'https://slack.com/user_image_72': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_72.png', 'https://slack.com/user_image_192': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_192.png', 'https://slack.com/user_image_512': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'https://slack.com/user_image_1024': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_1024.png', 'https://slack.com/team_image_34': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_34.png', 'https://slack.com/team_image_44': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_44.png', 'https://slack.com/team_image_68': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_68.png', 'https://slack.com/team_image_88': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_88.png', 'https://slack.com/team_image_102': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_102.png', 'https://slack.com/team_image_132': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_132.png', 
-    'https://slack.com/team_image_230': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_230.png', 'https://slack.com/team_image_default': False}
-    '''
-    
-    json = resp.json()
-    if not json["ok"]:
-        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
-        return None    
-    
-    if "sub" not in json:
-        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
-        return None
-
-    # Add prefix to sub 
-    json["sub"] = USER_ID_PREFIX + json["sub"]
-
-    logger.info(f"Slack RESP: {json}")
-    return json
-
-def get_slack_user_from_propel_user_id(propel_id):
-    resp = requests.get(
-        f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token", headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
-        
-        )    
-    json = resp.json()    
-    logger.debug(f"Propel RESP: {json}")
-    
-    slack_token = json['slack']['access_token']
-    return get_slack_user_from_token(slack_token)
-    
-
-
-
-def get_propel_user_details_by_id(propel_id):    
-    slack_user = get_slack_user_from_propel_user_id(propel_id)    
-    user_id = slack_user["sub"]
-    
-
-    email = slack_user["email"]
-    # Use todays date in UTC  (Z)
-    last_login = datetime.now().isoformat() + "Z"
-    # Print the last login in native format and in Arizona time
-    import pytz
-    logger.debug(f"Last Login: {last_login} {datetime.now().astimezone(pytz.timezone('US/Arizona')).isoformat()}")  
-
-    
-    # https://slack.com/user_image_192
-    profile_image = slack_user["https://slack.com/user_image_192"]
-    name = slack_user["name"]
-    nickname = slack_user["given_name"]
-
-    return email, user_id, last_login, profile_image, name, nickname
-
-
-
-def get_user_by_id(id):
-    # Log
-    logger.debug(f"Get User By ID: {id}")
-    db = get_db()  # this connects to our Firestore database
-    collection = db.collection('users')
-    doc = collection.document(id)
-    doc_get = doc.get()
-    res = doc_get.to_dict()
-    # Only keep these fields since this is a public api
-    fields = ["name", "profile_image", "user_id", "nickname"]
-    # Check if the field is in the response first
-    res = {k: res[k] for k in fields if k in res}
-
-    
-    logger.debug(f"Get User By ID Result: {res}")
-    return res    
 
 def save_profile_metadata(propel_id, json):
     send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
@@ -1104,7 +1024,7 @@ def save_profile_metadata(propel_id, json):
     json = json["metadata"]
         
     # See if the user exists
-    user = get_user_from_slack_id(slack_user_id)
+    user = get_user(slack_user_id)
     if user is None:
         return
     else:
@@ -1228,10 +1148,6 @@ async def save_lead(json):
 @limits(calls=30, period=ONE_MINUTE)
 async def save_lead_async(json):
     await save_lead(json)
-
-
-    
-    
 
 @cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
 def get_news(news_limit=3, news_id=None):

@@ -50,6 +50,10 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         finally:
             pass
         return u
+    
+    def get_user_raw_by_id(self, db, id):
+        u = db.collection('users').document(id).get()
+        pass
 
     def save_user(self, doc_id, email, last_login, user_id, profile_image, name, nickname):
         #TODO: Does this throw?
@@ -89,5 +93,30 @@ class FirestoreDatabaseInterface(DatabaseInterface):
                 })
             
         return user_id if update_res is not None else None
+    
+    def get_user_from_slack_id(self, user_id):
+        db = self.get_db()  # this connects to our Firestore database
+        docs = db.collection('users').where("user_id", "==", user_id).stream()
+        user = None
+        temp = None
+        if docs is not None:
+            try: 
+                temp, *rest = docs
+            finally:
+                pass
+
+        if temp is not None:
+            user = User.deserialize(temp)
+
+        return user
+
+    def get_user_by_doc_id(self, id):
+        db = self.get_db()  # this connects to our Firestore database
+        return self.get_user_raw_by_id(db, id)
+
+    def get_user_doc_reference(self, user_id):
+        db = self.get_db()
+        u = self.get_user_raw(db, user_id)
+        return u.reference if u is not None else None
     
 DatabaseInterface.register(FirestoreDatabaseInterface)
