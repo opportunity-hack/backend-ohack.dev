@@ -1067,6 +1067,7 @@ def get_history(db_id):
         "expertise": res["expertise"] if "expertise" in res else "",
         "education": res["education"] if "education" in res else "",
         "shirt_size": res["shirt_size"] if "shirt_size" in res else "",
+        "why": res["why"] if "why" in res else "",
         "role": res["role"] if "role" in res else "",
         "company": res["company"] if "company" in res else ""
 
@@ -1104,12 +1105,14 @@ def get_slack_user_from_token(token):
     return json
 
 def get_slack_user_from_propel_user_id(propel_id):
-    resp = requests.get(
-        f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token", headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
+    url = f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token"
+    logger.debug(f"Propel URL: {url}")
+    resp = requests.get(url, headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
         
         )    
+    logger.debug(f"Propel RESP: {resp}")
     json = resp.json()    
-    logger.debug(f"Propel RESP: {json}")
+    logger.debug(f"Propel JSON RESP: {json}")
     
     slack_token = json['slack']['access_token']
     return get_slack_user_from_token(slack_token)
@@ -1119,7 +1122,9 @@ def get_slack_user_from_propel_user_id(propel_id):
 
 def get_propel_user_details_by_id(propel_id):    
     slack_user = get_slack_user_from_propel_user_id(propel_id)    
+    logger.debug(f"Slack User: {slack_user}")
     user_id = slack_user["sub"]
+    logger.debug(f"User ID: {user_id}")
     
 
     email = slack_user["email"]
@@ -1174,7 +1179,7 @@ def save_profile_metadata(propel_id, json):
         logger.info(f"User exists: {user.id}")        
     
     # Only update metadata that is in the json
-    metadataList = ["role", "expertise", "education", "company", "shirt_size"]
+    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size"]
 
     for m in metadataList:        
         if m in json:
