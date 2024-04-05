@@ -1,15 +1,18 @@
 import os 
 
+from common.utils import safe_get_env_var
+
 from flask import (
     Blueprint,
     request,
     g
 )
 
+from api.users.users_service import get_user_by_id
+
 from api.messages.messages_service import (
     get_profile_metadata,
     save_profile_metadata,
-    get_user_by_id,
     get_public_message,
     get_protected_message,
     get_admin_message,
@@ -36,10 +39,13 @@ from api.messages.messages_service import (
     get_news
 )
 
+PROPEL_AUTH_URL = safe_get_env_var("PROPEL_AUTH_URL")
+PROPEL_AUTH_KEY = safe_get_env_var("PROPEL_AUTH_KEY")
+
 from propelauth_flask import init_auth, current_user
 auth = init_auth(
-    os.getenv("PROPEL_AUTH_URL"),
-    os.getenv("PROPEL_AUTH_KEY"),
+    auth_url=PROPEL_AUTH_URL,
+    api_key=PROPEL_AUTH_KEY
 )    
 
 

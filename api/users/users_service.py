@@ -3,7 +3,7 @@ import os
 from ratelimit import limits
 import requests
 from model.user import User
-from db.db import get_user, save_user, upsert_user
+from db.db import get_user, save_user, upsert_user, get_user_by_doc_id
 import logging
 import pytz
 
@@ -127,12 +127,13 @@ def get_user_by_id(id):
 
     if u is not None:
         # Check if the field is in the response first
-        res = {k: u[k] for k in fields if k in u}
+        temp = u.to_dict()
+        res = {k: temp[k] for k in fields if k in temp}
 
     
     logger.debug(f"Get User By ID Result: {res}")
     return res    
 
 def get_user_from_slack_id(user_id):
+    return get_user(user_id)
     
-    return user

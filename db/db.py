@@ -1,13 +1,13 @@
 from common.utils import safe_get_env_var
 from model.user import User
-from firestore import FirestoreDatabaseInterface
-from mem import InMemoryDatabaseInterface
-from interface import DatabaseInterface
+from db.firestore import FirestoreDatabaseInterface
+from db.mem import InMemoryDatabaseInterface
+from db.interface import DatabaseInterface
 
 db:DatabaseInterface = None
 
 # TODO: Select db interface based on env
-in_memory = safe_get_env_var("FIREBASE_CERT_CONFIG") == 'True'
+in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
 if in_memory:
     db = InMemoryDatabaseInterface()

@@ -1,6 +1,6 @@
 import firebase_admin
 from firebase_admin import credentials, firestore
-from . import safe_get_env_var
+from common.utils import safe_get_env_var
 from mockfirestore import MockFirestore
 import json
 from model.user import User
@@ -8,6 +8,9 @@ from db.interface import DatabaseInterface
 import logging
 
 mockfirestore = None
+
+#TODO: Put in .env? Feels configurable. Or maybe something we would want to protect with a secret?
+SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
 
 if safe_get_env_var("ENVIRONMENT") == "test":
     mockfirestore = MockFirestore() #Only used when testing
@@ -53,7 +56,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     
     def get_user_raw_by_id(self, db, id):
         u = db.collection('users').document(id).get()
-        pass
+        return u
 
     def save_user(self, doc_id, email, last_login, user_id, profile_image, name, nickname):
         #TODO: Does this throw?
@@ -95,8 +98,10 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         return user_id if update_res is not None else None
     
     def get_user_from_slack_id(self, user_id):
+        
         db = self.get_db()  # this connects to our Firestore database
-        docs = db.collection('users').where("user_id", "==", user_id).stream()
+        slack_user_id = f"{SLACK_PREFIX}{user_id}"
+        docs = db.collection('users').where("user_id", "==", slack_user_id).stream()
         user = None
         temp = None
         if docs is not None:
