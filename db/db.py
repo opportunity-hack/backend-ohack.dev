@@ -22,11 +22,17 @@ def get_user_by_doc_id(id):
     u = db.get_user_by_doc_id(id)
     return u
 
+def upsert_profile_metadata(user: User):
+    return db.upsert_profile_metadata(user)
+
 def upsert_user(user:User):
     return db.upsert_user(user)
 
 def save_user(user:User):
     return db.save_user(user)
+
+def get_user_profile_by_db_id(id):
+    return db.get_user_profile_by_db_id(id)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

@@ -11,9 +11,13 @@ class DatabaseInterface(metaclass=abc.ABCMeta):
                 callable(__subclass.upsert_user) and
                 hasattr(__subclass, 'get_user_by_doc_id') and
                 callable(__subclass.get_user_by_doc_id) and
+                hasattr(__subclass, 'upsert_profile_metadata') and
+                callable(__subclass.upsert_profile_metadata) and
                 #TODO: Kill with fire. Leaky abstraction
                 hasattr(__subclass, 'get_user_doc_reference') and
-                callable(__subclass.get_user_doc_reference))
+                callable(__subclass.get_user_doc_reference) and
+                hasattr(__subclass, 'get_user_profile_by_db_id') and
+                callable(__subclass.get_user_profile_by_db_id))
     
     #Team:
     #get_team_by_name

@@ -1,6 +1,6 @@
 import os 
 
-from common.utils import safe_get_env_var
+from common.auth import auth, auth_user
 
 from flask import (
     Blueprint,
@@ -8,11 +8,9 @@ from flask import (
     g
 )
 
-from api.users.users_service import get_user_by_id
+from api.users.users_service import get_profile_metadata
 
 from api.messages.messages_service import (
-    get_profile_metadata,
-    save_profile_metadata,
     get_public_message,
     get_protected_message,
     get_admin_message,
@@ -39,14 +37,7 @@ from api.messages.messages_service import (
     get_news
 )
 
-PROPEL_AUTH_URL = safe_get_env_var("PROPEL_AUTH_URL")
-PROPEL_AUTH_KEY = safe_get_env_var("PROPEL_AUTH_KEY")
-
-from propelauth_flask import init_auth, current_user
-auth = init_auth(
-    auth_url=PROPEL_AUTH_URL,
-    api_key=PROPEL_AUTH_KEY
-)    
+   
 
 
 bp_name = 'api-messages'
@@ -168,8 +159,8 @@ def get_team(team_id):
 @auth.require_user
 @bp.route("/team", methods=["POST"])
 def add_team():
-    if current_user and current_user.user_id:
-        return save_team(current_user.user_id, request.get_json())
+    if auth_user and auth_user.user_id:
+        return save_team(auth_user.user_id, request.get_json())
     else:
         print("** ERROR Could not obtain user details for POST /team")
         return None
@@ -179,8 +170,8 @@ def add_team():
 @auth.require_user
 def remove_user_from_team():
     
-    if current_user and current_user.user_id:        
-        return vars(unjoin_team(current_user.user_id, request.get_json()))
+    if auth_user and auth_user.user_id:        
+        return vars(unjoin_team(auth_user.user_id, request.get_json()))
     else:
         print("** ERROR Could not obtain user details for DELETE /team")
         return None
@@ -189,47 +180,21 @@ def remove_user_from_team():
 @bp.route("/team", methods=["PATCH"])
 @auth.require_user
 def add_user_to_team():
-    if current_user and current_user.user_id:
-        return vars(join_team(current_user.user_id, request.get_json()))
+    if auth_user and auth_user.user_id:
+        return vars(join_team(auth_user.user_id, request.get_json()))
     else:
         print("** ERROR Could not obtain user details for PATCH /team")
         return None
-
-
 
 # Used to register when person says they are helping, not helping
 @bp.route("/profile/helping", methods=["POST"])
 @auth.require_user
 def register_helping_status():
-    if current_user and current_user.user_id:    
-        return vars(save_helping_status(current_user.user_id, request.get_json()))
+    if auth_user and auth_user.user_id:    
+        return vars(save_helping_status(auth_user.user_id, request.get_json()))
     else:
         print("** ERROR Could not obtain user details for POST /profile/helping")
         return None
-
-# Used to provide profile details - user must be logged in
-@bp.route("/profile", methods=["GET"])
-@auth.require_user
-def profile():            
-    # user_id is a uuid from Propel Auth
-    if current_user and current_user.user_id:        
-        return vars(get_profile_metadata(current_user.user_id))
-    else:
-        return None
-
-@bp.route("/profile", methods=["POST"])
-@auth.require_user
-def save_profile():        
-    if current_user and current_user.user_id:        
-        return vars(save_profile_metadata(current_user.user_id, request.get_json()))
-    else:
-        return None
-
-
-# Get user profile by user id
-@bp.route("/profile/<id>", methods=["GET"])
-def get_profile_by_id(id):
-    return get_user_by_id(id)
 
 # Used to provide feedback details - user must be logged in
 @bp.route("/feedback/<user_id>")

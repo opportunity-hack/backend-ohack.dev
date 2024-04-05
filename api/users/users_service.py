@@ -2,10 +2,13 @@ from datetime import datetime
 import os
 from ratelimit import limits
 import requests
+from common.utils.slack import send_slack_audit
 from model.user import User
-from db.db import get_user, save_user, upsert_user, get_user_by_doc_id
+from db.db import get_user, save_user, upsert_user, get_user_by_doc_id, get_user_profile_by_db_id, upsert_profile_metadata
 import logging
 import pytz
+from cachetools import cached, LRUCache, TTLCache
+from cachetools.keys import hashkey
 
 #TODO: service level logging?
 logger = logging.getLogger(__name__)
@@ -16,6 +19,9 @@ ONE_MINUTE = 1*60
 
 #TODO: get last part of this from env
 USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-" #the followed by UXXXXX for slack
+
+def clear_cache():        
+    get_profile_metadata.cache_clear()
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_user(
@@ -115,10 +121,10 @@ def get_propel_user_details_by_id(propel_id):
 
     return email, user_id, last_login, profile_image, name, nickname
 
-def get_user_by_id(id):
+def get_profile_by_db_id(id):
     # Log
     logger.debug(f"Get User By ID: {id}")
-    u = get_user_by_doc_id(id)
+    u = get_user_profile_by_db_id(id)
 
     res = None
 
@@ -127,7 +133,7 @@ def get_user_by_id(id):
 
     if u is not None:
         # Check if the field is in the response first
-        temp = u.to_dict()
+        temp = vars(u)
         res = {k: temp[k] for k in fields if k in temp}
 
     
@@ -137,3 +143,69 @@ def get_user_by_id(id):
 def get_user_from_slack_id(user_id):
     return get_user(user_id)
     
+# 10 minute cache for 100 objects LRU
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=100, period=ONE_MINUTE)
+def get_profile_metadata(propel_id):
+    logger.debug("Profile Metadata")
+    
+    email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_id)
+    
+    send_slack_audit(
+        action="login", message=f"User went to profile: {user_id} with email: {email}")
+    
+
+    logger.debug(f"Account Details:\
+            \nEmail: {email}\nSlack User ID: {user_id}\n\
+            Last Login:{last_login}\
+            Image:{profile_image}")
+
+    # Call firebase to see if account exists and save these details
+    db_id = save_user(
+            user_id=user_id,
+            email=email,
+            last_login=last_login,
+            profile_image=profile_image,
+            name=name,
+            nickname=nickname)
+
+    # Get all of the user history and profile data from the DB
+    response = get_history(db_id)
+    logger.debug(f"get_profile_metadata {response}")
+
+    return response #TODO: Breaking API change
+
+# Caching is not needed because the parent method already is caching
+@limits(calls=100, period=ONE_MINUTE)
+def get_history(db_id):
+    logger.debug("Get History Start")
+    result = get_user_profile_by_db_id(db_id)
+
+    logger.debug(f"RESULT\n{result}")
+    return result
+
+def save_profile_metadata(propel_id, json):
+    
+    send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
+    
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
+
+    logger.info(f"Save Profile Metadata for {slack_user_id} {json}")
+
+    json = json["metadata"]
+        
+    # See if the user exists
+    user = get_user(slack_user_id)
+    if user is None:
+        return
+    else:
+        logger.info(f"User exists: {user.id}")   
+        user.update_from_metadata(json)     
+        upsert_profile_metadata(user)
+    
+        # Clear cache for get_profile_metadata
+        get_profile_metadata.cache_clear()
+            
+    return user #TODO: Breaking API change
+

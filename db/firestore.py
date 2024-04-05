@@ -4,6 +4,7 @@ from common.utils import safe_get_env_var
 from mockfirestore import MockFirestore
 import json
 from model.user import User
+from model.hackathon import Hackathon
 from db.interface import DatabaseInterface
 import logging
 
@@ -38,18 +39,28 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         default_badge = db.collection('badges').document("fU7c3ne90Rd1TB5P7NTV")
         return default_badge
 
+    #TODO: Delete. Same as get_user_from_slack_id
     def get_user(self, user_id):
         u = None
         db = self.get_db()
         temp = self.get_user_raw(db, user_id)
         if temp is not None:
-            u = User.deserialize(temp)
+            u = User.deserialize(temp.to_dict())
         return u
+    
+    def get_user_from_slack_id(self, user_id):
+        db = self.get_db()  # this connects to our Firestore database
+        user = None
+        temp = self.get_user_raw(db, user_id)
+        if temp is not None:
+            user = User.deserialize(temp.to_dict())
+        return user
 
     def get_user_raw(self, db, user_id):
+        slack_user_id = f"{SLACK_PREFIX}{user_id}"
         u = None
         try:
-            u, *rest = db.collection('users').where("user_id","==",user_id).stream()
+            u, *rest = db.collection('users').where("user_id", "==", slack_user_id).stream()
         finally:
             pass
         return u
@@ -96,24 +107,6 @@ class FirestoreDatabaseInterface(DatabaseInterface):
                 })
             
         return user_id if update_res is not None else None
-    
-    def get_user_from_slack_id(self, user_id):
-        
-        db = self.get_db()  # this connects to our Firestore database
-        slack_user_id = f"{SLACK_PREFIX}{user_id}"
-        docs = db.collection('users').where("user_id", "==", slack_user_id).stream()
-        user = None
-        temp = None
-        if docs is not None:
-            try: 
-                temp, *rest = docs
-            finally:
-                pass
-
-        if temp is not None:
-            user = User.deserialize(temp)
-
-        return user
 
     def get_user_by_doc_id(self, id):
         db = self.get_db()  # this connects to our Firestore database
@@ -123,5 +116,59 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         db = self.get_db()
         u = self.get_user_raw(db, user_id)
         return u.reference if u is not None else None
+    
+    def get_user_profile_by_db_id(self, db_id):
+        db = self.get_db()  # this connects to our Firestore database
+        temp = self.get_user_raw_by_id(db, db_id)
+
+        user = None
+
+        if temp is not None:
+
+            res = temp.to_dict()
+            user = User.deserialize(res)
+
+            if "hackathons" in res:
+                #TODO: I think we use get_all here
+                # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
+                for h in res["hackathons"]:
+                    rec = h.get().to_dict()
+
+                    hackathon = Hackathon.deserialize(rec)
+                    user.hackathons.append(hackathon)
+
+                    #TODO: I think we use get_all here
+                    # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
+                    for n in rec["nonprofits"]:
+                        
+                        npo_doc = n.get() #TODO: Deal with lazy-loading in db layer
+                        npo_id = npo_doc.id
+                        npo = n.get().to_dict()
+                        npo["id"] = npo_id
+                                        
+                        if npo and "problem_statements" in npo:
+                            # This is duplicate date as we should already have this
+                            del npo["problem_statements"]
+                        hackathon.nonprofits.append(npo)
+
+                    user.hackathons.append(hackathon)
+
+            #TODO:
+            # if "badges" in res:
+            #     for h in res["badges"]:
+            #         _badges.append(h.get().to_dict())
+
+            
+
+        return user
+
+    def upsert_profile_metadata(self, user:User):
+    
+        db = self.get_db()  # this connects to our Firestore database
+        data = user.serialize_profile_metadata()
+        update_res = db.collection("users").document(user.id).set( data, merge=True)        
+        logger.info(f"Update Result: {update_res}")
+                
+        return
     
 DatabaseInterface.register(FirestoreDatabaseInterface)

@@ -8,6 +8,13 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     def get_user(self, user_id):
         return the_user
     
+    def get_user_by_doc_id(self, user_id):
+        return the_user
+    
+    #TODO: Kill with fire. Leaky abstraction
+    def get_user_doc_reference(self, user_id):
+        return None
+    
     def save_user(self, doc_id, email, last_login, user_id, profile_image, name, nickname):
         the_user.id = doc_id
         the_user.email_address = email
@@ -23,3 +30,5 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         the_user.profile_image = profile_image
         the_user.name = name
         the_user.nickname = nickname
+
+DatabaseInterface.register(InMemoryDatabaseInterface)
