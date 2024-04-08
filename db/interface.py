@@ -5,8 +5,8 @@ class DatabaseInterface(metaclass=abc.ABCMeta):
     def __subclasshook__(cls, __subclass: type) -> bool:
         return (hasattr(__subclass, 'get_user') and
                 callable(__subclass.get_user) and
-                hasattr(__subclass, 'save_user') and
-                callable(__subclass.save_user) and
+                hasattr(__subclass, 'insert_user') and
+                callable(__subclass.insert_user) and
                 hasattr(__subclass, 'upsert_user') and
                 callable(__subclass.upsert_user) and
                 hasattr(__subclass, 'get_user_by_doc_id') and

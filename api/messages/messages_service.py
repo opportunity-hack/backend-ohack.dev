@@ -4,7 +4,7 @@ from common.utils.firebase import get_hackathon_by_event_id, upsert_news
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
 from api.messages.message import Message
-from api.users.users_service import get_propel_user_details_by_id, get_slack_user_from_propel_user_id, save_user
+from services.users_service import get_propel_user_details_by_id, get_slack_user_from_propel_user_id, save_user
 import json
 import uuid
 from datetime import datetime, timedelta

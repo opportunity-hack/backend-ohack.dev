@@ -13,6 +13,9 @@ mockfirestore = None
 #TODO: Put in .env? Feels configurable. Or maybe something we would want to protect with a secret?
 SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
 
+# TODO: Select db interface based on env
+in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
+
 if safe_get_env_var("ENVIRONMENT") == "test":
     mockfirestore = MockFirestore() #Only used when testing
 else: 
@@ -69,24 +72,24 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         u = db.collection('users').document(id).get()
         return u
 
-    def save_user(self, doc_id, email, last_login, user_id, profile_image, name, nickname):
+    def insert_user(self, user:User):
         #TODO: Does this throw?
         db = self.get_db()
         default_badge = self.get_default_badge()
         #TODO: Does this throw?
-        insert_res = db.collection('users').document(doc_id).set({
-            "email_address": email,
-            "last_login": last_login,
-            "user_id": user_id,
-            "profile_image": profile_image,
-            "name": name,
-            "nickname": nickname,
+        insert_res = db.collection('users').document(user.id).set({
+            "email_address": user.email_address,
+            "last_login": user.last_login,
+            "user_id": user.user_id,
+            "profile_image": user.profile_image,
+            "name": user.name,
+            "nickname": user.nickname,
             "badges": [
                 default_badge
             ],
             "teams": []
         })
-        return doc_id if insert_res is not None else None
+        return user.id if insert_res is not None else None
     
     def upsert_user(self, user_id, last_login,  profile_image, name, nickname):
 

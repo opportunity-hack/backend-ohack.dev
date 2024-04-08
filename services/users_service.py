@@ -4,7 +4,7 @@ from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit
 from model.user import User
-from db.db import get_user, save_user, upsert_user, get_user_by_doc_id, get_user_profile_by_db_id, upsert_profile_metadata
+from db.db import get_user, insert_user, upsert_user, get_user_by_doc_id, get_user_profile_by_db_id, upsert_profile_metadata
 import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
@@ -37,7 +37,6 @@ def save_user(
     logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
 
-
     if user_id is None or email is None or last_login is None or profile_image is None:
         logger.error(
             f"Empty values provided for user_id: {user_id},\
@@ -49,6 +48,7 @@ def save_user(
     user = get_user(user_id)
 
     if user is not None:
+        print(user)
         user.last_login = last_login
         user.profile_image = profile_image
         user.name = name
@@ -62,7 +62,7 @@ def save_user(
         user.profile_image = profile_image
         user.name = name
         user.nickname = nickname
-        res = save_user(user)
+        res = insert_user(user)
 
     return user.id if res is not None else None
 

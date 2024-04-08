@@ -8,7 +8,7 @@ from flask import (
     g
 )
 
-from api.users.users_service import get_profile_metadata
+from services.users_service import get_profile_metadata
 
 from api.messages.messages_service import (
     get_public_message,

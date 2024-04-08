@@ -1,7 +1,6 @@
 from common.utils import safe_get_env_var
 from model.user import User
-from db.firestore import FirestoreDatabaseInterface
-from db.mem import InMemoryDatabaseInterface
+
 from db.interface import DatabaseInterface
 
 db:DatabaseInterface = None
@@ -9,9 +8,11 @@ db:DatabaseInterface = None
 # TODO: Select db interface based on env
 in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
-if in_memory:
+if in_memory: 
+    from db.mem import InMemoryDatabaseInterface
     db = InMemoryDatabaseInterface()
 else:
+    from db.firestore import FirestoreDatabaseInterface
     db = FirestoreDatabaseInterface()
 
 def get_user(user_id):
@@ -28,8 +29,9 @@ def upsert_profile_metadata(user: User):
 def upsert_user(user:User):
     return db.upsert_user(user)
 
-def save_user(user:User):
-    return db.save_user(user)
+def insert_user(user:User):
+    print('Inserting user')
+    return db.insert_user(user)
 
 def get_user_profile_by_db_id(id):
     return db.get_user_profile_by_db_id(id)
