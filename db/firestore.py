@@ -42,16 +42,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         default_badge = db.collection('badges').document("fU7c3ne90Rd1TB5P7NTV")
         return default_badge
 
-    #TODO: Delete. Same as get_user_from_slack_id
-    def get_user(self, user_id):
-        u = None
-        db = self.get_db()
-        temp = self.get_user_raw(db, user_id)
-        if temp is not None:
-            u = User.deserialize(temp.to_dict())
-        return u
-    
-    def get_user_from_slack_id(self, user_id):
+    def fetch_user_by_user_id(self, user_id):
         db = self.get_db()  # this connects to our Firestore database
         user = None
         temp = self.get_user_raw(db, user_id)
@@ -111,7 +102,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             
         return user_id if update_res is not None else None
 
-    def get_user_by_doc_id(self, id):
+    def fetch_user_by_db_id(self, id):
         db = self.get_db()  # this connects to our Firestore database
         return self.get_user_raw_by_id(db, id)
 

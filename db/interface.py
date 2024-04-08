@@ -3,14 +3,14 @@ import abc
 class DatabaseInterface(metaclass=abc.ABCMeta):
     @classmethod
     def __subclasshook__(cls, __subclass: type) -> bool:
-        return (hasattr(__subclass, 'get_user') and
-                callable(__subclass.get_user) and
+        return (hasattr(__subclass, 'fetch_user_by_user_id') and
+                callable(__subclass.fetch_user_by_user_id) and
                 hasattr(__subclass, 'insert_user') and
                 callable(__subclass.insert_user) and
                 hasattr(__subclass, 'upsert_user') and
                 callable(__subclass.upsert_user) and
-                hasattr(__subclass, 'get_user_by_doc_id') and
-                callable(__subclass.get_user_by_doc_id) and
+                hasattr(__subclass, 'fetch_user_by_db_id') and
+                callable(__subclass.fetch_user_by_db_id) and
                 hasattr(__subclass, 'upsert_profile_metadata') and
                 callable(__subclass.upsert_profile_metadata) and
                 #TODO: Kill with fire. Leaky abstraction

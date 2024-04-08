@@ -1,10 +1,14 @@
 import argparse
 import os
 import sys
-sys.path.append("../") #TODO: Handle passing scripts/ohack.py to the interpreter. IOW, don't require python to be run from this directory.
+import json
 import logging
+
+sys.path.append("../") #TODO: Handle passing scripts/ohack.py to the interpreter. IOW, don't require python to be run from this directory.
+
 from dotenv import load_dotenv
 from services import users_service
+from model.user import User
 from common.utils import safe_get_env_var
 from db.mem import flush
 from datetime import datetime
@@ -45,9 +49,26 @@ create_user_parser.add_argument("--nickname", required=False, default=None)
 create_user_parser.add_argument("-p", "--profile-image", required=True) # Required according to users service
 # Skipping last login as it really doesn't make any sense here
 
+
+get_user_parser = users_subparsers.add_parser("get")
+
+get_user_parser.add_argument("-u", "--user-id", required=False, default=None)
+get_user_parser.add_argument("-i", "--id", required=False, default=None)
+
+
 delete_user_parser = users_subparsers.add_parser("delete")
 
-
+def get_user(user_id, id):
+    u:User | None = None
+    if user_id is not None:
+        u = users_service.get_user_from_slack_id(user_id)
+    elif id is not None:
+        u = users_service.get_user_by_db_id(id)
+    else:
+        raise ValueError("Either user id or db id must be provided")
+    
+    print(f'User: \n {json.dumps(vars(u))}')
+    
 
 def create_user(user_id, email, name, nickname=None, profile_image=None):
 
@@ -73,6 +94,9 @@ if hasattr(args, 'command'):
         # Handle user related commands
         if hasattr(args, 'users_command'):
             print(f'Users command: {args.users_command}')
+
+            if args.users_command == 'get':
+                get_user(args.user_id, args.id)
 
             if args.users_command == 'create':
                 print('Creating a user')

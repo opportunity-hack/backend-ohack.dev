@@ -4,7 +4,7 @@ from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit
 from model.user import User
-from db.db import get_user, insert_user, upsert_user, get_user_by_doc_id, get_user_profile_by_db_id, upsert_profile_metadata
+from db.db import fetch_user_by_user_id, fetch_user_by_db_id, insert_user, upsert_user, get_user_profile_by_db_id, upsert_profile_metadata
 import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
@@ -45,7 +45,7 @@ def save_user(
         return None
 
     # TODO: Call get_user from db here
-    user = get_user(user_id)
+    user = fetch_user_by_user_id(user_id)
 
     if user is not None:
         print(user)
@@ -139,9 +139,6 @@ def get_profile_by_db_id(id):
     
     logger.debug(f"Get User By ID Result: {res}")
     return res    
-
-def get_user_from_slack_id(user_id):
-    return get_user(user_id)
     
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600))
@@ -196,7 +193,7 @@ def save_profile_metadata(propel_id, json):
     json = json["metadata"]
         
     # See if the user exists
-    user = get_user(slack_user_id)
+    user = fetch_user_by_user_id(slack_user_id)
     if user is None:
         return
     else:
@@ -208,4 +205,10 @@ def save_profile_metadata(propel_id, json):
         get_profile_metadata.cache_clear()
             
     return user #TODO: Breaking API change
+
+def get_user_by_db_id(id):
+    return fetch_user_by_db_id(id)
+
+def get_user_from_slack_id(user_id):
+    return fetch_user_by_user_id(user_id)
 

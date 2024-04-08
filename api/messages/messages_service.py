@@ -22,7 +22,7 @@ from ratelimit import limits
 from datetime import datetime, timedelta
 import os
 
-from db.db import get_user, get_user_doc_reference
+from db.db import fetch_user_by_user_id, get_user_doc_reference
 
 
 
@@ -687,7 +687,7 @@ def save_helping_status(propel_user_id, json):
 
     npo_id =  json["npo_id"] if "npo_id" in json else ""
     
-    user_obj = get_user(user_id)
+    user_obj = fetch_user_by_user_id(user_id)
     my_date = datetime.now()
 
 

@@ -27,19 +27,23 @@ def flush():
     users.excel_export(USERS_EXCEL_FILE_PATH)
 
 class InMemoryDatabaseInterface(DatabaseInterface):
-    def get_user(self, user_id):
-        res = None
+    def fetch_user_by_user_id(self, user_id):
+        res:User | None = None
         try:
-            res = users.by.user_id[user_id]
-        except KeyError:
+            temp = users.by.user_id[user_id] # This is going to return a SimpleNamespace for imported rows.
+            res = User.deserialize(vars(temp))
+        except KeyError as e:
+            print(f'fetch_user_by_user_id error: {e}')
             pass
         return res
     
-    def get_user_by_doc_id(self, id):
+    def fetch_user_by_db_id(self, id):
         res = None
         try:
-            res = users.by.id[id]
-        except KeyError:
+            temp = users.by.id[id] # This is going to return a SimpleNamespace for imported rows.
+            res = User.deserialize(vars(temp))
+        except KeyError as e:
+            print(f'fetch_user_by_db_id error: {e}')
             pass
         return res
     

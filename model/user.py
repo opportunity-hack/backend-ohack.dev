@@ -20,6 +20,7 @@ class User:
     @classmethod
     def deserialize(cls, d):
         u = User()
+        u.id = d['id']
         u.email_address = d['email_address']
         u.last_login = d['last_login']
         u.user_id = d['user_id']

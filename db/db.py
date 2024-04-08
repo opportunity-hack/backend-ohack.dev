@@ -15,12 +15,12 @@ else:
     from db.firestore import FirestoreDatabaseInterface
     db = FirestoreDatabaseInterface()
 
-def get_user(user_id):
-    u = db.get_user(user_id)
+def fetch_user_by_user_id(user_id):
+    u = db.fetch_user_by_user_id(user_id)
     return u
 
-def get_user_by_doc_id(id):
-    u = db.get_user_by_doc_id(id)
+def fetch_user_by_db_id(id):
+    u = db.fetch_user_by_db_id(id)
     return u
 
 def upsert_profile_metadata(user: User):
