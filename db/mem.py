@@ -27,24 +27,42 @@ def flush():
     users.excel_export(USERS_EXCEL_FILE_PATH)
 
 class InMemoryDatabaseInterface(DatabaseInterface):
-    def fetch_user_by_user_id(self, user_id):
-        res:User | None = None
+
+    def fetch_user_by_user_id_raw(self, user_id):
+        res = None
         try:
-            temp = users.by.user_id[user_id] # This is going to return a SimpleNamespace for imported rows.
-            res = User.deserialize(vars(temp))
+            res = users.by.user_id[user_id] # This is going to return a SimpleNamespace for imported rows.
         except KeyError as e:
+            # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
+            print(f'fetch_user_by_user_id_raw error: {e}')
+        return res
+
+    def fetch_user_by_user_id(self, user_id):
+        res = None
+        try:
+            temp = self.fetch_user_by_user_id_raw(user_id) # This is going to return a SimpleNamespace for imported rows.
+            res = User.deserialize(vars(temp)) if temp is not None else None
+        except KeyError as e:
+            # A key error here means that User.deserialize was expecting a property in the data that wasn't there
             print(f'fetch_user_by_user_id error: {e}')
-            pass
         return res
     
+    def fetch_user_by_db_id_raw(self, id):
+        res = None
+        try:
+            res = users.by.id[id] # This is going to return a SimpleNamespace for imported rows.
+        except KeyError as e:
+            # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
+            print(f'fetch_user_by_db_id error: {e}')
+        return res
+
     def fetch_user_by_db_id(self, id):
         res = None
         try:
-            temp = users.by.id[id] # This is going to return a SimpleNamespace for imported rows.
-            res = User.deserialize(vars(temp))
+            temp = self.fetch_user_by_db_id_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            res = User.deserialize(vars(temp)) if temp is not None else None
         except KeyError as e:
             print(f'fetch_user_by_db_id error: {e}')
-            pass
         return res
     
     #TODO: Kill with fire. Leaky abstraction
@@ -57,7 +75,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         # Fields on here need to show up in exactly the column order in the CSV
         d = {'id': user.id, 
              'name': user.name,
-             'email': user.email_address, 
+             'email_address': user.email_address, 
              'user_id': user.user_id, 
              'last_login': user.last_login, 
              'profile_image': user.profile_image,
@@ -67,13 +85,26 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         users.insert(d)
 
-    def upsert_user(self, user_id, last_login,  profile_image, name, nickname):
-        d = users.by.user_id[user_id]
+        return User.deserialize(d)
 
-        d['last_login'] = last_login
-        d['the_user.user_id'] = user_id
-        d['profile_image'] = profile_image
-        d['name'] = name
-        d['nickname'] = nickname
+    def update_user(self, user: User):
+        d = users.by.id[user.id]
+
+        d.last_login = user.last_login
+        d.profile_image = user.profile_image
+        d.name = user.name
+        d.nickname = user.nickname
+        return User.deserialize(vars(d))
+
+    def delete_user_by_user_id(self, user_id):
+        raw = self.fetch_user_by_user_id_raw(user_id)
+        users.remove(raw)
+        return User.deserialize(vars(raw))
+
+    def delete_user_by_db_id(self, id):
+        raw = self.fetch_user_by_db_id_raw(id)
+        users.remove(raw)
+        return User.deserialize(vars(raw))
+        pass
 
 DatabaseInterface.register(InMemoryDatabaseInterface)

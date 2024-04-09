@@ -4,7 +4,7 @@ from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit
 from model.user import User
-from db.db import fetch_user_by_user_id, fetch_user_by_db_id, insert_user, upsert_user, get_user_profile_by_db_id, upsert_profile_metadata
+from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
 import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
@@ -22,6 +22,51 @@ USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-" #the followed by UXXXXX for slack
 
 def clear_cache():        
     get_profile_metadata.cache_clear()
+
+def finish_saving_insert(
+        user_id=None,
+        email=None,
+        last_login=None,
+        profile_image=None,
+        name=None,
+        nickname=None):
+    user = User()
+    user.user_id = user_id
+    user.email_address = email
+    user.last_login = last_login
+    user.profile_image = profile_image
+    user.name = name
+    user.nickname = nickname
+    return insert_user(user)
+
+def finish_saving_update(
+        user,
+        last_login=None,
+        profile_image=None,
+        name=None,
+        nickname=None):
+        user.last_login = last_login
+        user.profile_image = profile_image
+        user.name = name
+        user.nickname = nickname
+        return update_user(user)
+
+@limits(calls=50, period=ONE_MINUTE)
+def upsert_user(
+        id=None,
+        user_id=None,
+        last_login=None,
+        profile_image=None,
+        name=None,
+        nickname=None):
+    
+    user = None
+    if id is not None:
+        user = fetch_user_by_db_id(id)
+    else:
+        user = fetch_user_by_user_id(user_id)
+
+    return finish_saving_update(user, last_login, profile_image, name, nickname)
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_user(
@@ -48,21 +93,10 @@ def save_user(
     user = fetch_user_by_user_id(user_id)
 
     if user is not None:
-        print(user)
-        user.last_login = last_login
-        user.profile_image = profile_image
-        user.name = name
-        user.nickname = nickname
-        res = upsert_user(user)
+        user = finish_saving_update(user, last_login, profile_image, name, nickname)
+        
     else:
-        user = User()
-        user.user_id = user_id
-        user.email_address = email
-        user.last_login = last_login
-        user.profile_image = profile_image
-        user.name = name
-        user.nickname = nickname
-        res = insert_user(user)
+        user = finish_saving_insert(user_id, email, last_login, profile_image, name, nickname)
 
     return user.id if res is not None else None
 
@@ -212,3 +246,8 @@ def get_user_by_db_id(id):
 def get_user_from_slack_id(user_id):
     return fetch_user_by_user_id(user_id)
 
+def remove_user_by_db_id(id):
+    return delete_user_by_db_id(id)
+
+def remove_user_by_slack_id(user_id):
+    return delete_user_by_user_id(user_id)

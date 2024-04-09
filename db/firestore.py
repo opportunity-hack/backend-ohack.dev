@@ -45,12 +45,12 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     def fetch_user_by_user_id(self, user_id):
         db = self.get_db()  # this connects to our Firestore database
         user = None
-        temp = self.get_user_raw(db, user_id)
+        temp = self.fetch_user_raw_by_user_id(db, user_id)
         if temp is not None:
             user = User.deserialize(temp.to_dict())
         return user
 
-    def get_user_raw(self, db, user_id):
+    def fetch_user_raw_by_user_id(self, db, user_id):
         slack_user_id = f"{SLACK_PREFIX}{user_id}"
         u = None
         try:
@@ -59,7 +59,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             pass
         return u
     
-    def get_user_raw_by_id(self, db, id):
+    def fetch_user_raw_by_db_id(self, db, id):
         u = db.collection('users').document(id).get()
         return u
 
@@ -82,13 +82,13 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         })
         return user.id if insert_res is not None else None
     
-    def upsert_user(self, user_id, last_login,  profile_image, name, nickname):
+    def update_user(self, user: User):
 
         update_res = None
 
         db = self.get_db()
 
-        doc = self.get_user_raw(db, user_id)
+        doc = self.fetch_user_raw_by_db_id(db, user.id)
 
         if doc is not None:
 
@@ -104,16 +104,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
     def fetch_user_by_db_id(self, id):
         db = self.get_db()  # this connects to our Firestore database
-        return self.get_user_raw_by_id(db, id)
+        return self.fetch_user_raw_by_id(db, id)
 
     def get_user_doc_reference(self, user_id):
         db = self.get_db()
-        u = self.get_user_raw(db, user_id)
+        u = self.fetch_user_raw_by_user_id(db, user_id)
         return u.reference if u is not None else None
     
     def get_user_profile_by_db_id(self, db_id):
         db = self.get_db()  # this connects to our Firestore database
-        temp = self.get_user_raw_by_id(db, db_id)
+        temp = self.fetch_user_raw_by_id(db, db_id)
 
         user = None
 
@@ -164,5 +164,45 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         logger.info(f"Update Result: {update_res}")
                 
         return
+    
+
+    def finish_deleting_user(self, db, user, user_id):
+        if user is None:
+            logger.error(f"**ERROR User {user_id} does not exist")
+            raise Exception(f"User {user_id} does not exist")
+
+        # Delete user from all teams
+        if "teams" in user.to_dict():
+            user_teams = user.to_dict()["teams"]
+            for team in user_teams:
+                team_users = team.get().to_dict()["users"]
+                team_users.remove(user.reference)
+                db.collection("teams").document(team.id).set({"users": team_users}, merge=True)
+
+        # Delete user
+        db.collection("users").document(user_id).delete()
+
+    def delete_user_by_user_id(self, user_id):
+        db = self.get_db()  # this connects to our Firestore database
+        logger.info(f"Deleting user {user_id}")
+        
+
+        # Get user
+        user = self.fetch_user_raw_by_user_id(db, user_id)
+        self.finish_deleting_user(db, user, user_id)
+
+        return User.deserialize(user.to_dict())
+
+    def delete_user_by_db_id(self, user_id):
+        db = self.get_db()  # this connects to our Firestore database
+        logger.info(f"Deleting user {user_id}")
+
+        # Get user
+        user = self.fetch_user_raw_by_db_id(db, user_id)
+        self.finish_deleting_user(db, user, user_id)
+
+        return User.deserialize(user.to_dict())
+
+        
     
 DatabaseInterface.register(FirestoreDatabaseInterface)

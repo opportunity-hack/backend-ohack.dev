@@ -26,8 +26,8 @@ def fetch_user_by_db_id(id):
 def upsert_profile_metadata(user: User):
     return db.upsert_profile_metadata(user)
 
-def upsert_user(user:User):
-    return db.upsert_user(user)
+def update_user(user:User):
+    return db.update_user(user)
 
 def insert_user(user:User):
     print('Inserting user')
@@ -35,6 +35,12 @@ def insert_user(user:User):
 
 def get_user_profile_by_db_id(id):
     return db.get_user_profile_by_db_id(id)
+
+def delete_user_by_user_id(user_id):
+    return db.delete_user_by_user_id(user_id)
+
+def delete_user_by_db_id(id):
+    return db.delete_user_by_db_id(id)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

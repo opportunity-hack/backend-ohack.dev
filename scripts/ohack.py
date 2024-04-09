@@ -30,33 +30,23 @@ subparsers = parser.add_subparsers(title="Entities", dest='command')
 users_parser = subparsers.add_parser("users")
 users_subparsers = users_parser.add_subparsers(title="Commands", dest='users_command')
 
-create_user_parser = users_subparsers.add_parser("create")
+user_id_parser = argparse.ArgumentParser(add_help=False)
+user_id_parser.add_argument("-u", "--user-id", required=False, default=None)
+user_id_parser.add_argument("-i", "--id", required=False, default=None)
 
-'''
-Save User api method signature:
-def save_user(
-        user_id=None,
-        email=None,
-        last_login=None,
-        profile_image=None,
-        name=None,
-        nickname=None):
-'''
-create_user_parser.add_argument("-u", "--user-id", required=True)
-create_user_parser.add_argument("-n", "--name", required=False, default=None) # Not required according to users service
-create_user_parser.add_argument("-e", "--email", required=True)
-create_user_parser.add_argument("--nickname", required=False, default=None)
-create_user_parser.add_argument("-p", "--profile-image", required=True) # Required according to users service
-# Skipping last login as it really doesn't make any sense here
+user_attributes_parser = argparse.ArgumentParser(add_help=False)
+user_attributes_parser.add_argument("-n", "--name", required=False, default=None) # Not required according to users service
+user_attributes_parser.add_argument("-e", "--email", required=False, default=None)
+user_attributes_parser.add_argument("--nickname", required=False, default=None)
+user_attributes_parser.add_argument("-p", "--profile-image", required=False, default=None) # Required according to users service
 
+create_user_parser = users_subparsers.add_parser("create", parents=[user_id_parser, user_attributes_parser])
 
-get_user_parser = users_subparsers.add_parser("get")
+get_user_parser = users_subparsers.add_parser("get", parents=[user_id_parser])
 
-get_user_parser.add_argument("-u", "--user-id", required=False, default=None)
-get_user_parser.add_argument("-i", "--id", required=False, default=None)
+delete_user_parser = users_subparsers.add_parser("delete", parents=[user_id_parser])
 
-
-delete_user_parser = users_subparsers.add_parser("delete")
+update_user_parser = users_subparsers.add_parser("update", parents=[user_id_parser, user_attributes_parser])
 
 def get_user(user_id, id):
     u:User | None = None
@@ -68,6 +58,40 @@ def get_user(user_id, id):
         raise ValueError("Either user id or db id must be provided")
     
     print(f'User: \n {json.dumps(vars(u))}')
+
+    if in_memory:
+        flush()
+
+def delete_user(user_id, id):
+    u:User | None = None
+    if user_id is not None:
+        u = users_service.remove_user_by_slack_id(user_id)
+    elif id is not None:
+        u = users_service.remove_user_by_db_id(id)
+    else:
+        raise ValueError("Either user id or db id must be provided")
+    
+    print(f'Deleted: \n {json.dumps(vars(u))}')
+
+    if in_memory:
+        flush()
+
+def update_user(user_id, id, profile_image, name, nickname):
+    if user_id is  None and id is None:
+        raise ValueError("Either user id or db id must be provided")
+    
+    u = users_service.upsert_user(
+        id,
+        user_id,
+        str(datetime.now()), #last_login
+        profile_image,
+        name,
+        nickname)
+
+    print(f'Updated: \n {json.dumps(vars(u))}')
+
+    if in_memory:
+        flush()
     
 
 def create_user(user_id, email, name, nickname=None, profile_image=None):
@@ -102,6 +126,8 @@ if hasattr(args, 'command'):
                 print('Creating a user')
                 create_user(args.user_id, args.email, args.name, args.nickname, args.profile_image if 'profile_image' in args else None)       
 
+            if args.users_command == 'delete':
+                delete_user(args.user_id, args.id)
 
-
-#TODO: Figure out what command has been called and parse args accordingly
+            if args.users_command == 'update':
+                update_user(args.user_id, args.id, args.profile_image, args.name, args.nickname)
