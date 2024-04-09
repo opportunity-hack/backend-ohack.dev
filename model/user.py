@@ -36,16 +36,16 @@ class User:
     
     def serialize_profile_metadata(self):
         d = {}
-
+        props = dir(self)
         for m in metadata_list:        
-            if m in self:
-                d[m] = self[m]
+            if m in props:
+                d[m] = getattr(self, m)
 
         return d
     
     def update_from_metadata(self, d):
+        props = dir(self)
         for m in metadata_list:        
-            if m in d:
-                self[m] = d[m]
-
+            if m in d and m in props:
+                setattr(self, m, d[m])
         return

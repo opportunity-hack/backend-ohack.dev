@@ -28,8 +28,9 @@ def profile():
 @bp.route("/profile", methods=["POST"])
 @auth.require_user
 def save_profile():        
-    if auth_user and auth_user.user_id:        
-        return users_service.save_profile_metadata(auth_user.user_id, request.get_json())
+    if auth_user and auth_user.user_id: 
+        u: User | None = users_service.save_profile_metadata(auth_user.user_id, request.get_json())
+        return vars(u) if u is not None else None
     else:
         return None
 
