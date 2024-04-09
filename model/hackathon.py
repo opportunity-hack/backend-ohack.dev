@@ -1,4 +1,4 @@
-# Excerpted from firebase.by
+# Excerpted from firebase.py
 # hackathon = {
 #         "title": title,
 #         "type": type,

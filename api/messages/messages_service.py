@@ -885,53 +885,6 @@ def save_hackathon(json):
     )
 
 
-@limits(calls=50, period=ONE_MINUTE)
-def save_problem_statement(json):
-    db = get_db()  # this connects to our Firestore database
-    logger.debug("Problem Statement Save")
-
-    logger.debug("Clearing cache")    
-    clear_cache()
-    logger.debug("Done Clearing cache")
-
-
-    send_slack_audit(action="save_problem_statement",
-                     message="Saving", payload=json)
-    # TODO: In this current form, you will overwrite any information that matches the same NPO name
-
-    doc_id = uuid.uuid1().hex
-    title = json["title"]
-    description = json["description"]
-    first_thought_of = json["first_thought_of"]
-    github = json["github"]
-    references = json["references"]
-    status = json["status"]
-        
-
-    collection = db.collection('problem_statements')
-
-    insert_res = collection.document(doc_id).set({
-        "title": title,
-        "description": description,
-        "first_thought_of": first_thought_of,
-        "github": github,
-        "references": references,
-        "status": status        
-    })
-
-    logger.debug(f"Insert Result: {insert_res}")
-
-    return Message(
-        "Saved Problem Statement"
-    )
-
-
-def get_problem_statement_from_id(problem_id):
-    db = get_db()    
-    doc = db.collection('problem_statements').document(problem_id)
-    return doc
-
-
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
 # Instead of giving the code a json file, we use environment variables so we don't have to source control a secrets file
 cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))

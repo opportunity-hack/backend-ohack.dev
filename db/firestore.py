@@ -3,6 +3,7 @@ from firebase_admin import credentials, firestore
 from common.utils import safe_get_env_var
 from mockfirestore import MockFirestore
 import json
+from model.problem_statement import ProblemStatement
 from model.user import User
 from model.hackathon import Hackathon
 from db.interface import DatabaseInterface
@@ -42,6 +43,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         db = self.get_db()
         default_badge = db.collection('badges').document("fU7c3ne90Rd1TB5P7NTV")
         return default_badge
+
+    # ----------------------- Users --------------------------------------------
 
     def fetch_user_by_user_id(self, user_id):
         db = self.get_db()  # this connects to our Firestore database
@@ -220,5 +223,28 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         return User.deserialize(user.to_dict())
 
         
+    # ----------------------- Problem Statements --------------------------------------------
     
+    def insert_problem_statement(self, problem_statement: ProblemStatement):
+        db = self.get_db()
+
+        # TODO: In this current form, you will overwrite any information that matches the same NPO name
+        
+        problem_statement.id = uuid.uuid1().hex
+            
+        collection = db.collection('problem_statements')
+
+        insert_res = collection.document(problem_statement.id).set({
+            "title": problem_statement.title,
+            "description": problem_statement.description if 'description' in problem_statement else None,
+            "first_thought_of": problem_statement.first_thought_of if 'first_thought_of' in problem_statement else None,
+            "github": problem_statement.github if 'github' in problem_statement else None,
+            # "references": TODO: What is this
+            "status": problem_statement.status if 'status' in problem_statement else None        
+        })
+
+        logger.debug(f"Insert Result: {insert_res}")
+
+        return problem_statement if insert_res is not None else None
+
 DatabaseInterface.register(FirestoreDatabaseInterface)

@@ -4,13 +4,15 @@ import sys
 import json
 import logging
 
+
+
 sys.path.append("../") #TODO: Handle passing scripts/ohack.py to the interpreter. IOW, don't require python to be run from this directory.
 
+from model.problem_statement import ProblemStatement
 from dotenv import load_dotenv
-from services import users_service
+from services import users_service, problem_statements_service
 from model.user import User
 from common.utils import safe_get_env_var
-from db.mem import flush
 from datetime import datetime
 
 load_dotenv()
@@ -48,6 +50,14 @@ delete_user_parser = users_subparsers.add_parser("delete", parents=[user_id_pars
 
 update_user_parser = users_subparsers.add_parser("update", parents=[user_id_parser, user_attributes_parser])
 
+problem_statements_parser = subparsers.add_parser("problemstatements")
+problem_statements_subparsers = problem_statements_parser.add_subparsers(title="Commands", dest='problem_statements_command')
+
+problem_statement_id_parser = argparse.ArgumentParser(add_help=False)
+problem_statement_id_parser.add_argument("-s", "--problem-statement-id", required=False, default=None)
+
+get_problem_statement_parser = problem_statements_subparsers.add_parser("get", parents=[problem_statement_id_parser])
+
 def get_user(user_id, id):
     u:User | None = None
     if user_id is not None:
@@ -59,9 +69,6 @@ def get_user(user_id, id):
     
     print(f'User: \n {json.dumps(vars(u))}')
 
-    if in_memory:
-        flush()
-
 def delete_user(user_id, id):
     u:User | None = None
     if user_id is not None:
@@ -72,9 +79,6 @@ def delete_user(user_id, id):
         raise ValueError("Either user id or db id must be provided")
     
     print(f'Deleted: \n {json.dumps(vars(u))}')
-
-    if in_memory:
-        flush()
 
 def update_user(user_id, id, profile_image, name, nickname):
     if user_id is  None and id is None:
@@ -89,9 +93,6 @@ def update_user(user_id, id, profile_image, name, nickname):
         nickname)
 
     print(f'Updated: \n {json.dumps(vars(u))}')
-
-    if in_memory:
-        flush()
     
 
 def create_user(user_id, email, name, nickname=None, profile_image=None):
@@ -104,8 +105,10 @@ def create_user(user_id, email, name, nickname=None, profile_image=None):
         profile_image=profile_image,
         last_login=str(datetime.now()))
 
-    if in_memory:
-        flush()
+
+def get_problem_statement(id):
+    s = problem_statements_service.get_problem_statement(id)
+    print(f'User: \n {json.dumps(vars(s))}')
 
 args = parser.parse_args()
 
@@ -122,12 +125,19 @@ if hasattr(args, 'command'):
             if args.users_command == 'get':
                 get_user(args.user_id, args.id)
 
-            if args.users_command == 'create':
+            elif args.users_command == 'create':
                 print('Creating a user')
                 create_user(args.user_id, args.email, args.name, args.nickname, args.profile_image if 'profile_image' in args else None)       
 
-            if args.users_command == 'delete':
+            elif args.users_command == 'delete':
                 delete_user(args.user_id, args.id)
 
-            if args.users_command == 'update':
+            elif args.users_command == 'update':
                 update_user(args.user_id, args.id, args.profile_image, args.name, args.nickname)
+
+    elif args.command == 'problemstatements':
+        # Handle problem statement related commands
+        if hasattr(args, 'problem_statements_command'):
+            
+            if args.problem_statements_command == 'get':
+                get_problem_statement(args.problem_statement_id)

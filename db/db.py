@@ -1,4 +1,5 @@
 from common.utils import safe_get_env_var
+from model.problem_statement import ProblemStatement
 from model.user import User
 
 from db.interface import DatabaseInterface
@@ -14,6 +15,8 @@ if in_memory:
 else:
     from db.firestore import FirestoreDatabaseInterface
     db = FirestoreDatabaseInterface()
+
+#Users
 
 def fetch_user_by_user_id(user_id):
     u = db.fetch_user_by_user_id(user_id)
@@ -41,6 +44,15 @@ def delete_user_by_user_id(user_id):
 
 def delete_user_by_db_id(id):
     return db.delete_user_by_db_id(id)
+
+# Problem Statements
+def fetch_problem_statement_by_id(id):
+    return db.fetch_problem_statement_by_id(id)
+
+def insert_problem_statement(problem_statement: ProblemStatement):
+    return db.insert_problem_statement(problem_statement)
+
+
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

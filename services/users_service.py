@@ -10,7 +10,6 @@ import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 
-#TODO: service level logging?
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
