@@ -187,6 +187,7 @@ def add_user_to_team():
         return None
 
 # Used to register when person says they are helping, not helping
+# TODO: This route feels like it should be relative to a problem statement. NOT a user.
 @bp.route("/profile/helping", methods=["POST"])
 @auth.require_user
 def register_helping_status():

@@ -1,3 +1,4 @@
+from model.user import User
 from services import users_service
 from common.utils import safe_get_env_var
 from common.auth import auth, auth_user
@@ -18,8 +19,9 @@ bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
 @auth.require_user
 def profile():            
     # user_id is a uuid from Propel Auth
-    if auth_user and auth_user.user_id:        
-        return vars(users_service.get_profile_metadata(auth_user.user_id))
+    if auth_user and auth_user.user_id:  
+        u: User | None = users_service.get_profile_metadata(auth_user.user_id)
+        return vars(u) if u is not None else None
     else:
         return None
 
@@ -27,7 +29,7 @@ def profile():
 @auth.require_user
 def save_profile():        
     if auth_user and auth_user.user_id:        
-        return vars(users_service.save_profile_metadata(auth_user.user_id, request.get_json()))
+        return users_service.save_profile_metadata(auth_user.user_id, request.get_json())
     else:
         return None
 

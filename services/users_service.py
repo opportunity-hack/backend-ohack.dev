@@ -76,8 +76,6 @@ def save_user(
         profile_image=None,
         name=None,
         nickname=None):
-    
-    res = None
 
     logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
@@ -98,7 +96,7 @@ def save_user(
     else:
         user = finish_saving_insert(user_id, email, last_login, profile_image, name, nickname)
 
-    return user.id if res is not None else None
+    return user.id if user is not None else None
 
 def get_slack_user_from_token(token):
     resp = requests.get(

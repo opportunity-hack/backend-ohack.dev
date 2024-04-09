@@ -7,6 +7,7 @@ from model.user import User
 from model.hackathon import Hackathon
 from db.interface import DatabaseInterface
 import logging
+import uuid
 
 mockfirestore = None
 
@@ -45,21 +46,29 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     def fetch_user_by_user_id(self, user_id):
         db = self.get_db()  # this connects to our Firestore database
         user = None
-        temp = self.fetch_user_raw_by_user_id(db, user_id)
+        temp = self.fetch_user_by_user_id_raw(db, user_id)
         if temp is not None:
-            user = User.deserialize(temp.to_dict())
+            ref = temp.reference
+            d = temp.to_dict()
+            d['id'] = ref.id #Get the document id from the reference
+            user = User.deserialize(d)
         return user
 
-    def fetch_user_raw_by_user_id(self, db, user_id):
-        slack_user_id = f"{SLACK_PREFIX}{user_id}"
+    def fetch_user_by_user_id_raw(self, db, user_id):
+        #TODO: Why are we putting the slack prefix in the DB?
+        if user_id.startswith(SLACK_PREFIX):
+            slack_user_id = user_id
+        else:
+            slack_user_id = f"{SLACK_PREFIX}{user_id}"
+
         u = None
         try:
             u, *rest = db.collection('users').where("user_id", "==", slack_user_id).stream()
-        finally:
+        except ValueError:
             pass
         return u
     
-    def fetch_user_raw_by_db_id(self, db, id):
+    def fetch_user_by_db_id_raw(self, db, id):
         u = db.collection('users').document(id).get()
         return u
 
@@ -67,6 +76,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         #TODO: Does this throw?
         db = self.get_db()
         default_badge = self.get_default_badge()
+        #Set user id
+        user.id = uuid.uuid1().hex
         #TODO: Does this throw?
         insert_res = db.collection('users').document(user.id).set({
             "email_address": user.email_address,
@@ -88,71 +99,74 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         db = self.get_db()
 
-        doc = self.fetch_user_raw_by_db_id(db, user.id)
+        doc = self.fetch_user_by_user_id_raw(db, user.user_id)
 
         if doc is not None:
 
             update_res = db.collection("users").document(doc.id).update(
                 {
-                    "last_login": last_login,
-                    "profile_image": profile_image,
-                    "name": name,
-                    "nickname": nickname
+                    "last_login": user.last_login,
+                    "profile_image": user.profile_image,
+                    "name": user.name,
+                    "nickname": user.nickname
                 })
             
-        return user_id if update_res is not None else None
+        return user if update_res is not None else None
 
     def fetch_user_by_db_id(self, id):
         db = self.get_db()  # this connects to our Firestore database
-        return self.fetch_user_raw_by_id(db, id)
+        return self.fetch_user_by_db_id_raw(db, id)
 
     def get_user_doc_reference(self, user_id):
         db = self.get_db()
-        u = self.fetch_user_raw_by_user_id(db, user_id)
+        u = self.fetch_user_by_user_id_raw (db, user_id)
         return u.reference if u is not None else None
     
     def get_user_profile_by_db_id(self, db_id):
         db = self.get_db()  # this connects to our Firestore database
-        temp = self.fetch_user_raw_by_id(db, db_id)
+        temp = self.fetch_user_by_db_id_raw(db, db_id)
 
         user = None
 
         if temp is not None:
 
-            res = temp.to_dict()
-            user = User.deserialize(res)
+            d = temp.to_dict()
+            
+            if d is not None:
+                d['id'] = temp.id
+                user = User.deserialize(d)
 
-            if "hackathons" in res:
-                #TODO: I think we use get_all here
-                # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
-                for h in res["hackathons"]:
-                    rec = h.get().to_dict()
-
-                    hackathon = Hackathon.deserialize(rec)
-                    user.hackathons.append(hackathon)
-
+                if "hackathons" in d:
                     #TODO: I think we use get_all here
                     # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
-                    for n in rec["nonprofits"]:
-                        
-                        npo_doc = n.get() #TODO: Deal with lazy-loading in db layer
-                        npo_id = npo_doc.id
-                        npo = n.get().to_dict()
-                        npo["id"] = npo_id
-                                        
-                        if npo and "problem_statements" in npo:
-                            # This is duplicate date as we should already have this
-                            del npo["problem_statements"]
-                        hackathon.nonprofits.append(npo)
+                    for h in d["hackathons"]:
+                        rec = h.get().to_dict()
 
-                    user.hackathons.append(hackathon)
+                        hackathon = Hackathon.deserialize(rec)
+                        user.hackathons.append(hackathon)
 
-            #TODO:
-            # if "badges" in res:
-            #     for h in res["badges"]:
-            #         _badges.append(h.get().to_dict())
+                        #TODO: I think we use get_all here
+                        # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
+                        for n in rec["nonprofits"]:
+                            
+                            npo_doc = n.get() #TODO: Deal with lazy-loading in db layer
+                            npo_id = npo_doc.id
+                            npo = n.get().to_dict()
+                            npo["id"] = npo_id
+                                            
+                            if npo and "problem_statements" in npo:
+                                # This is duplicate date as we should already have this
+                                del npo["problem_statements"]
+                            hackathon.nonprofits.append(npo)
 
-            
+                        user.hackathons.append(hackathon)
+
+                #TODO:
+                # if "badges" in res:
+                #     for h in res["badges"]:
+                #         _badges.append(h.get().to_dict())
+
+                
 
         return user
 
