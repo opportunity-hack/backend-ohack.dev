@@ -140,7 +140,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
                     #TODO: I think we use get_all here
                     # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
                     for h in d["hackathons"]:
-                        rec = h.get().to_dict()
+                        h_doc = h.get()
+                        rec = h_doc.to_dict()
+                        rec['id'] = h_doc.id
 
                         hackathon = Hackathon.deserialize(rec)
                         user.hackathons.append(hackathon)

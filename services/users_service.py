@@ -161,7 +161,7 @@ def get_profile_by_db_id(id):
     res = None
 
     # Only keep these fields since this is a public api
-    fields = ["name", "profile_image", "user_id", "nickname"]
+    fields = ["name", "profile_image", "user_id", "nickname"] #TODO: Wait. We are getting extended profile data (e.g. hackathons above just to pitch it out here?)
 
     if u is not None:
         # Check if the field is in the response first
