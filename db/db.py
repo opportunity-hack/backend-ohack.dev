@@ -46,13 +46,17 @@ def delete_user_by_db_id(id):
     return db.delete_user_by_db_id(id)
 
 # Problem Statements
-def fetch_problem_statement_by_id(id):
-    return db.fetch_problem_statement_by_id(id)
+def fetch_problem_statement(id):
+    return db.fetch_problem_statement(id)
 
 def insert_problem_statement(problem_statement: ProblemStatement):
     return db.insert_problem_statement(problem_statement)
 
+def update_problem_statement(problem_statement: ProblemStatement):
+    return db.update_problem_statement(problem_statement)
 
+def delete_problem_statement(id):
+    return db.delete_problem_statement(id)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

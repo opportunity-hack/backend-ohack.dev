@@ -4,6 +4,7 @@ from model.user import User
 import os
 import littletable as lt #https://github.com/ptmcg/littletable/blob/master/how_to_use_littletable.md
 
+# WARNING, if the column isn't defined in the CSV, it won't be saved in the xlsx
 USERS_CSV_FILE_PATH = "../test/data/OHack Test Data - Users.csv"
 USERS_EXCEL_FILE_PATH = "../test/data/users.xlsx"
 
@@ -80,10 +81,13 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         self.flush_users()
 
-        return User.deserialize(d)
+        return user
 
     def update_user(self, user: User):
-        d = self.users.by.id[user.id]
+        # TODO: Maybe, call self.problem_statements.add_field to add fields that are on the class but not the fetched object: https://pythonhosted.org/littletable/littletable.Table-class.html#add_field
+
+        d = self.users.by.id[int(user.id)]
+        d.id = int(user.id)
 
         d.last_login = user.last_login
         d.profile_image = user.profile_image
@@ -111,17 +115,18 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         return User.deserialize(vars(raw))
     
     # Problem Statements
-    def fetch_problem_statement_by_id(self, id):
+    def fetch_problem_statement(self, id):
         res = None
         try:
-            temp = self.fetch_problem_statement_by_id_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            temp = self.fetch_problem_statement_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            temp.id = id
             res = ProblemStatement.deserialize(vars(temp)) if temp is not None else None
         except KeyError as e:
             # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
             print(f'fetch_problem_statement_by_id error: {e}')
         return res
     
-    def fetch_problem_statement_by_id_raw(self, id):
+    def fetch_problem_statement_raw(self, id):
         res = None
         try:
             res = self.problem_statements.by.id[int(id)] # This is going to return a SimpleNamespace for imported rows.
@@ -129,7 +134,56 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
             print(f'fetch_problem_statement_by_id_raw error: {e}')
         return res
+    
+    def insert_problem_statement(self, problem_statement: ProblemStatement):
+        problem_statement.id = self.get_next_problem_statement_id()
 
+        # Fields on here need to show up in exactly the column order in the CSV
+        d = {'id': problem_statement.id, 
+             'title': problem_statement.title,
+             'description': problem_statement.description, 
+             'first_thought_of': problem_statement.first_thought_of, 
+             'github': problem_statement.github, 
+             'profile_image': problem_statement.status}
+        
+        print(f'Inserting problem statement\n: {d}')
+
+        self.problem_statements.insert(d)
+
+        self.flush_problem_statements()
+
+        return problem_statement
+    
+    def update_problem_statement(self, problem_statement: ProblemStatement):
+
+        # TODO: Maybe, call self.problem_statements.add_field to add fields that are on the class but not the fetched object: https://pythonhosted.org/littletable/littletable.Table-class.html#add_field
+
+        d = self.problem_statements.by.id[int(problem_statement.id)]
+        d.id = int(problem_statement.id)
+
+        d.title = problem_statement.title
+        d.description = problem_statement.description
+        d.first_thought_of = problem_statement.first_thought_of
+        d.github = problem_statement.github
+        d.status = problem_statement.status
+
+        self.flush_problem_statements()
+
+        return ProblemStatement.deserialize(vars(d))
+
+    def delete_problem_statement(self, problem_statement_id):
+        # TODO: delete related entities
+        temp = self.fetch_problem_statement_raw(problem_statement_id)
+        p: ProblemStatement | None = None
+        if temp is not None:
+            # Delete problem statement
+            self.problem_statements.remove(temp)
+            temp.id = problem_statement_id 
+            p = ProblemStatement.deserialize(vars(temp))
+
+            self.flush_problem_statements()
+
+        return p
 
     # Intialization
 

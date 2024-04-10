@@ -225,6 +225,21 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         
     # ----------------------- Problem Statements --------------------------------------------
     
+    def fetch_problem_statement(self, id):
+        res = None
+        db = self.get_db()
+        try:
+            temp = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
+            res = ProblemStatement.deserialize(temp.to_dict()) if temp is not None else None
+        except KeyError as e:
+            # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
+            print(f'fetch_problem_statement_by_id error: {e}')
+        return res
+    
+    def fetch_problem_statement_raw(self, db, id):
+        p = db.collection('problem_statement').document(id).get()
+        return p
+    
     def insert_problem_statement(self, problem_statement: ProblemStatement):
         db = self.get_db()
 
@@ -246,5 +261,34 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         logger.debug(f"Insert Result: {insert_res}")
 
         return problem_statement if insert_res is not None else None
+    
+    def update_problem_statement(self, problem_statement: ProblemStatement):
+        db = self.get_db()
+
+        # TODO: In this current form, you will overwrite any information that matches the same NPO name
+            
+        collection = db.collection('problem_statements')
+
+        update_res = collection.document(problem_statement.id).set({
+            "description": problem_statement.description if 'description' in problem_statement else None,
+            "first_thought_of": problem_statement.first_thought_of if 'first_thought_of' in problem_statement else None,
+            "github": problem_statement.github if 'github' in problem_statement else None,
+            # "references": TODO: What is this
+            "status": problem_statement.status if 'status' in problem_statement else None        
+        })
+
+        logger.debug(f"Insert Result: {update_res}")
+
+        return problem_statement if update_res is not None else None
+    
+    def delete_problem_statement(self, db, problem_statement_id):
+        # TODO: delete related entities
+        p = self.fetch_problem_statement(problem_statement_id)
+        
+        if p is not None:
+            # Delete problem statement
+            db.collection("problem_statements").document(problem_statement_id).delete()
+
+        return p
 
 DatabaseInterface.register(FirestoreDatabaseInterface)

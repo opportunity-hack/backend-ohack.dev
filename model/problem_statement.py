@@ -27,3 +27,10 @@ class ProblemStatement:
         p.github = d['github'] if 'github' in d else None
         p.status = d['status'] if 'status' in d else None
         return p
+    
+    def update(self, d):
+        props = dir(self)
+        for m in props:        
+            if m in d:
+                setattr(self, m, d[m])
+        return

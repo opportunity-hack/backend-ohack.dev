@@ -51,7 +51,7 @@ def finish_saving_update(
         return update_user(user)
 
 @limits(calls=50, period=ONE_MINUTE)
-def upsert_user(
+def update_user_fields(
         id=None,
         user_id=None,
         last_login=None,
@@ -65,7 +65,10 @@ def upsert_user(
     else:
         user = fetch_user_by_user_id(user_id)
 
-    return finish_saving_update(user, last_login, profile_image, name, nickname)
+    if user is not None:
+        return finish_saving_update(user, last_login, profile_image, name, nickname)
+    else:
+        return None
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_user(
@@ -95,7 +98,7 @@ def save_user(
     else:
         user = finish_saving_insert(user_id, email, last_login, profile_image, name, nickname)
 
-    return user.id if user is not None else None
+    return user if user is not None else None
 
 def get_slack_user_from_token(token):
     resp = requests.get(
