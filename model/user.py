@@ -1,4 +1,4 @@
-metadata_list = ["role", "expertise", "education", "company", "shirt_size"]
+metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size"]
 
 class User:
     id = None

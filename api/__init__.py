@@ -52,13 +52,14 @@ from api.certificates import certificate_views
 from api.users import users_views
 
 from common.utils import safe_get_env_var
-
+import os
 
 def create_app():
     ##########################################
     # Environment Variables
     ##########################################
-    client_origin_url = safe_get_env_var("CLIENT_ORIGIN_URL")
+    client_origin_url = os.getenv("CLIENT_ORIGIN_URL")
+    logger.info("Client Origin URL: " + client_origin_url)
     
 
     ##########################################
