@@ -125,6 +125,11 @@ def get_slack_user_from_token(token):
     logger.info(f"Slack RESP: {json}")
     return json
 
+def get_user_from_propel_user_id(propel_id):
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    user_id = slack_user["sub"]
+    return get_user_from_slack_id(user_id)
+
 def get_slack_user_from_propel_user_id(propel_id):
     #TODO: Do we want to be using os.getenv here?
     resp = requests.get(

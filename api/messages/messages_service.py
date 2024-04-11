@@ -151,23 +151,6 @@ def get_db():
     return firestore.client()
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
-def get_single_problem_statement(project_id):
-    logger.debug(f"get_single_problem_statement start project_id={project_id}")    
-    db = get_db()      
-    doc = db.collection('problem_statements').document(project_id)
-    
-    if doc is None:
-        logger.warning("get_single_problem_statement end (no results)")
-        return {}
-    else:                                
-        result = doc_to_json(docid=doc.id, doc=doc)
-        result["id"] = doc.id
-        
-        logger.info(f"get_single_problem_statement end (with result):{result}")
-        return result
-    return {}
-
-@cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
     logger.debug(f"get_single_hackathon_id start id={id}")    
@@ -671,90 +654,6 @@ def remove_npo(json):
     logger.debug("End NPO Delete")
     return Message(
         "Delete NPO"
-    )
-
-
-@limits(calls=100, period=ONE_MINUTE)
-def save_helping_status(propel_user_id, json):
-    logger.info(f"save_helping_status {propel_user_id} // {json}")
-    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    user_id = slack_user["sub"]
-
-    helping_status = json["status"] # helping or not_helping
-    
-    problem_statement_id = json["problem_statement_id"]
-    mentor_or_hacker = json["type"]
-
-    npo_id =  json["npo_id"] if "npo_id" in json else ""
-    
-    user_obj = fetch_user_by_user_id(user_id)
-    my_date = datetime.now()
-
-
-    to_add = {
-        "user": user_obj.id,
-        "slack_user": user_id,
-        "type": mentor_or_hacker,
-        "timestamp": my_date.isoformat()
-    }
-
-    db = get_db() 
-    problem_statement_doc = db.collection(
-        'problem_statements').document(problem_statement_id)
-    
-    ps_dict = problem_statement_doc.get().to_dict()
-    helping_list = []
-    if "helping" in ps_dict:
-        helping_list = ps_dict["helping"]
-        logger.debug(f"Start Helping list: {helping_list}")
-
-        if "helping" == helping_status:            
-            helping_list.append(to_add)
-        else:
-            helping_list = [
-                d for d in helping_list if d['user'] not in user_obj.id]            
-
-    else:
-        logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
-        if "helping" == helping_status:
-            helping_list.append(to_add)
-
-
-    logger.debug(f"End Helping list: {helping_list}")
-    problem_result = problem_statement_doc.update({
-        "helping": helping_list
-    })
-
-    clear_cache()
-    
-
-    send_slack_audit(action="helping", message=user_id, payload=to_add)
-
-
-    slack_user_id = user_id.split("-")[1]  # Example user_id = oauth2|slack|T1Q7116BH-U041117EYTQ
-    slack_message = f"<@{slack_user_id}>"
-    problem_statement_title = ps_dict["title"]
-    problem_statement_slack_channel = ps_dict["slack_channel"]
-
-    url = ""
-    if npo_id == "":
-        url = f"for project https://ohack.dev/project/{problem_statement_id}"
-    else:
-        url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
-
-    if "helping" == helping_status:
-        slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
-    else:
-        slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
-
-    invite_user_to_channel(user_id=slack_user_id,
-                           channel_name=problem_statement_slack_channel)
-
-    send_slack(message=slack_message,
-                channel=problem_statement_slack_channel)
-
-    return Message(
-        "Updated helping status"
     )
 
 

@@ -1,3 +1,4 @@
+from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 from common.utils import safe_get_env_var
@@ -290,5 +291,58 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             db.collection("problem_statements").document(problem_statement_id).delete()
 
         return p
+    
+    def add_user_to_helping(self, problem_statement_id, user: User, mentor_or_hacker, helping_status):
+        
+        my_date = datetime.now()
+        
+        to_add = {
+            "user": user.id,
+            "slack_user": user.user_id,
+            "type": mentor_or_hacker,
+            "timestamp": my_date.isoformat()
+        }
+
+        db = self.get_db()
+
+        problem_statement_doc = db.collection(
+        'problem_statements').document(problem_statement_id)
+    
+        ps_dict = problem_statement_doc.get().to_dict()
+        helping_list = []
+        if "helping" in ps_dict:
+            helping_list = ps_dict["helping"]
+            logger.debug(f"Start Helping list: {helping_list}")
+
+            if "helping" == helping_status:            
+                helping_list.append(to_add)
+            else:
+                helping_list = [
+                    d for d in helping_list if d['user'] not in user.id]            
+
+        else:
+            logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
+            if "helping" == helping_status:
+                helping_list.append(to_add)
+
+
+        logger.debug(f"End Helping list: {helping_list}")
+        problem_result = problem_statement_doc.update({
+            "helping": helping_list
+        })
+
+        return ProblemStatement.deserialize(ps_dict)
+    
+    def fetch_problem_statement_by_project_id(self, project_id):
+        result : ProblemStatement | None
+        db = self.get_db()      
+        ps_doc = db.collection('problem_statements').document(project_id)
+
+        if ps_doc is not None:
+            result = ProblemStatement.deserialize(ps_doc.to_dict())
+
+        return result
+
+
 
 DatabaseInterface.register(FirestoreDatabaseInterface)

@@ -58,6 +58,9 @@ def update_problem_statement(problem_statement: ProblemStatement):
 def delete_problem_statement(id):
     return db.delete_problem_statement(id)
 
+def add_user_to_helping(problem_statement_id, user: User, mentor_or_hacker, helping_status, helping_date):
+    return db.add_user_to_helping(problem_statement_id, user, mentor_or_hacker, helping_status, helping_date)
+
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
     return db.get_user_doc_reference(user_id)

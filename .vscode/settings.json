@@ -2,5 +2,6 @@
     "githubPullRequests.ignoredPullRequestBranches": [
         "develop"
     ],
-    "terminal.integrated.defaultProfile.osx": "x86 bash"
+    "terminal.integrated.defaultProfile.osx": "x86 bash",
+    "python.defaultInterpreterPath": "/opt/miniconda3/envs/ohack/bin/python3.9"
 }
