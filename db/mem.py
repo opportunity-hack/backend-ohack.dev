@@ -50,7 +50,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     def fetch_user_by_db_id_raw(self, id):
         res = None
         try:
-            res = users.by.id[id] # This is going to return a SimpleNamespace for imported rows.
+            res = users.by.id[int(id)] # This is going to return a SimpleNamespace for imported rows.
         except KeyError as e:
             # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
             print(f'fetch_user_by_db_id error: {e}')
@@ -88,7 +88,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         return User.deserialize(d)
 
     def update_user(self, user: User):
-        d = users.by.id[user.id]
+        d = users.by.id[int(user.id)]
 
         d.last_login = user.last_login
         d.profile_image = user.profile_image

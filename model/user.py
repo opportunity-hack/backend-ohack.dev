@@ -13,6 +13,7 @@ class User:
     shirt_size = ""
     role = ""
     company = ""
+    why = ""
     badges = []
     teams = []
     hackathons = []
@@ -32,6 +33,7 @@ class User:
         u.shirt_size = d['shirt_size'] if 'shirt_size' in d else ''
         u.role = d['role'] if 'role' in d else ''
         u.company = d['company'] if 'company' in d else ''
+        u.why = d['why'] if 'why' in d else ''
         return u
     
     def serialize_profile_metadata(self):
