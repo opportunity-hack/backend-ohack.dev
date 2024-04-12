@@ -34,6 +34,14 @@ class User:
         u.company = d['company'] if 'company' in d else ''
         return u
     
+    def serialize(self):
+        d = {}
+        props = dir(self)     
+        for m in props:
+            d[m] = getattr(self, m)
+
+        return d
+
     def serialize_profile_metadata(self):
         d = {}
         props = dir(self)

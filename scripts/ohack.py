@@ -39,12 +39,21 @@ from common.utils import safe_get_env_var
 from datetime import datetime
 
 load_dotenv()
+
 # add logger
-logger = logging.getLogger(__name__)
-# set logger to standard out
-logger.addHandler(logging.StreamHandler())
-# set log level
-logger.setLevel(logging.INFO)
+logger = logging.getLogger("ohack")
+
+# TODO: Add --log-level flags
+logger.info("Debug logging")
+logger.setLevel(logging.DEBUG)
+
+# Add stdout handler, with level INFO
+console = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter('%(name)-13s: %(levelname)-8s %(message)s')
+console.setFormatter(formatter)
+
+# set root logger to standard out
+logging.getLogger().addHandler(console)
 
 # TODO: Select db interface based on env
 in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
@@ -95,8 +104,12 @@ update_problem_statement_parser = problem_statements_subparsers.add_parser("upda
 
 delete_problem_statement_parser = problem_statements_subparsers.add_parser("delete", parents=[problem_statement_id_parser])
 
+helping_parser = problem_statements_subparsers.add_parser("helpout", parents=[problem_statement_id_parser, user_id_parser])
+helping_parser.add_argument("--cannot-help", action='store_true')
+helping_parser.add_argument("--mentor", action='store_true')
+helping_parser.add_argument("--hacker", action='store_true')
 
-def get_user(user_id, id):
+def do_get_user(user_id, id):
     u:User | None = None
     if user_id is not None:
         u = users_service.get_user_from_slack_id(user_id)
@@ -104,8 +117,12 @@ def get_user(user_id, id):
         u = users_service.get_user_by_db_id(id)
     else:
         raise ValueError("Either user id or db id must be provided")
+    return u
+
+def get_user(user_id, id):
+    u = do_get_user(user_id, id)
     
-    print(f'User: \n {json.dumps(vars(u), indent=4)}')
+    logger.info(f'User: \n {json.dumps(vars(u), indent=4)}')
 
 def delete_user(user_id, id):
     u:User | None = None
@@ -116,7 +133,7 @@ def delete_user(user_id, id):
     else:
         raise ValueError("Either user id or db id must be provided")
     
-    print(f'Deleted: \n {json.dumps(vars(u), indent=4)}')
+    logger.info(f'Deleted: \n {json.dumps(vars(u), indent=4)}')
 
 def update_user(user_id, id, profile_image, name, nickname):
     if user_id is  None and id is None:
@@ -130,7 +147,7 @@ def update_user(user_id, id, profile_image, name, nickname):
         name,
         nickname)
 
-    print(f'Updated: \n {json.dumps(vars(u), indent=4)}')
+    logger.info(f'Updated: \n {json.dumps(vars(u), indent=4)}')
     
 
 def create_user(user_id, email, name, nickname=None, profile_image=None):
@@ -143,12 +160,12 @@ def create_user(user_id, email, name, nickname=None, profile_image=None):
         profile_image=profile_image,
         last_login=str(datetime.now()))
     
-    print(f'Created: \n {json.dumps(vars(u), indent=4)}')
+    logger.info(f'Created: \n {json.dumps(vars(u), indent=4)}')
 
 
 def get_problem_statement(id):
     s = problem_statements_service.get_problem_statement(id)
-    print(f'User: \n {json.dumps(vars(s), indent=4)}')
+    logger.info(f'User: \n {json.dumps(vars(s), indent=4)}')
 
 def create_problem_statement(title, description=None, first_thought_of=None, github=None, status=None):
     p = problem_statements_service.save_problem_statement({
@@ -159,7 +176,7 @@ def create_problem_statement(title, description=None, first_thought_of=None, git
         'status' : status
     })
 
-    print(f'Created: \n {json.dumps(vars(p), indent=4)}')
+    logger.info(f'Created: \n {json.dumps(vars(p), indent=4)}')
 
 def update_problem_statement(id, description=None, first_thought_of=None, github=None, status=None):
     p = problem_statements_service.update_problem_statement_fields({
@@ -170,7 +187,7 @@ def update_problem_statement(id, description=None, first_thought_of=None, github
         'status' : status
     })
 
-    print(f'Updated: \n {json.dumps(vars(p), indent=4)}')
+    logger.info(f'Updated: \n {json.dumps(vars(p), indent=4)}')
     
 def delete_problem_statement(id):
     p: ProblemStatement | None = None
@@ -179,25 +196,36 @@ def delete_problem_statement(id):
     else:
         raise ValueError("DB id must be provided")
     
-    print(f'Deleted: \n {json.dumps(vars(p), indent=4)}')
+    logger.info(f'Deleted: \n {json.dumps(vars(p), indent=4)}')
+
+def handle_helping(problem_statement_id, id, user_id, mentor, hacker, cannot_help):
+    u = do_get_user(user_id, id)
+
+    p = problem_statements_service.save_user_helping_status(u, {
+        "status": "not_helping" if cannot_help else "helping",
+        "type": "mentor" if mentor else "hacker",
+        "problem_statement_id": problem_statement_id  
+    })
+
+    d = p.serialize()
 
 args = parser.parse_args()
 
-print(args)
+logger.info(args)
 
 if hasattr(args, 'command'):
-    print(f'Command: {args.command}')
+    logger.info(f'Command: {args.command}')
 
     if args.command == 'users':
         # Handle user related commands
         if hasattr(args, 'users_command'):
-            print(f'Users command: {args.users_command}')
+            logger.info(f'Users command: {args.users_command}')
 
             if args.users_command == 'get':
                 get_user(args.user_id, args.id)
 
             elif args.users_command == 'create':
-                print('Creating a user')
+                logger.info('Creating a user')
                 create_user(args.user_id, args.email, args.name, args.nickname, args.profile_image if 'profile_image' in args else None)       
 
             elif args.users_command == 'delete':
@@ -221,3 +249,6 @@ if hasattr(args, 'command'):
 
             if args.problem_statements_command == 'delete':
                 delete_problem_statement(args.problem_statement_id)
+
+            if args.problem_statements_command == 'helpout':
+                handle_helping(args.problem_statement_id, args.id, args.user_id, args.mentor, args.hacker, args.cannot_help)

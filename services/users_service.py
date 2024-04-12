@@ -10,8 +10,7 @@ import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = logging.getLogger("ohack")
 
 #TODO consts file?
 ONE_MINUTE = 1*60
@@ -132,12 +131,18 @@ def get_user_from_propel_user_id(propel_id):
 
 def get_slack_user_from_propel_user_id(propel_id):
     #TODO: Do we want to be using os.getenv here?
+
+    url = f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token"
+
+    logger.debug(f"Propel URL: {url}")
+
     resp = requests.get(
-        f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token", headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
-        
+        url, 
+        headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
         )    
+    logger.debug(f"Propel RESP: {resp}")
     json = resp.json()    
-    logger.debug(f"Propel RESP: {json}")
+    logger.debug(f"Propel RESP JSON: {json}")
     
     slack_token = json['slack']['access_token']
     return get_slack_user_from_token(slack_token)

@@ -8,12 +8,16 @@
 #         "status": status        
 #     })
 
+from model.user import User
+
+
 class ProblemStatement:
     id = None
     title = None
     description = None
     first_thought_of = None
     github = None
+    helping = []
     # TODO: references. Pretty sure this is going to be a collection of other entities
     status = None
 
@@ -34,3 +38,46 @@ class ProblemStatement:
             if m in d:
                 setattr(self, m, d[m])
         return
+    
+    def serialize(self):
+        d = {}
+        props = dir(self)     
+        for m in props:
+            if m == 'helping':
+                all_helping = []
+
+                for h in self.helping:
+                    all_helping.append(h.serialize())
+
+                d['helping'] = all_helping
+            else:
+                d[m] = getattr(self, m)
+
+        return d
+    
+class Helping:
+    user_db_id = None
+    problem_statement_id = None
+    mentor_or_hacker = None
+    timestamp = None
+    user: User = None
+
+    @classmethod
+    def deserialize(cls, d):
+        h = Helping()
+        h.user_db_id = d['user_db_id']
+        h.problem_statement_id = d['problem_statement_id']
+        h.mentor_or_hacker = d['mentor_or_hacker']
+        h.timestamp = d['timestamp']
+        return h
+    
+    def serialize(self):
+        d = {}
+        props = dir(self)     
+        for m in props:
+            if m == 'user':
+                d['user'] = self.user.serialize()
+            else:
+                d[m] = getattr(self, m)
+
+        return d

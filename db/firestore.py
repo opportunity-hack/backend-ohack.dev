@@ -292,7 +292,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         return p
     
-    def add_user_to_helping(self, problem_statement_id, user: User, mentor_or_hacker, helping_status):
+    def insert_helping(self, problem_statement_id, user: User, mentor_or_hacker):
         
         my_date = datetime.now()
         
@@ -312,18 +312,13 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         helping_list = []
         if "helping" in ps_dict:
             helping_list = ps_dict["helping"]
-            logger.debug(f"Start Helping list: {helping_list}")
+            logger.debug(f"Helping list: {helping_list}")
 
-            if "helping" == helping_status:            
-                helping_list.append(to_add)
-            else:
-                helping_list = [
-                    d for d in helping_list if d['user'] not in user.id]            
+            helping_list.append(to_add)
 
         else:
             logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
-            if "helping" == helping_status:
-                helping_list.append(to_add)
+            helping_list.append(to_add)
 
 
         logger.debug(f"End Helping list: {helping_list}")

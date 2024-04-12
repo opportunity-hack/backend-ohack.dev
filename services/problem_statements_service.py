@@ -1,12 +1,9 @@
 from datetime import datetime
-import os
 from ratelimit import limits
-import requests
-from api.messages.message import Message
 from common.utils.slack import invite_user_to_channel, send_slack, send_slack_audit
 from model.problem_statement import ProblemStatement
 from model.user import User
-from db.db import add_user_to_helping, delete_problem_statement, fetch_problem_statement, insert_problem_statement, update_problem_statement
+from db.db import delete_helping, insert_helping, delete_problem_statement, fetch_problem_statement, insert_problem_statement, update_problem_statement
 import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
@@ -14,8 +11,7 @@ from cachetools.keys import hashkey
 import uuid
 from services import users_service
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = logging.getLogger("ohack")
 
 #TODO consts file?
 ONE_MINUTE = 1*60
@@ -58,15 +54,59 @@ def remove_problem_statement(id):
 def save_helping_status(propel_user_id, d):
     logger.info(f"save_helping_status {propel_user_id} // {d}")
     user = users_service.get_user_from_propel_user_id(propel_user_id)
-    return save_user_helping_status(user, d)
+
+    slack_message = None
+
+    problem_statement = save_user_helping_status(user, d)
+
+    problem_statement_title = problem_statement.title
+    problem_statement_slack_channel = problem_statement.slack_channel
+
+    helping_status = d["status"] # helping or not_helping
+
+    problem_statement_id = d["problem_statement_id"]
+
+    npo_id =  d["npo_id"] if "npo_id" in d else ""
+
+    mentor_or_hacker = d["type"]
+
+    url = ""
+    if npo_id == "":
+        url = f"for project https://ohack.dev/project/{problem_statement_id}"
+    else:
+        url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
+
+
+    slack_user_id = None
+    try:
+        slack_user_id = user.user_id.split("-")[1]  # Example user_id = oauth2|slack|T1Q7116BH-U041117EYTQ
+        invite_user_to_channel(user_id=slack_user_id,
+                            channel_name=problem_statement_slack_channel)
+    except Exception:
+        pass # Don't return error if slack invite fails.
+
+
+    if slack_user_id is not None:
+        try:
+            slack_message = f"<@{slack_user_id}>"
+
+            if "helping" == helping_status:
+                slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
+            else:
+                slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
+
+            send_slack(message=slack_message,
+                    channel=problem_statement_slack_channel)
+        except:
+            pass # Don't return error if slack message fails.
+
+    return problem_statement
 
 def save_user_helping_status(user: User, d):
     helping_status = d["status"] # helping or not_helping
     
     problem_statement_id = d["problem_statement_id"]
     mentor_or_hacker = d["type"]
-
-    npo_id =  d["npo_id"] if "npo_id" in d else ""
 
     helping_date = datetime.now()
     
@@ -77,36 +117,19 @@ def save_user_helping_status(user: User, d):
         "timestamp": helping_date.isoformat()
     }
     
-    send_slack_audit(action="helping", message=user.user_id, payload=to_add)
+    try: 
+        send_slack_audit(action="helping", message=user.user_id, payload=to_add)
+    except Exception:
+        pass
 
-    problem_statement: ProblemStatement = add_user_to_helping(problem_statement_id, user, mentor_or_hacker, helping_status, helping_date)
-
-    slack_user_id = user.user_id.split("-")[1]  # Example user_id = oauth2|slack|T1Q7116BH-U041117EYTQ
-    slack_message = f"<@{slack_user_id}>"
-    problem_statement_title = problem_statement.title
-    problem_statement_slack_channel = problem_statement.slack_channel
-
-    url = ""
-    if npo_id == "":
-        url = f"for project https://ohack.dev/project/{problem_statement_id}"
-    else:
-        url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
-
+    problem_statement: ProblemStatement | None = None
+  
     if "helping" == helping_status:
-        slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
+        problem_statement = insert_helping(problem_statement_id, user, mentor_or_hacker, helping_date)
     else:
-        slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
+        problem_statement = delete_helping(problem_statement_id, user)
 
-    invite_user_to_channel(user_id=slack_user_id,
-                           channel_name=problem_statement_slack_channel)
-
-    send_slack(message=slack_message,
-                channel=problem_statement_slack_channel)
-
-    # TODO: Replace return type?
-    return Message(
-        "Updated helping status"
-    )
+    return problem_statement
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 def get_problem_statement_by_id(id):
