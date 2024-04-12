@@ -38,7 +38,16 @@ class User:
         d = {}
         props = dir(self)     
         for m in props:
-            d[m] = getattr(self, m)
+            if m == 'teams':
+                pass #TODO
+            elif m == 'badges':
+                pass #TODO
+            elif m == 'hackathons':
+                pass #TODO
+            elif not m.startswith('__'): # No magic please
+                p = getattr(self, m)
+                if not callable(p):
+                    d[m] = p
 
         return d
 

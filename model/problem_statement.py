@@ -41,7 +41,7 @@ class ProblemStatement:
     
     def serialize(self):
         d = {}
-        props = dir(self)     
+        props = dir(self)
         for m in props:
             if m == 'helping':
                 all_helping = []
@@ -50,8 +50,12 @@ class ProblemStatement:
                     all_helping.append(h.serialize())
 
                 d['helping'] = all_helping
-            else:
-                d[m] = getattr(self, m)
+
+                pass
+            elif not m.startswith('__'): # No magic please
+                p = getattr(self, m)
+                if not callable(p):
+                    d[m] = p
 
         return d
     
@@ -77,7 +81,9 @@ class Helping:
         for m in props:
             if m == 'user':
                 d['user'] = self.user.serialize()
-            else:
-                d[m] = getattr(self, m)
+            elif not m.startswith('__'): # No magic please
+                p = getattr(self, m)
+                if not callable(p):
+                    d[m] = p
 
         return d

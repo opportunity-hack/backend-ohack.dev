@@ -204,7 +204,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         return all_helping
 
-    def remove_user_from_helping(self, problem_statement_id, user: User):
+    def delete_helping(self, problem_statement_id, user: User):
         p = self.fetch_problem_statement_raw(problem_statement_id)
 
         res = self.problem_statement_helping.where(lambda j: j.problem_statement_id == int(problem_statement_id) and j.user_db_id == user.id)

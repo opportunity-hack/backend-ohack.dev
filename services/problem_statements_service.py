@@ -57,6 +57,7 @@ def save_helping_status(propel_user_id, d):
 
     slack_message = None
 
+    # Do the actual data wrangling
     problem_statement = save_user_helping_status(user, d)
 
     problem_statement_title = problem_statement.title
@@ -103,18 +104,20 @@ def save_helping_status(propel_user_id, d):
     return problem_statement
 
 def save_user_helping_status(user: User, d):
+
+    logger.info(f"save_user_helping_status {user.serialize()} // {d}")
     helping_status = d["status"] # helping or not_helping
     
     problem_statement_id = d["problem_statement_id"]
     mentor_or_hacker = d["type"]
 
-    helping_date = datetime.now()
+    helping_date = datetime.now().isoformat()
     
     to_add = {
         "user": user.id,
         "slack_user": user.user_id,
         "type": mentor_or_hacker,
-        "timestamp": helping_date.isoformat()
+        "timestamp": helping_date
     }
     
     try: 

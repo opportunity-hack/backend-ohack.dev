@@ -62,7 +62,7 @@ def insert_helping(problem_statement_id, user: User, mentor_or_hacker, helping_d
     return db.insert_helping(problem_statement_id, user, mentor_or_hacker, helping_date)
 
 def delete_helping(problem_statement_id, user: User):
-    db.delete_helping(problem_statement_id, user)
+    return db.delete_helping(problem_statement_id, user)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

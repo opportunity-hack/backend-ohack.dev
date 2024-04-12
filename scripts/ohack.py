@@ -209,6 +209,8 @@ def handle_helping(problem_statement_id, id, user_id, mentor, hacker, cannot_hel
 
     d = p.serialize()
 
+    logger.info(f'Problem statement: \n {json.dumps(d, indent=4)}')
+
 args = parser.parse_args()
 
 logger.info(args)
