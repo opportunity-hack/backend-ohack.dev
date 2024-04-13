@@ -226,6 +226,18 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         
     # ----------------------- Problem Statements --------------------------------------------
     
+    def fetch_problem_statements(self):
+        results = []
+        db = self.get_db()
+        docs = db.collection('problem_statements').stream()  # steam() gets all records
+        if docs is None:
+            pass
+        else:
+            for doc in docs:
+                results.append(ProblemStatement.deserialize(doc.to_dict()))
+     
+        return results
+
     def fetch_problem_statement(self, id):
         res = None
         db = self.get_db()

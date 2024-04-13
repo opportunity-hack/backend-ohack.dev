@@ -49,6 +49,9 @@ def delete_user_by_db_id(id):
 def fetch_problem_statement(id):
     return db.fetch_problem_statement(id)
 
+def fetch_problem_statements():
+    return db.fetch_problem_statements()
+
 def insert_problem_statement(problem_statement: ProblemStatement):
     return db.insert_problem_statement(problem_statement)
 

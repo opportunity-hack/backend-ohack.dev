@@ -19,9 +19,7 @@ from api.messages.messages_service import (
     remove_npo,
     get_npo_list,
     get_single_npo,
-    save_problem_statement,
     get_problem_statement_list,
-    get_single_problem_statement,
     get_single_hackathon_event,
     get_single_hackathon_id,
     save_hackathon,
@@ -31,7 +29,6 @@ from api.messages.messages_service import (
     join_team,
     get_hackathon_list,
     link_problem_statements_to_events,
-    save_helping_status,
     save_news,
     save_lead_async,
     get_news
@@ -124,27 +121,6 @@ def get_single_hackathon_by_event(event_id):
 @bp.route("/hackathon/id/<id>", methods=["GET"])
 def get_single_hackathon_by_id(id):
     return (get_single_hackathon_id(id))
-
-# Problem Statement (also called Project) Related Endpoints
-@bp.route("/problem_statement", methods=["POST"])
-@auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
-def add_problem_statement():
-    return vars(save_problem_statement(request.get_json()))
-
-@bp.route("/problem_statements", methods=["GET"])
-def get_problem_statments():    
-    return get_problem_statement_list()
-
-@bp.route("/problem_statement/<project_id>", methods=["GET"])
-def get_single_problem(project_id):
-    return (get_single_problem_statement(project_id))
-
-@auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
-@bp.route("/problem_statements/events", methods=["PATCH"])
-def update_problem_statement_events_link():    
-    return vars(link_problem_statements_to_events(request.get_json()))
 
 @bp.route("/teams", methods=["GET"])
 def get_teams():

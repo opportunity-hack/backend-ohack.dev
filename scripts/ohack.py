@@ -89,6 +89,7 @@ problem_statement_id_parser = argparse.ArgumentParser(add_help=False)
 problem_statement_id_parser.add_argument("-s", "--problem-statement-id", required=False, default=None)
 
 get_problem_statement_parser = problem_statements_subparsers.add_parser("get", parents=[problem_statement_id_parser])
+get_problem_statement_parser.add_argument("--all", action='store_true')
 
 problem_statement_attributes_parser = argparse.ArgumentParser(add_help=False)
 problem_statement_attributes_parser.add_argument("-d", "--description", required=False, default=None)
@@ -167,6 +168,14 @@ def get_problem_statement(id):
     s = problem_statements_service.get_problem_statement(id)
     logger.info(f'User: \n {json.dumps(vars(s), indent=4)}')
 
+def get_problem_statements():
+    res = problem_statements_service.get_problem_statements()
+    output = []
+    for p in res:
+        output.append(p.serialize())
+    logger.info(f'Problem Statements: \n {json.dumps(output, indent=4)}')
+    
+
 def create_problem_statement(title, description=None, first_thought_of=None, github=None, status=None):
     p = problem_statements_service.save_problem_statement({
         'title' : title,
@@ -241,7 +250,10 @@ if hasattr(args, 'command'):
         if hasattr(args, 'problem_statements_command'):
             
             if args.problem_statements_command == 'get':
-                get_problem_statement(args.problem_statement_id)
+                if args.all:
+                    get_problem_statements()
+                else: 
+                    get_problem_statement(args.problem_statement_id)
 
             if args.problem_statements_command == 'create':
                 create_problem_statement(args.title, args.description, args.first_thought_of, args.github, args.status)

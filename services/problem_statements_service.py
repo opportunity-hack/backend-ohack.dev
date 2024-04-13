@@ -3,10 +3,11 @@ from ratelimit import limits
 from common.utils.slack import invite_user_to_channel, send_slack, send_slack_audit
 from model.problem_statement import ProblemStatement
 from model.user import User
-from db.db import delete_helping, insert_helping, delete_problem_statement, fetch_problem_statement, insert_problem_statement, update_problem_statement
+from db.db import delete_helping, fetch_problem_statements, insert_helping, delete_problem_statement, fetch_problem_statement, insert_problem_statement, update_problem_statement
 import logging
 import pytz
-from cachetools import cached, LRUCache, TTLCache
+# TODO: Do we need caching on problem statements
+# from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 import uuid
 from services import users_service
@@ -134,7 +135,8 @@ def save_user_helping_status(user: User, d):
 
     return problem_statement
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+# TODO: Do we need caching here?
+# @cached(cache=TTLCache(maxsize=100, ttl=600))
 def get_problem_statement_by_id(id):
     logger.debug(f"get_problem_statement_by_id start project_id={id}")    
     
@@ -146,3 +148,7 @@ def get_problem_statement_by_id(id):
         logger.info(f"get_problem_statement_by_id end (with result):{problem_statement}")
         
     return problem_statement
+
+@limits(calls=100, period=ONE_MINUTE)
+def get_problem_statements():
+    return fetch_problem_statements()

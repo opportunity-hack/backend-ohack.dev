@@ -314,23 +314,6 @@ def get_npo_list(word_length=30):
     # log result
     logger.debug(f"Found {len(results)} results {results}")
     return { "nonprofits": results }
-    
-
-@limits(calls=100, period=ONE_MINUTE)
-def get_problem_statement_list():
-    logger.debug("Problem Statements List")
-    db = get_db()
-    docs = db.collection('problem_statements').stream()  # steam() gets all records
-    if docs is None:
-        return {[]}
-    else:
-        results = []
-        for doc in docs:
-            results.append(doc_to_json(docid=doc.id, doc=doc))
-
-    # log result
-    logger.debug(results)        
-    return { "problem_statements": results }
 
 def save_team(propel_user_id, json):    
     send_slack_audit(action="save_team", message="Saving", payload=json)

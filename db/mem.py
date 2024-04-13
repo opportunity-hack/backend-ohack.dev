@@ -142,6 +142,14 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             print(f'fetch_problem_statement_by_id_raw error: {e}')
         return res
     
+    def fetch_problem_statements(self):
+        res = []
+
+        for p in self.problem_statements:
+            res.append(ProblemStatement.deserialize(vars(p)))
+
+        return res
+
     def insert_problem_statement(self, problem_statement: ProblemStatement):
         problem_statement.id = self.get_next_problem_statement_id()
 
