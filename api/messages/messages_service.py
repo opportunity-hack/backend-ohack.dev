@@ -4,6 +4,7 @@ from common.utils.firebase import get_hackathon_by_event_id, upsert_news
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
 from api.messages.message import Message
+from services.users_service import get_propel_user_details_by_id, get_slack_user_from_propel_user_id, save_user
 import json
 import uuid
 from datetime import datetime, timedelta
@@ -21,12 +22,14 @@ from ratelimit import limits
 from datetime import datetime, timedelta
 import os
 
+from db.db import fetch_user_by_user_id, get_user_doc_reference
+
 
 
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.INFO)
 
-USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-" #the followed by UXXXXX for slack
+
 google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
 
 CDN_SERVER = os.getenv("CDN_SERVER")
@@ -348,7 +351,7 @@ def get_problem_statement_list():
 
 def save_team(propel_user_id, json):    
     send_slack_audit(action="save_team", message="Saving", payload=json)
-    slack_user = get_user_from_slack_id(propel_user_id)
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     slack_user_id = slack_user["sub"]
     
     db = get_db()  # this connects to our Firestore database
@@ -365,8 +368,8 @@ def save_team(propel_user_id, json):
     problem_statement_id = json["problemStatementId"]
     github_username = json["githubUsername"]
     
-    
-    user = get_user_from_slack_id(slack_user_id).reference
+    #TODO: This is not the way
+    user = get_user_doc_reference(slack_user_id)
     if user is None:
         return
 
@@ -504,7 +507,7 @@ def join_team(propel_user_id, json):
     logger.debug("Join Team Start")
 
     logger.info(f"Join Team UserId: {propel_user_id} Json: {json}")
-    slack_user = get_user_from_slack_id(propel_user_id)
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     userid = slack_user["sub"]
 
     team_id = json["teamId"]
@@ -512,7 +515,7 @@ def join_team(propel_user_id, json):
     team_doc = db.collection('teams').document(team_id)
     team_dict = team_doc.get().to_dict()
 
-    user_doc = get_user_from_slack_id(userid).reference
+    user_doc = get_user_doc_reference(userid)
     user_dict = user_doc.get().to_dict()
     new_teams = []
     for t in user_dict["teams"]:
@@ -554,7 +557,7 @@ def unjoin_team(propel_user_id, json):
     logger.info(f"Unjoin for UserId: {propel_user_id} Json: {json}")
     team_id = json["teamId"]
 
-    slack_user = get_user_from_slack_id(propel_user_id)
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     userid = slack_user["sub"]
 
     ## 1. Lookup Team, Remove User 
@@ -646,8 +649,7 @@ def save_npo(json):
         "Saved NPO"
     )
 
-def clear_cache():        
-    get_profile_metadata.cache_clear()
+def clear_cache():
     doc_to_json.cache_clear()
     get_single_hackathon_event.cache_clear()
     get_single_hackathon_id.cache_clear()
@@ -685,7 +687,7 @@ def save_helping_status(propel_user_id, json):
 
     npo_id =  json["npo_id"] if "npo_id" in json else ""
     
-    user_obj = get_user_from_slack_id(user_id)
+    user_obj = fetch_user_by_user_id(user_id)
     my_date = datetime.now()
 
 
@@ -929,16 +931,6 @@ def get_problem_statement_from_id(problem_id):
     doc = db.collection('problem_statements').document(problem_id)
     return doc
 
-def get_user_from_slack_id(user_id):
-    db = get_db()  # this connects to our Firestore database
-    # Even though there is 1 record, we always will need to iterate on it
-    docs = db.collection('users').where("user_id", "==", user_id).stream()
-    
-    for doc in docs:
-        return doc
-        
-    return None
-
 
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
 # Instead of giving the code a json file, we use environment variables so we don't have to source control a secrets file
@@ -951,283 +943,6 @@ cred = credentials.Certificate(cert_env)
 # Check if firebase is already initialized
 if not firebase_admin._apps:
     firebase_admin.initialize_app(credential=cred)
-
-
-@limits(calls=50, period=ONE_MINUTE)
-def save(
-        user_id=None,
-        email=None,
-        last_login=None,
-        profile_image=None,
-        name=None,
-        nickname=None):
-    logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
-    # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
-
-
-    if user_id is None or email is None or last_login is None or profile_image is None:
-        logger.error(
-            f"Empty values provided for user_id: {user_id},\
-                email: {email}, or last_login: {last_login}\
-                    or profile_image: {profile_image}")
-        return
-
-    db = get_db()  # this connects to our Firestore database
-    
-    # Even though there is 1 record, we always will need to iterate on it
-    docs = db.collection('users').where("user_id","==",user_id).stream()
-    
-    for doc in docs:
-        res = doc.to_dict()
-        logger.debug(res)
-        if res:
-            # Found result already in DB, update
-            logger.debug(f"Found user (_id={doc.id}), updating last_login")
-            update_res = db.collection("users").document(doc.id).update(
-                {
-                    "last_login": last_login,
-                    "profile_image": profile_image,
-                    "name": name,
-                    "nickname": nickname
-            })
-            logger.debug(f"Update Result: {update_res}")
-        
-        logger.debug("User Save End")
-        return doc.id # Should only have 1 record, but break just for safety 
-
-    default_badge = db.collection('badges').document("fU7c3ne90Rd1TB5P7NTV")
-
-    doc_id = uuid.uuid1().hex
-    insert_res = db.collection('users').document(doc_id).set({
-        "email_address": email,
-        "last_login": last_login,
-        "user_id": user_id,
-        "profile_image": profile_image,
-        "name": name,
-        "nickname": nickname,
-        "badges": [
-            default_badge
-        ],
-        "teams": []
-    })
-    logger.debug(f"Insert Result: {insert_res}")
-    return doc_id
-    
-
-
-# Caching is not needed because the parent method already is caching
-@limits(calls=100, period=ONE_MINUTE)
-def get_history(db_id):
-    logger.debug("Get History Start")
-    db = get_db()  # this connects to our Firestore database
-    collection = db.collection('users')
-    doc = collection.document(db_id)
-    doc_get = doc.get()
-    res = doc_get.to_dict()
-
-    _hackathons=[]
-    if "hackathons" in res:
-        for h in res["hackathons"]:
-            rec = h.get().to_dict()
-            nonprofits = []
-            problem_statements = []
-
-            for n in rec["nonprofits"]:
-                npo_doc = n.get()
-                npo_id = npo_doc.id
-                npo = n.get().to_dict()
-                npo["id"] = npo_id
-                                
-                if npo and "problem_statements" in npo:
-                    # This is duplicate date as we should already have this
-                    del npo["problem_statements"]
-                nonprofits.append(npo)
-
-                
-            _hackathons.append({
-                "nonprofits": nonprofits,                
-                "links": rec["links"],
-                "location": rec["location"],
-                "start_date": rec["start_date"]
-            })
-
-    _badges=[]
-    if "badges" in res:
-        for h in res["badges"]:
-            _badges.append(h.get().to_dict())
-
-    result = {
-        "id": doc.id,
-        "user_id": res["user_id"],
-        "profile_image": res["profile_image"],
-        "email_address" : res["email_address"],
-        "history": res["history"] if "history" in res else "",
-        "badges" : _badges,
-        "hackathons" : _hackathons,
-        "expertise": res["expertise"] if "expertise" in res else "",
-        "education": res["education"] if "education" in res else "",
-        "shirt_size": res["shirt_size"] if "shirt_size" in res else "",
-        "why": res["why"] if "why" in res else "",
-        "role": res["role"] if "role" in res else "",
-        "company": res["company"] if "company" in res else ""
-
-    }
-
-    # Clear cache    
-
-    logger.debug(f"RESULT\n{result}")
-    return result
-
-
-def get_slack_user_from_token(token):
-    resp = requests.get(
-        "https://slack.com/api/openid.connect.userInfo", 
-        headers={"Authorization": f"Bearer {token}"}
-    )
-    '''
-    {'ok': True, 'sub': 'UC31XTRT5', 'https://slack.com/user_id': 'UC31XTRT5', 'https://slack.com/team_id': 'T1Q7936BH', 'email': 'greg.vannoni@gmail.com', 'email_verified': True, 'date_email_verified': 1632009763, 'name': 'Greg V [Staff/Mentor]', 'picture': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'given_name': 'Greg', 'family_name': 'V [Staff/Mentor]', 'locale': 'en-US', 'https://slack.com/team_name': 'Opportunity Hack', 'https://slack.com/team_domain': 'opportunity-hack', 'https://slack.com/user_image_24': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_24.png', 'https://slack.com/user_image_32': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_32.png', 'https://slack.com/user_image_48': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_48.png', 'https://slack.com/user_image_72': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_72.png', 'https://slack.com/user_image_192': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_192.png', 'https://slack.com/user_image_512': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'https://slack.com/user_image_1024': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_1024.png', 'https://slack.com/team_image_34': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_34.png', 'https://slack.com/team_image_44': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_44.png', 'https://slack.com/team_image_68': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_68.png', 'https://slack.com/team_image_88': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_88.png', 'https://slack.com/team_image_102': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_102.png', 'https://slack.com/team_image_132': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_132.png', 
-    'https://slack.com/team_image_230': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_230.png', 'https://slack.com/team_image_default': False}
-    '''
-    
-    json = resp.json()
-    if not json["ok"]:
-        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
-        return None    
-    
-    if "sub" not in json:
-        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
-        return None
-
-    # Add prefix to sub 
-    json["sub"] = USER_ID_PREFIX + json["sub"]
-
-    logger.info(f"Slack RESP: {json}")
-    return json
-
-def get_slack_user_from_propel_user_id(propel_id):
-    url = f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token"
-    logger.debug(f"Propel URL: {url}")
-    resp = requests.get(url, headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
-        
-        )    
-    logger.debug(f"Propel RESP: {resp}")
-    json = resp.json()    
-    logger.debug(f"Propel JSON RESP: {json}")
-    
-    slack_token = json['slack']['access_token']
-    return get_slack_user_from_token(slack_token)
-    
-
-
-
-def get_propel_user_details_by_id(propel_id):    
-    slack_user = get_slack_user_from_propel_user_id(propel_id)    
-    logger.debug(f"Slack User: {slack_user}")
-    user_id = slack_user["sub"]
-    logger.debug(f"User ID: {user_id}")
-    
-
-    email = slack_user["email"]
-    # Use todays date in UTC  (Z)
-    last_login = datetime.now().isoformat() + "Z"
-    # Print the last login in native format and in Arizona time
-    import pytz
-    logger.debug(f"Last Login: {last_login} {datetime.now().astimezone(pytz.timezone('US/Arizona')).isoformat()}")  
-
-    
-    # https://slack.com/user_image_192
-    profile_image = slack_user["https://slack.com/user_image_192"]
-    name = slack_user["name"]
-    nickname = slack_user["given_name"]
-
-    return email, user_id, last_login, profile_image, name, nickname
-
-
-
-def get_user_by_id(id):
-    # Log
-    logger.debug(f"Get User By ID: {id}")
-    db = get_db()  # this connects to our Firestore database
-    collection = db.collection('users')
-    doc = collection.document(id)
-    doc_get = doc.get()
-    res = doc_get.to_dict()
-    # Only keep these fields since this is a public api
-    fields = ["name", "profile_image", "user_id", "nickname"]
-    # Check if the field is in the response first
-    res = {k: res[k] for k in fields if k in res}
-
-    
-    logger.debug(f"Get User By ID Result: {res}")
-    return res    
-
-def save_profile_metadata(propel_id, json):
-    send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
-    db = get_db()  # this connects to our Firestore database
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    slack_user_id = slack_user["sub"]
-
-    logger.info(f"Save Profile Metadata for {slack_user_id} {json}")
-
-    json = json["metadata"]
-        
-    # See if the user exists
-    user = get_user_from_slack_id(slack_user_id)
-    if user is None:
-        return
-    else:
-        logger.info(f"User exists: {user.id}")        
-    
-    # Only update metadata that is in the json
-    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size"]
-
-    for m in metadataList:        
-        if m in json:
-            logger.info(f"Metadata: {m}={json[m]}")
-            update_res = db.collection("users").document(user.id).set( {m: json[m] }, merge=True)
-            
-            logger.info(f"Update Result: {update_res}")
-    
-    # Clear cache for get_profile_metadata
-    get_profile_metadata.cache_clear()
-            
-    return Message(
-        "Saved Profile Metadata"
-    )
-
-
-# 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600))
-@limits(calls=100, period=ONE_MINUTE)
-def get_profile_metadata(propel_id):
-    logger.debug("Profile Metadata")
-    
-    email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_id)
-    
-    send_slack_audit(
-        action="login", message=f"User went to profile: {user_id} with email: {email}")
-    
-
-    logger.debug(f"Account Details:\
-            \nEmail: {email}\nSlack User ID: {user_id}\n\
-            Last Login:{last_login}\
-            Image:{profile_image}")
-
-    # Call firebase to see if account exists and save these details
-    db_id = save(
-            user_id=user_id,
-            email=email,
-            last_login=last_login,
-            profile_image=profile_image,
-            name=name,
-            nickname=nickname)
-
-    # Get all of the user history and profile data from the DB
-    response = get_history(db_id)
-    logger.debug(f"get_profile_metadata {response}")
-
-
-    return Message(response)
 
 def save_news(json):
     # Take in Slack message and summarize it using GPT-3.5
@@ -1296,10 +1011,6 @@ async def save_lead(json):
 @limits(calls=30, period=ONE_MINUTE)
 async def save_lead_async(json):
     await save_lead(json)
-
-
-    
-    
 
 @cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
 def get_news(news_limit=3, news_id=None):

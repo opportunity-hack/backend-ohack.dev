@@ -49,6 +49,7 @@ from api.newsletters import newsletter_views
 # Leaving this disabled for now - team can fix this based on fixes for above module import
 #from api.newsletters import subscription_views
 from api.certificates import certificate_views
+from api.users import users_views
 
 from common.utils import safe_get_env_var
 import os
@@ -139,5 +140,6 @@ def create_app():
     app.register_blueprint(newsletter_views.bp)
     app.register_blueprint(certificate_views.bp)
     #app.register_blueprint(subscription_views.bp)
+    app.register_blueprint(users_views.bp)
 
     return app

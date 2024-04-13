@@ -1,7 +1,7 @@
 import logging
 from ratelimit import limits
 
-from api.messages.messages_service import (get_db, get_user_from_slack_id, ONE_MINUTE)
+from api.messages.messages_service import (get_db, ONE_MINUTE)
 
 logger = logging.getLogger("myapp")
 
