@@ -51,3 +51,7 @@ class User:
             if m in d and m in props:
                 setattr(self, m, d[m])
         return
+    
+    def __str__(self):
+        # Print all properties
+        return str(vars(self))
