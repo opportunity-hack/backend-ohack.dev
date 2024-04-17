@@ -11,8 +11,10 @@ import pytz
 from cachetools.keys import hashkey
 import uuid
 from services import users_service
+from common.log import get_log_level
 
 logger = logging.getLogger("ohack")
+logger.setLevel(get_log_level())
 
 #TODO consts file?
 ONE_MINUTE = 1*60

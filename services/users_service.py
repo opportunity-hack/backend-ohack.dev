@@ -4,13 +4,15 @@ from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit
 from model.user import User
-from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
+from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
 import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
+from common.log import get_log_level
 
 logger = logging.getLogger("ohack")
+logger.setLevel(get_log_level())
 
 #TODO consts file?
 ONE_MINUTE = 1*60
@@ -261,3 +263,7 @@ def remove_user_by_db_id(id):
 
 def remove_user_by_slack_id(user_id):
     return delete_user_by_user_id(user_id)
+
+@limits(calls=100, period=ONE_MINUTE)
+def get_users():
+    return fetch_users()

@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
@@ -10,14 +11,16 @@ from model.hackathon import Hackathon
 from db.interface import DatabaseInterface
 import logging
 import uuid
+import logging
+from common.log import get_log_level
+
+logger = logging.getLogger("ohack")
+logger.setLevel(get_log_level())
 
 mockfirestore = None
 
 #TODO: Put in .env? Feels configurable. Or maybe something we would want to protect with a secret?
 SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
-
-# TODO: Select db interface based on env
-in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
 if safe_get_env_var("ENVIRONMENT") == "test":
     mockfirestore = MockFirestore() #Only used when testing
@@ -119,7 +122,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
     def fetch_user_by_db_id(self, id):
         db = self.get_db()  # this connects to our Firestore database
-        return self.fetch_user_by_db_id_raw(db, id)
+        user = None
+        temp = self.fetch_user_by_db_id_raw(db, id)
+
+        if temp is not None:
+            ref = temp.reference
+            d = temp.to_dict()
+            d['id'] = ref.id #Get the document id from the reference
+            user = User.deserialize(d)
+
+        return user
 
     def get_user_doc_reference(self, user_id):
         db = self.get_db()
@@ -223,6 +235,27 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         return User.deserialize(user.to_dict())
 
+    def fetch_users(self):
+        results = []
+        db = self.get_db()
+        docs = db.collection('users').stream()  # steam() gets all records
+        if docs is None:
+            pass
+        else:
+            for doc in docs:
+                temp = doc.to_dict()
+                temp['id'] = doc.reference.id
+                if 'last_login' not in temp:
+                    temp['last_login'] = ''
+                
+                if 'user_id' not in temp:
+                    print(f'trash data skiping user {temp}')
+                    continue
+
+                results.append(User.deserialize(temp))
+     
+        return results
+
         
     # ----------------------- Problem Statements --------------------------------------------
     
@@ -234,22 +267,33 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             pass
         else:
             for doc in docs:
-                results.append(ProblemStatement.deserialize(doc.to_dict()))
+                temp = doc.to_dict()
+                temp['id'] = doc.reference.id
+                results.append(ProblemStatement.deserialize(temp))
      
         return results
 
     def fetch_problem_statement(self, id):
+        print(f'log level {safe_get_env_var("GLOBAL_LOG_LEVEL")}')
+        print(f'log level {get_log_level()}')
+        logger.debug(f'fetch_problem_statement :{id}')
         res = None
         db = self.get_db()
         try:
-            temp = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
-            res = ProblemStatement.deserialize(temp.to_dict()) if temp is not None else None
+            raw = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
+            print(f'raw {raw}')
+            print(f'raw.reference {raw.reference}')
+            temp = raw.to_dict()
+            print(f'temp {temp}')
+            temp['id'] = raw.reference.id
+            res = ProblemStatement.deserialize(temp) if temp is not None else None
         except KeyError as e:
             # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
-            print(f'fetch_problem_statement_by_id error: {e}')
+            logger.debug(f'fetch_problem_statement_by_id error: {e}')
         return res
     
     def fetch_problem_statement_raw(self, db, id):
+        logger.debug(f'fetch_problem_statement_raw id:{id}')
         p = db.collection('problem_statement').document(id).get()
         return p
     

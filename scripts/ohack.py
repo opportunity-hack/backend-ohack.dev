@@ -29,7 +29,33 @@ import sys
 import json
 import logging
 
+#------------------------------ Check args for log level -------------------------------- #
+
+print(f"args: {sys.argv}")
+
+if '--log-debug' in sys.argv:
+    os.environ['GLOBAL_LOG_LEVEL'] = 'debug'
+    print(f'set global log leveL to DEBUG')
+
 sys.path.append("../") #TODO: Handle passing scripts/ohack.py to the interpreter. IOW, don't require python to be run from this directory.
+
+#------------------------------ Now import log level function --------------------------- #
+from common.log import get_log_level
+
+# ----------------------------- Handle logging configuration ---------------------------- #
+# add logger
+logger = logging.getLogger("ohack")
+logger.setLevel(get_log_level())
+
+# Add stdout handler, with level INFO
+console = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter('%(name)-13s: %(levelname)-8s %(message)s')
+console.setFormatter(formatter)
+
+# set root logger to standard out
+logging.getLogger().addHandler(console)
+
+#------------------------------ Now import OHack modules ---------------------------------#
 
 from model.problem_statement import ProblemStatement
 from dotenv import load_dotenv
@@ -40,25 +66,19 @@ from datetime import datetime
 
 load_dotenv()
 
-# add logger
-logger = logging.getLogger("ohack")
 
-# TODO: Add --log-level flags
-logger.info("Debug logging")
-logger.setLevel(logging.DEBUG)
-
-# Add stdout handler, with level INFO
-console = logging.StreamHandler(sys.stdout)
-formatter = logging.Formatter('%(name)-13s: %(levelname)-8s %(message)s')
-console.setFormatter(formatter)
-
-# set root logger to standard out
-logging.getLogger().addHandler(console)
 
 # TODO: Select db interface based on env
 in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
 parser = argparse.ArgumentParser()
+
+log_level_parser = argparse.ArgumentParser(add_help=False)
+log_level_parser.add_argument("--log-debug", action='store_true')
+
+all_parser = argparse.ArgumentParser(add_help=False)
+all_parser.add_argument("--all", action='store_true')
+
 subparsers = parser.add_subparsers(title="Entities", dest='command')
 
 users_parser = subparsers.add_parser("users")
@@ -74,13 +94,13 @@ user_attributes_parser.add_argument("-e", "--email", required=False, default=Non
 user_attributes_parser.add_argument("--nickname", required=False, default=None)
 user_attributes_parser.add_argument("-p", "--profile-image", required=False, default=None) # Required according to users service
 
-create_user_parser = users_subparsers.add_parser("create", parents=[user_id_parser, user_attributes_parser])
+create_user_parser = users_subparsers.add_parser("create", parents=[user_id_parser, user_attributes_parser, log_level_parser])
 
-get_user_parser = users_subparsers.add_parser("get", parents=[user_id_parser])
+get_user_parser = users_subparsers.add_parser("get", parents=[user_id_parser, all_parser, log_level_parser])
 
-delete_user_parser = users_subparsers.add_parser("delete", parents=[user_id_parser])
+delete_user_parser = users_subparsers.add_parser("delete", parents=[user_id_parser, log_level_parser])
 
-update_user_parser = users_subparsers.add_parser("update", parents=[user_id_parser, user_attributes_parser])
+update_user_parser = users_subparsers.add_parser("update", parents=[user_id_parser, user_attributes_parser, log_level_parser])
 
 problem_statements_parser = subparsers.add_parser("problemstatements")
 problem_statements_subparsers = problem_statements_parser.add_subparsers(title="Commands", dest='problem_statements_command')
@@ -88,8 +108,7 @@ problem_statements_subparsers = problem_statements_parser.add_subparsers(title="
 problem_statement_id_parser = argparse.ArgumentParser(add_help=False)
 problem_statement_id_parser.add_argument("-s", "--problem-statement-id", required=False, default=None)
 
-get_problem_statement_parser = problem_statements_subparsers.add_parser("get", parents=[problem_statement_id_parser])
-get_problem_statement_parser.add_argument("--all", action='store_true')
+get_problem_statement_parser = problem_statements_subparsers.add_parser("get", parents=[problem_statement_id_parser, all_parser, log_level_parser])
 
 problem_statement_attributes_parser = argparse.ArgumentParser(add_help=False)
 problem_statement_attributes_parser.add_argument("-d", "--description", required=False, default=None)
@@ -98,14 +117,14 @@ problem_statement_attributes_parser.add_argument("-g", "--github", required=Fals
 problem_statement_attributes_parser.add_argument("--status", required=False, default=None)
 
 
-create_problem_statement_parser = problem_statements_subparsers.add_parser("create", parents=[problem_statement_attributes_parser])
+create_problem_statement_parser = problem_statements_subparsers.add_parser("create", parents=[problem_statement_attributes_parser, log_level_parser])
 create_problem_statement_parser.add_argument("-t", "--title", required=True)
 
-update_problem_statement_parser = problem_statements_subparsers.add_parser("update", parents=[problem_statement_id_parser ,problem_statement_attributes_parser])
+update_problem_statement_parser = problem_statements_subparsers.add_parser("update", parents=[problem_statement_id_parser ,problem_statement_attributes_parser, log_level_parser])
 
-delete_problem_statement_parser = problem_statements_subparsers.add_parser("delete", parents=[problem_statement_id_parser])
+delete_problem_statement_parser = problem_statements_subparsers.add_parser("delete", parents=[problem_statement_id_parser, log_level_parser])
 
-helping_parser = problem_statements_subparsers.add_parser("helpout", parents=[problem_statement_id_parser, user_id_parser])
+helping_parser = problem_statements_subparsers.add_parser("helpout", parents=[problem_statement_id_parser, user_id_parser, log_level_parser])
 helping_parser.add_argument("--cannot-help", action='store_true')
 helping_parser.add_argument("--mentor", action='store_true')
 helping_parser.add_argument("--hacker", action='store_true')
@@ -163,10 +182,18 @@ def create_user(user_id, email, name, nickname=None, profile_image=None):
     
     logger.info(f'Created: \n {json.dumps(vars(u), indent=4)}')
 
+def get_users():
+    res = users_service.get_users()
+    output = []
+    for p in res:
+        output.append(p.serialize())
+    logger.info(f'Users: \n {json.dumps(output, indent=4)}')
+    
 
 def get_problem_statement(id):
+    logger.info(f'Finding problem statement my id {id}')
     s = problem_statements_service.get_problem_statement(id)
-    logger.info(f'User: \n {json.dumps(vars(s), indent=4)}')
+    logger.info(f'Problem statement: \n {json.dumps(vars(s), indent=4)}')
 
 def get_problem_statements():
     res = problem_statements_service.get_problem_statements()
@@ -222,6 +249,9 @@ def handle_helping(problem_statement_id, id, user_id, mentor, hacker, cannot_hel
 
 args = parser.parse_args()
 
+if args.log_debug:
+    logger.info("Debug logging") 
+
 logger.info(args)
 
 if hasattr(args, 'command'):
@@ -233,7 +263,10 @@ if hasattr(args, 'command'):
             logger.info(f'Users command: {args.users_command}')
 
             if args.users_command == 'get':
-                get_user(args.user_id, args.id)
+                if args.all:
+                    get_users()
+                else:
+                    get_user(args.user_id, args.id)
 
             elif args.users_command == 'create':
                 logger.info('Creating a user')

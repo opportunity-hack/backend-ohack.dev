@@ -40,7 +40,7 @@ class ProblemStatement:
         return
     
     def serialize(self):
-        d = {}
+        d = {'debug': True}
         props = dir(self)
         for m in props:
             if m == 'helping':

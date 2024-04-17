@@ -4,6 +4,11 @@ from model.user import User
 import os
 import littletable as lt #https://github.com/ptmcg/littletable/blob/master/how_to_use_littletable.md
 from datetime import datetime
+import logging
+from common.log import get_log_level
+
+logger = logging.getLogger("ohack")
+logger.setLevel(get_log_level())
 
 # WARNING, if the column isn't defined in the CSV, it won't be saved in the xlsx
 USERS_CSV_FILE_PATH = "../test/data/OHack Test Data - Users.csv"
@@ -27,7 +32,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.init_problem_statements()
         self.init_problem_statement_helping()
 
-    # Users
+    # ----------------------- Users -------------------------------------------- #
 
     def fetch_user_by_user_id_raw(self, user_id):
         res = None
@@ -35,7 +40,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             res = self.users.by.user_id[user_id] # This is going to return a SimpleNamespace for imported rows.
         except KeyError as e:
             # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
-            print(f'fetch_user_by_user_id_raw error: {e}')
+            logger.debug(f'fetch_user_by_user_id_raw error: {e}')
         return res
 
     def fetch_user_by_user_id(self, user_id):
@@ -45,7 +50,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             res = User.deserialize(vars(temp)) if temp is not None else None
         except KeyError as e:
             # A key error here means that User.deserialize was expecting a property in the data that wasn't there
-            print(f'fetch_user_by_user_id error: {e}')
+            logger.debug(f'fetch_user_by_user_id error: {e}')
         return res
     
     def fetch_user_by_db_id_raw(self, id):
@@ -54,7 +59,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             res = self.users.by.id[int(id)] # This is going to return a SimpleNamespace for imported rows.
         except KeyError as e:
             # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
-            print(f'fetch_user_by_db_id_raw error: {e}')
+            logger.debug(f'fetch_user_by_db_id_raw error: {e}')
         return res
 
     def fetch_user_by_db_id(self, id):
@@ -63,7 +68,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             temp = self.fetch_user_by_db_id_raw(id) # This is going to return a SimpleNamespace for imported rows.
             res = User.deserialize(vars(temp)) if temp is not None else None
         except KeyError as e:
-            print(f'fetch_user_by_db_id error: {e}')
+            logger.debug(f'fetch_user_by_db_id error: {e}')
         return res
     
     #TODO: Kill with fire. Leaky abstraction
@@ -82,7 +87,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
              'profile_image': user.profile_image,
              'nickname': user.nickname}
         
-        print(f'Inserting user\n: {d}')
+        logger.debug(f'Inserting user\n: {d}')
 
         self.users.insert(d)
 
@@ -121,7 +126,16 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         return User.deserialize(vars(raw))
     
-    # Problem Statements
+    def fetch_users(self):
+        res = []
+
+        for p in self.users:
+            res.append(User.deserialize(vars(p)))
+
+        return res
+    
+    # ----------------------- Problem Statements --------------------------------------------
+    
     def fetch_problem_statement(self, id):
         res = None
         try:
@@ -130,7 +144,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             res = ProblemStatement.deserialize(vars(temp)) if temp is not None else None
         except KeyError as e:
             # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
-            print(f'fetch_problem_statement_by_id error: {e}')
+            logger.debug(f'fetch_problem_statement_by_id error: {e}')
         return res
     
     def fetch_problem_statement_raw(self, id):
@@ -139,7 +153,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             res = self.problem_statements.by.id[int(id)] # This is going to return a SimpleNamespace for imported rows.
         except KeyError as e:
             # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
-            print(f'fetch_problem_statement_by_id_raw error: {e}')
+            logger.debug(f'fetch_problem_statement_by_id_raw error: {e}')
         return res
     
     def fetch_problem_statements(self):
@@ -161,7 +175,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
              'github': problem_statement.github, 
              'profile_image': problem_statement.status}
         
-        print(f'Inserting problem statement\n: {d}')
+        logger.debug(f'Inserting problem statement\n: {d}')
 
         self.problem_statements.insert(d)
 
