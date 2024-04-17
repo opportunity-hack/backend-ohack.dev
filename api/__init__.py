@@ -76,7 +76,7 @@ def create_app():
     ##########################################
 
     csp = {
-        'default-src': ['\'self\''],
+        'default-src': ['\'self\'', '\'http://127.0.0.1:6060\''],
         'frame-ancestors': ['\'none\'']
     }
 
