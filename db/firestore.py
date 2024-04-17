@@ -98,7 +98,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             ],
             "teams": []
         })
-        return user.id if insert_res is not None else None
+        return user if insert_res is not None else None
     
     def update_user(self, user: User):
 
@@ -391,16 +391,56 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         return ProblemStatement.deserialize(ps_dict)
     
-    def fetch_problem_statement_by_project_id(self, project_id):
-        result : ProblemStatement | None
-        db = self.get_db()      
-        ps_doc = db.collection('problem_statements').document(project_id)
+    # ----------------------- Hackathons ------------------------------------------
 
-        if ps_doc is not None:
-            result = ProblemStatement.deserialize(ps_doc.to_dict())
+    def fetch_hackathons(self):
+        hackathons = []
+        db = self.get_db()  # this connects to our Firestore database
+        docs = db.collection('hackathons').stream()
 
-        return result
+        for doc in docs:
+            temp = doc.to_dict()
+            temp["id"] = doc.id
+            # print(f'temp {temp}')
+            hackathons.append(Hackathon.deserialize(temp))
 
+        return hackathons
+    
+    def insert_hackathon(self, h: Hackathon):
+        #TODO: Does this throw?
+        db = self.get_db()
+        default_badge = self.get_default_badge()
+        #Set id
+        h.id = uuid.uuid1().hex
+        #TODO: Does this throw?
+
+            #     {
+    #     "donation_current": 0.0,
+    #     "donation_goals": 0.0,
+    #     "end_date": "2019-10-20",
+    #     "id": "LSi9jQED7BWZw3DKaQAx",
+    #     "image_url": "",
+    #     "location": "Arizona",
+    #     "start_date": "2019-10-19",
+    #     "title": "",
+    #     "type": ""
+    # },
+
+        insert_res = db.collection('hackathons').document(h.id).set({
+            "donation_current": h.donation_current,
+            "donation_goals": h.donation_goals,
+            "title": h.title,
+            "image_url": h.image_url,
+            "location": h.location,
+            "start_date": h.start_date,
+            "end_date": h.end_date,
+            "type": h.type
+        })
+
+        return h if insert_res is not None else None
+       
+
+        return h
 
 
 DatabaseInterface.register(FirestoreDatabaseInterface)

@@ -1,4 +1,5 @@
 from common.utils import safe_get_env_var
+from model.hackathon import Hackathon
 from model.problem_statement import ProblemStatement
 from model.user import User
 
@@ -69,6 +70,14 @@ def insert_helping(problem_statement_id, user: User, mentor_or_hacker, helping_d
 
 def delete_helping(problem_statement_id, user: User):
     return db.delete_helping(problem_statement_id, user)
+
+# Hackathons
+
+def fetch_hackathons():
+    return db.fetch_hackathons()
+
+def insert_hackathon(h : Hackathon):
+    return db.insert_hackathon(h)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

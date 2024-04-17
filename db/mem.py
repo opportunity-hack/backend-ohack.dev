@@ -1,4 +1,5 @@
 from db.interface import DatabaseInterface
+from model.hackathon import Hackathon
 from model.problem_statement import Helping, ProblemStatement
 from model.user import User
 import os
@@ -20,17 +21,22 @@ PROBLEM_STATEMENTS_EXCEL_FILE_PATH = "../test/data/problem_statements.xlsx"
 PROBLEM_STATEMENT_HELPING_CSV_FILE_PATH = "../test/data/OHack Test Data - Problem Statement Helping.csv"
 PROBLEM_STATEMENT_HELPING_EXCEL_FILE_PATH = "../test/data/problem_statement_helping.xlsx"
 
+HACKATHON_CSV_FILE_PATH = "../test/data/OHack Test Data - Hackathons.csv"
+HACKATHON_EXCEL_FILE_PATH = "../test/data/hackathons.xlsx"
+
 class InMemoryDatabaseInterface(DatabaseInterface):
 
     users = None
     problem_statements = None
     problem_statement_helping = None
+    hackathons = None
 
     def __init__(self):
         super().__init__()
         self.init_users()
         self.init_problem_statements()
         self.init_problem_statement_helping()
+        self.init_hackathons()
 
     # ----------------------- Users -------------------------------------------- #
 
@@ -274,6 +280,27 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         return problem_statement
 
+    # ----------------------- Hackathons ------------------------------------------
+    
+    def fetch_hackathons(self):
+        hackathons = []
+
+        return hackathons
+    
+    def insert_hackathon(self, h:Hackathon):
+        h.id = self.get_next_hackathon_id()
+
+        # Fields on here need to show up in exactly the column order in the CSV
+        d = h.serialize()
+        
+        logger.debug(f'Inserting hackathon\n: {h}')
+
+        self.hackathons.insert(h)
+
+        self.flush_hackathons()
+
+        return h
+
     # Intialization
 
     def init_users(self):
@@ -317,6 +344,16 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.problem_statement_helping.excel_export(PROBLEM_STATEMENT_HELPING_EXCEL_FILE_PATH)
     
 
+    def init_hackathons(self):
+        if os.path.exists(HACKATHON_EXCEL_FILE_PATH):
+            self.hackathons = lt.Table().excel_import(HACKATHON_EXCEL_FILE_PATH, transforms={'id': int})
+        else:
+            self.hackathons = lt.Table().csv_import(HACKATHON_CSV_FILE_PATH, transforms={'id': int})
+
+        self.hackathons.create_index('id', unique=True)
+
+    def get_next_hackathon_id(self) -> int:
+        return max([i for i in self.hackathons.all.id]) + 1
 
 DatabaseInterface.register(InMemoryDatabaseInterface)
 

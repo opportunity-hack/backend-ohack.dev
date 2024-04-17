@@ -154,3 +154,38 @@ def get_problem_statement_by_id(id):
 @limits(calls=100, period=ONE_MINUTE)
 def get_problem_statements():
     return fetch_problem_statements()
+
+# TODO:
+@limits(calls=100, period=ONE_MINUTE)
+def link_problem_statements_to_events_old(json):    
+    # JSON format should be in the format of
+    # problemStatementId -> [ <eventTitle1>|<eventId1>, <eventTitle2>|<eventId2> ]
+    logger.debug(f"Linking payload {json}")
+    
+    db = get_db()  # this connects to our Firestore database
+    data = json["mapping"]
+    for problemId, eventList in data.items():
+        problem_statement_doc = db.collection(
+            'problem_statements').document(problemId)
+        
+        eventObsList = []
+        
+        for event in eventList:
+            logger.info(f"Checking event: {event}")
+            if "|" in event:
+                eventId = event.split("|")[1]
+            else:
+                eventId = event
+            event_doc = db.collection('hackathons').document(eventId)
+            eventObsList.append(event_doc)
+
+        logger.info(f" Events to add: {eventObsList}")
+        problem_result = problem_statement_doc.update({
+            "events": eventObsList
+        });
+        
+    clear_cache()
+
+    return Message(
+        "Updated Problem Statement to Event Associations"
+    )

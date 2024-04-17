@@ -29,6 +29,10 @@ import sys
 import json
 import logging
 
+from model.hackathon import Hackathon
+
+
+
 #------------------------------ Check args for log level -------------------------------- #
 
 print(f"args: {sys.argv}")
@@ -64,6 +68,10 @@ from model.user import User
 from common.utils import safe_get_env_var
 from datetime import datetime
 
+# TODO: Temporary stop gap. Should not be accessing db layer directly from here
+from db.db import fetch_hackathons, insert_hackathon
+
+
 load_dotenv()
 
 
@@ -72,6 +80,9 @@ load_dotenv()
 in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
 parser = argparse.ArgumentParser()
+
+json_parser = argparse.ArgumentParser(add_help=False)
+json_parser.add_argument("-j", "--json", required=False, default=None)
 
 log_level_parser = argparse.ArgumentParser(add_help=False)
 log_level_parser.add_argument("--log-debug", action='store_true')
@@ -128,6 +139,18 @@ helping_parser = problem_statements_subparsers.add_parser("helpout", parents=[pr
 helping_parser.add_argument("--cannot-help", action='store_true')
 helping_parser.add_argument("--mentor", action='store_true')
 helping_parser.add_argument("--hacker", action='store_true')
+
+hackathons_parser = subparsers.add_parser("hackathons")
+hackathons_subparsers = hackathons_parser.add_subparsers(title="Commands", dest='hackathons_command')
+
+hackathon_id_parser = argparse.ArgumentParser(add_help=False)
+hackathon_id_parser.add_argument("--hackathon-id", required=False, default=None)
+
+get_hackathon_parser = hackathons_subparsers.add_parser("get", parents=[hackathon_id_parser, all_parser, log_level_parser])
+
+import_hackathon_parser = hackathons_subparsers.add_parser("import", parents=[json_parser, log_level_parser])
+
+
 
 def do_get_user(user_id, id):
     u:User | None = None
@@ -247,6 +270,22 @@ def handle_helping(problem_statement_id, id, user_id, mentor, hacker, cannot_hel
 
     logger.info(f'Problem statement: \n {json.dumps(d, indent=4)}')
 
+def get_hackathons():
+    # TODO: This is a temporary stop-gap. We should eventually call a method on the
+    # hackathons service as opposed to calling the DB layer directly
+    res = fetch_hackathons()
+    output = []
+    for h in res:
+        output.append(h.serialize())
+    logger.info(f'Hackathons: \n {json.dumps(output, indent=4)}')
+
+def import_hackathons(json_file):
+    # TODO: Handle relative paths
+    l = json.load(json_file)
+    for temp in l:
+        h = Hackathon.deserialize(temp)
+        insert_hackathon(h)
+
 args = parser.parse_args()
 
 if args.log_debug:
@@ -299,3 +338,16 @@ if hasattr(args, 'command'):
 
             if args.problem_statements_command == 'helpout':
                 handle_helping(args.problem_statement_id, args.id, args.user_id, args.mentor, args.hacker, args.cannot_help)
+    
+    elif args.command == 'hackathons':
+         # Handle hackathon related commands
+        if hasattr(args, 'hackathons_command'):
+
+            if args.hackathons_command == 'get':
+
+                if args.all:
+                    get_hackathons()
+
+                else:
+                    # TODO:
+                    pass

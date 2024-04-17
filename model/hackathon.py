@@ -31,11 +31,29 @@ class Hackathon:
     def deserialize(cls, d):
         h = Hackathon()
         h.id = d['id']
-        h.title = d['title']
-        h.donation_current = d['donation_current']
-        h.donation_goals = d['donation_goals']
-        # TODO: location
+        h.title = d['title'] if 'title' in d else ''
+        h.donation_current = d['donation_current'] if 'donation_current' in d else 0.0
+        h.donation_goals = d['donation_goals'] if 'donation_goals' in d else 0.0
+        h.location = d['location'] if 'location' in d else None
         h.start_date = d['start_date']
         h.end_date = d['end_date']
-        h.image_url = d['image_url']
+        h.image_url = d['image_url'] if 'image_url' in d else None
         return h
+    
+    def serialize(self):
+        d = {}
+        props = dir(self)     
+        for m in props:
+            if m == 'teams':
+                pass #TODO
+            elif m == 'links':
+                pass #TODO
+            elif m == 'nonprofits':
+                pass #TODO
+            elif not m.startswith('__'): # No magic please
+                p = getattr(self, m)
+                if not callable(p):
+                    d[m] = p
+
+        return d
+
