@@ -267,7 +267,10 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             pass
         else:
             for doc in docs:
+                # doc is an instance of google.cloud.firestore_v1.base_document.DocumentSnapshot
+                # print(f'doc {doc}')
                 temp = doc.to_dict()
+                print(f'id type {type(doc.reference.id)}')
                 temp['id'] = doc.reference.id
                 results.append(ProblemStatement.deserialize(temp))
      
@@ -282,7 +285,10 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         try:
             raw = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
             print(f'raw {raw}')
+            print(f'raw.exists {raw.exists}')
+            # print(f'raw.data {raw.data}')
             print(f'raw.reference {raw.reference}')
+            print(f'raw.reference.id {raw.reference.id}')
             temp = raw.to_dict()
             print(f'temp {temp}')
             temp['id'] = raw.reference.id
@@ -294,7 +300,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     
     def fetch_problem_statement_raw(self, db, id):
         logger.debug(f'fetch_problem_statement_raw id:{id}')
-        p = db.collection('problem_statement').document(id).get()
+        print(f"id {id}")
+        p = db.collection('problem_statements').document(id).get()
         return p
     
     def insert_problem_statement(self, problem_statement: ProblemStatement):
