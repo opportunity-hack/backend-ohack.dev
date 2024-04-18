@@ -1,4 +1,5 @@
 from db.interface import DatabaseInterface
+from model.donation import CurrentDonations, DonationGoals
 from model.hackathon import Hackathon
 from model.problem_statement import Helping, ProblemStatement
 from model.user import User
@@ -309,17 +310,90 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         # TODO: fetch donation goals and current donations
 
         return hackathons
-    
-    # TODO:
+
     def fetch_hackathon(self, id):
+        res = None
+        try:
+            temp = self.fetch_hackathon_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            temp.id = id
+            res = Hackathon.deserialize(vars(temp)) if temp is not None else None
+        
+            if res is not None:
+                res.donation_goals = self.fetch_donation_goals_by_hackathon_id(id)
+                res.donation_current = self.fetch_current_donations_by_hackathon_id(id)
+                pass
 
-        # TODO: fetch donation goals and current donations
-
-        return None
+        except KeyError as e:
+            # A key error here means that Hackathon.deserialize was expecting a property in the data that wasn't there
+            logger.debug(f'fetch_hackathon error: {e}')
+        return res
     
-    # TODO: fetch donation goals
+    def fetch_hackathon_raw(self, id):
+        res = None
+        try:
+            res = self.hackathons.by.id[int(id)] # This is going to return a SimpleNamespace for imported rows.
+        except KeyError as e:
+            # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
+            logger.debug(f'fetch_hackathon_raw error: {e}')
+        return res
+    
+    def fetch_donation_goals_by_hackathon_id(self, id):
+        res = None
+        try:
+            temp = self.fetch_donation_goals_by_hackathon_id_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            
+            if temp is not None:
+                temp.id = id
+                res = DonationGoals.deserialize(vars(temp))
 
-    # TODO: fetch current donations
+        except KeyError as e:
+            # A key error here means that DonationGoals.deserialize was expecting a property in the data that wasn't there
+            logger.debug(f'fetch_donation_goals_by_hackathon_id error: {e}')
+        return res
+
+    def fetch_donation_goals_by_hackathon_id_raw(self, hackathon_id):
+        res = None
+        try:
+            res, *rest = self.hackathon_donation_goals.join(
+                self.donation_goals, 
+                donation_goals_id="id"
+                ).where(lambda g: g.hackathon_id == int(hackathon_id)) # This is going to return a SimpleNamespace for imported rows.
+        except KeyError as e:
+            # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
+            logger.debug(f'fetch_donation_goals_by_hackathon_id_raw error: {e}')
+        except Exception as e1:
+            # print(f'ex : {e1}')
+            pass # This means that there weren't enough values to unpack, thus the result set was empty
+        return res
+
+    def fetch_current_donations_by_hackathon_id(self, id):
+        res = None
+        try:
+            temp = self.fetch_current_donations_by_hackathon_id_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            
+            if temp is not None:
+                temp.id = id
+                res = CurrentDonations.deserialize(vars(temp))
+
+        except KeyError as e:
+            # A key error here means that CurrentDonations.deserialize was expecting a property in the data that wasn't there
+            logger.debug(f'fetch_current_donations_by_hackathon_id error: {e}')
+        return res
+
+    def fetch_current_donations_by_hackathon_id_raw(self, hackathon_id):
+        res = None
+        try:
+            res, *rest =  self.hackathon_current_donations.join(
+                self.current_donations,
+                current_donations_id="id"
+                ).where(lambda g: g.hackathon_id == int(hackathon_id))
+        except KeyError as e:
+            # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
+            logger.debug(f'fetch_current_donations_by_hackathon_id_raw error: {e}')
+        except Exception as e1:
+            print(f'ex : {e1}')
+            pass # this means the result set was empty
+        return res
 
     
     def insert_hackathon(self, h:Hackathon):
@@ -395,18 +469,18 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
     def init_hackathon_current_donations(self):
         if os.path.exists(HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH):
-            self.hackathon_current_donations = lt.Table().excel_import(HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH, transforms={'id': int})
+            self.hackathon_current_donations = lt.Table().excel_import(HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH, transforms={'hackathon_id': int, 'current_donations_id': int} )
         else:
-            self.hackathon_current_donations = lt.Table().csv_import(HACKATHON_CURRENT_DONATIONS_CSV_FILE_PATH, transforms={'id': int})
+            self.hackathon_current_donations = lt.Table().csv_import(HACKATHON_CURRENT_DONATIONS_CSV_FILE_PATH, transforms={'hackathon_id': int, 'current_donations_id': int})
 
     def flush_hackathon_current_donations(self):
         self.hackathon_current_donations.excel_export(HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH)
 
     def init_hackathon_donation_goals(self):
         if os.path.exists(HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH):
-            self.hackathon_donation_goals = lt.Table().excel_import(HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH, transforms={'id': int})
+            self.hackathon_donation_goals = lt.Table().excel_import(HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH, transforms={'hackathon_id': int, 'donation_goals_id': int})
         else:
-            self.hackathon_donation_goals = lt.Table().csv_import(HACKATHON_DONATION_GOALS_CSV_FILE_PATH, transforms={'id': int})
+            self.hackathon_donation_goals = lt.Table().csv_import(HACKATHON_DONATION_GOALS_CSV_FILE_PATH, transforms={'hackathon_id': int, 'donation_goals_id': int})
 
     def flush_hackathon_donation_goals(self):
         self.hackathon_donation_goals.excel_export(HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH)
