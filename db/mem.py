@@ -24,12 +24,28 @@ PROBLEM_STATEMENT_HELPING_EXCEL_FILE_PATH = "../test/data/problem_statement_help
 HACKATHON_CSV_FILE_PATH = "../test/data/OHack Test Data - Hackathons.csv"
 HACKATHON_EXCEL_FILE_PATH = "../test/data/hackathons.xlsx"
 
+CURRENT_DONATIONS_CSV_FILE_PATH = "../test/data/OHack Test Data - Current Donations.csv"
+CURRENT_DONATIONS_EXCEL_FILE_PATH = "../test/data/current_donations.xlsx"
+
+DONATION_GOALS_CSV_FILE_PATH = "../test/data/OHack Test Data - Donation Goals.csv"
+DONATION_GOALS_EXCEL_FILE_PATH = "../test/data/donation_goals.xlsx"
+
+HACKATHON_CURRENT_DONATIONS_CSV_FILE_PATH = "../test/data/OHack Test Data - Hackathon Current Donations.csv"
+HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH = "../test/data/hackathon_current_donations.xlsx"
+
+HACKATHON_DONATION_GOALS_CSV_FILE_PATH = "../test/data/OHack Test Data - Hackathon Donation Goals.csv"
+HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH = "../test/data/hackathon_donation_goals.xlsx"
+
 class InMemoryDatabaseInterface(DatabaseInterface):
 
     users = None
     problem_statements = None
     problem_statement_helping = None
     hackathons = None
+    current_donations = None
+    donation_goals = None
+    hackathon_current_donations = None
+    hackathon_donation_goals = None
 
     def __init__(self):
         super().__init__()
@@ -37,6 +53,10 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.init_problem_statements()
         self.init_problem_statement_helping()
         self.init_hackathons()
+        self.init_hackathon_current_donations()
+        self.init_hackathon_donation_goals()
+        self.init_current_donations()
+        self.init_donation_goals()
 
     # ----------------------- Users -------------------------------------------- #
 
@@ -286,12 +306,20 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     def fetch_hackathons(self):
         hackathons = []
 
+        # TODO: fetch donation goals and current donations
+
         return hackathons
     
     # TODO:
     def fetch_hackathon(self, id):
 
+        # TODO: fetch donation goals and current donations
+
         return None
+    
+    # TODO: fetch donation goals
+
+    # TODO: fetch current donations
 
     
     def insert_hackathon(self, h:Hackathon):
@@ -364,6 +392,48 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     
     def flush_hackathons(self):
         self.hackathons.excel_export(HACKATHON_EXCEL_FILE_PATH)
+
+    def init_hackathon_current_donations(self):
+        if os.path.exists(HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH):
+            self.hackathon_current_donations = lt.Table().excel_import(HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH, transforms={'id': int})
+        else:
+            self.hackathon_current_donations = lt.Table().csv_import(HACKATHON_CURRENT_DONATIONS_CSV_FILE_PATH, transforms={'id': int})
+
+    def flush_hackathon_current_donations(self):
+        self.hackathon_current_donations.excel_export(HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH)
+
+    def init_hackathon_donation_goals(self):
+        if os.path.exists(HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH):
+            self.hackathon_donation_goals = lt.Table().excel_import(HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH, transforms={'id': int})
+        else:
+            self.hackathon_donation_goals = lt.Table().csv_import(HACKATHON_DONATION_GOALS_CSV_FILE_PATH, transforms={'id': int})
+
+    def flush_hackathon_donation_goals(self):
+        self.hackathon_donation_goals.excel_export(HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH)
+
+    def init_current_donations(self):
+        if os.path.exists(CURRENT_DONATIONS_EXCEL_FILE_PATH):
+            self.current_donations = lt.Table().excel_import(CURRENT_DONATIONS_EXCEL_FILE_PATH, transforms={'id': int})
+        else:
+            self.current_donations = lt.Table().csv_import(CURRENT_DONATIONS_CSV_FILE_PATH, transforms={'id': int})
+    
+    def flush_current_donations(self):
+        self.current_donations.excel_export(CURRENT_DONATIONS_EXCEL_FILE_PATH)
+
+    def get_next_current_donations_id(self) -> int:
+        return max([i for i in self.current_donations.all.id]) + 1
+
+    def init_donation_goals(self):
+        if os.path.exists(DONATION_GOALS_EXCEL_FILE_PATH):
+            self.donation_goals = lt.Table().excel_import(DONATION_GOALS_EXCEL_FILE_PATH, transforms={'id': int})
+        else:
+            self.donation_goals = lt.Table().csv_import(DONATION_GOALS_CSV_FILE_PATH, transforms={'id': int})
+
+    def flush_donation_goals(self):
+        self.donation_goals.excel_export(DONATION_GOALS_EXCEL_FILE_PATH)
+
+    def get_next_donation_goals_id(self) -> int:
+        return max([i for i in self.donation_goals.all.id]) + 1
 
 DatabaseInterface.register(InMemoryDatabaseInterface)
 
