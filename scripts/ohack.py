@@ -28,10 +28,13 @@ import os
 import sys
 import json
 import logging
+from dotenv import load_dotenv
+from datetime import datetime
 
-from model.hackathon import Hackathon
+#------------------------------ Load .env first -------------------------------- #
 
 
+load_dotenv()
 
 #------------------------------ Check args for log level -------------------------------- #
 
@@ -62,19 +65,14 @@ logging.getLogger().addHandler(console)
 #------------------------------ Now import OHack modules ---------------------------------#
 
 from model.problem_statement import ProblemStatement
-from dotenv import load_dotenv
+
 from services import users_service, problem_statements_service
 from model.user import User
 from common.utils import safe_get_env_var
-from datetime import datetime
+from model.hackathon import Hackathon
 
 # TODO: Temporary stop gap. Should not be accessing db layer directly from here
-from db.db import fetch_hackathons, insert_hackathon
-
-
-load_dotenv()
-
-
+from db.db import fetch_hackathon, fetch_hackathons, insert_hackathon
 
 # TODO: Select db interface based on env
 in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
@@ -279,9 +277,15 @@ def get_hackathons():
         output.append(h.serialize())
     logger.info(f'Hackathons: \n {json.dumps(output, indent=4)}')
 
+def get_hackathon(id):
+    res = fetch_hackathon(id)
+    temp = res.serialize()
+    logger.info(f'Hackathon: \n {json.dumps(temp, indent=4)}')
+
 def import_hackathons(json_file):
     # TODO: Handle relative paths
-    l = json.load(json_file)
+    f = open(json_file, 'r')
+    l = json.load(f)
     for temp in l:
         h = Hackathon.deserialize(temp)
         insert_hackathon(h)
@@ -349,5 +353,7 @@ if hasattr(args, 'command'):
                     get_hackathons()
 
                 else:
-                    # TODO:
-                    pass
+                    get_hackathon(args.hackathon_id)
+
+            elif args.hackathons_command == 'import':
+                import_hackathons(args.json)

@@ -1,17 +1,5 @@
-# Excerpted from firebase.py
-# hackathon = {
-#         "title": title,
-#         "type": type,
-#         "links": links,
-#         "teams": teams,
-#         "donation_current": donation_current,
-#         "donation_goals": donation_goals,
-#         "location": location,
-#         "nonprofits": nonprofits,
-#         "start_date": start_date,
-#         "end_date": end_date,
-#         "image_url": ""
-#     }
+from model.donation import CurrentDonations, DonationGoals
+
 
 class Hackathon:
     id = None
@@ -19,8 +7,8 @@ class Hackathon:
     type = ''
     links = []
     teams = []
-    donation_current = 0.0
-    donation_goals = 0.0
+    donation_current = None
+    donation_goals = None
     location = None
     nonprofits = []
     start_date = None
@@ -32,8 +20,8 @@ class Hackathon:
         h = Hackathon()
         h.id = d['id']
         h.title = d['title'] if 'title' in d else ''
-        h.donation_current = d['donation_current'] if 'donation_current' in d else 0.0
-        h.donation_goals = d['donation_goals'] if 'donation_goals' in d else 0.0
+        h.donation_current = CurrentDonations.deserialize(d['donation_current']) if 'donation_current' in d else None
+        h.donation_goals = DonationGoals.deserialize(d['donation_goals']) if 'donation_goals' in d else None
         h.location = d['location'] if 'location' in d else None
         h.start_date = d['start_date']
         h.end_date = d['end_date']
@@ -42,9 +30,18 @@ class Hackathon:
     
     def serialize(self):
         d = {}
-        props = dir(self)     
+        props = dir(self)
+        print(f'props {props}') 
         for m in props:
-            if m == 'teams':
+            if m == 'donation_goals':
+                p = getattr(self, m)
+                if p is not None:
+                    d[m] = p.serialize()
+            elif m == 'donation_current':
+                p = getattr(self, m)
+                if p is not None:
+                    d[m] = p.serialize()
+            elif m == 'teams':
                 pass #TODO
             elif m == 'links':
                 pass #TODO

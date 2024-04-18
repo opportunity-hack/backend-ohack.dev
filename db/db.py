@@ -73,6 +73,9 @@ def delete_helping(problem_statement_id, user: User):
 
 # Hackathons
 
+def fetch_hackathon(id):
+    return db.fetch_hackathon(id)
+
 def fetch_hackathons():
     return db.fetch_hackathons()
 

@@ -406,6 +406,23 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         return hackathons
     
+    def fetch_hackathon(self, id):
+        db = self.get_db()
+        raw = self.fetch_hackathon_raw(db, id)
+        temp = raw.to_dict()
+        print(f'temp {temp}')
+        if 'donation_current' in temp:
+            print(f'donation_current type: {type(temp["donation_current"])}')
+        temp['id'] = raw.reference.id
+        return Hackathon.deserialize(temp)
+
+    def fetch_hackathon_raw(self, db, id):
+        logger.debug(f'fetch_hackathon_raw id:{id}')
+        print(f"id {id}")
+        h = db.collection('hackathons').document(id).get()
+        print(f'exists {h.exists}')
+        return h
+
     def insert_hackathon(self, h: Hackathon):
         #TODO: Does this throw?
         db = self.get_db()

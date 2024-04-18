@@ -282,10 +282,17 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
     # ----------------------- Hackathons ------------------------------------------
     
+    # TODO:
     def fetch_hackathons(self):
         hackathons = []
 
         return hackathons
+    
+    # TODO:
+    def fetch_hackathon(self, id):
+
+        return None
+
     
     def insert_hackathon(self, h:Hackathon):
         h.id = self.get_next_hackathon_id()
@@ -354,6 +361,9 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
     def get_next_hackathon_id(self) -> int:
         return max([i for i in self.hackathons.all.id]) + 1
+    
+    def flush_hackathons(self):
+        self.hackathons.excel_export(HACKATHON_EXCEL_FILE_PATH)
 
 DatabaseInterface.register(InMemoryDatabaseInterface)
 
