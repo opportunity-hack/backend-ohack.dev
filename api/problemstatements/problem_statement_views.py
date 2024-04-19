@@ -44,9 +44,18 @@ def get_single_problem(id):
         #TODO: proper 404 handling: https://flask.palletsprojects.com/en/2.1.x/errorhandling/#custom-error-pages
         return None
 
-#TODO:
-# @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
-# @bp.route("/problem_statements/events", methods=["PATCH"])
-# def update_problem_statement_events_link():    
-#     return vars(link_problem_statements_to_events(request.get_json()))
+
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
+@bp.route("/events", methods=["PATCH"])
+def update_problem_statement_events_link():    
+    res = service.link_problem_statements_to_events(request.get_json())
+
+    if res is not None:
+        ps = []
+        for p in res:
+            ps.append(p.serialize())
+        return ps
+    else:
+        #TODO: proper 404 handling: https://flask.palletsprojects.com/en/2.1.x/errorhandling/#custom-error-pages
+        return None 
