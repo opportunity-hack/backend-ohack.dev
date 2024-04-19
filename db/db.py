@@ -82,6 +82,12 @@ def fetch_hackathons():
 def insert_hackathon(h : Hackathon):
     return db.insert_hackathon(h)
 
+'''
+Link problem statement and hackathon
+'''
+def insert_problem_statement_hackathon(problem_statement: ProblemStatement, hackathon: Hackathon)
+    return db.insert_problem_statement_hackathon(problem_statement, hackathon)
+
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
     return db.get_user_doc_reference(user_id)

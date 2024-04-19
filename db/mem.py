@@ -37,6 +37,10 @@ HACKATHON_CURRENT_DONATIONS_EXCEL_FILE_PATH = "../test/data/hackathon_current_do
 HACKATHON_DONATION_GOALS_CSV_FILE_PATH = "../test/data/OHack Test Data - Hackathon Donation Goals.csv"
 HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH = "../test/data/hackathon_donation_goals.xlsx"
 
+PROBLEM_STATEMENT_HACKATHONS_CSV_FILE_PATH = "../test/data/OHack Test Data - Problem Statement Hackathons.csv"
+PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH = "../test/data/problem_statement_hackathons.xlsx"
+
+
 class InMemoryDatabaseInterface(DatabaseInterface):
 
     users = None
@@ -47,6 +51,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     donation_goals = None
     hackathon_current_donations = None
     hackathon_donation_goals = None
+    problem_statement_hackathons = None
 
     def __init__(self):
         super().__init__()
@@ -58,6 +63,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.init_hackathon_donation_goals()
         self.init_current_donations()
         self.init_donation_goals()
+        self.init_problem_statement_hackathons()
 
     # ----------------------- Users -------------------------------------------- #
 
@@ -300,6 +306,14 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.flush_problem_statement_helping()
 
         return problem_statement
+    
+    def insert_problem_statement_hackathon(self, problem_statement: ProblemStatement, hackathon: Hackathon):
+
+        self.problem_statement_hackathons.insert({
+                'problem_statement_id': int(problem_statement.id),
+                'hackathon_id': hackathon.id})
+
+        return problem_statement
 
     # ----------------------- Hackathons ------------------------------------------
     
@@ -410,7 +424,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         return h
 
-    # Intialization
+    #--------------------------------------- Intialization ------------------------------ #
 
     def init_users(self):
         if os.path.exists(USERS_EXCEL_FILE_PATH):
@@ -508,6 +522,17 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
     def get_next_donation_goals_id(self) -> int:
         return max([i for i in self.donation_goals.all.id]) + 1
+    
+
+    def init_problem_statement_hackathons(self):
+        if os.path.exists(PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH):
+            self.problem_statement_hackathons = lt.Table().excel_import(PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH, transforms={'hackathon_id': int, 'problem_statement_id': int} )
+        else:
+            self.problem_statement_hackathons = lt.Table().csv_import(PROBLEM_STATEMENT_HACKATHONS_CSV_FILE_PATH, transforms={'hackathon_id': int, 'problem_statement_id': int})
+
+    def flush_problem_statement_hackathons(self):
+        self.hackathon_current_donations.excel_export(PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH)
+
 
 DatabaseInterface.register(InMemoryDatabaseInterface)
 

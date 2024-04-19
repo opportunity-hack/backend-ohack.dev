@@ -8,6 +8,12 @@
 #         "status": status        
 #     })
 
+# "references": [
+#     {
+#       "link": "https://www.ohack.org/about/history/2020-fall-global-hackathon/2020-fall-non-profits#h.4eksizku2ax5", 
+#       "name": "ohack.org"
+#     }, 
+
 from model.user import User
 
 
@@ -18,7 +24,8 @@ class ProblemStatement:
     first_thought_of = None
     github = None
     helping = []
-    # TODO: references. Pretty sure this is going to be a collection of other entities
+    references = []
+    hackathons = [] # TODO: Breaking change. This used to be called "events"
     status = None
 
     @classmethod
@@ -30,6 +37,16 @@ class ProblemStatement:
         p.first_thought_of = d['first_thought_of'] if 'first_thought_of' in d else None
         p.github = d['github'] if 'github' in d else None
         p.status = d['status'] if 'status' in d else None
+
+
+        if 'references' in d:
+            for h in d['references']:
+                p.references.append(Reference.deserialize(h))
+
+        if 'helping' in d:
+            for h in d['helping']:
+                p.helping.append(Helping.deserialize(h))
+
         return p
     
     def update(self, d):
@@ -52,6 +69,24 @@ class ProblemStatement:
                 d['helping'] = all_helping
 
                 pass
+
+            elif m == 'hackathons':
+                all_hackathons = []
+
+                for thon in self.hackathons:
+                    all_hackathons.append(thon.serialize())
+
+                d['hackathons'] = all_hackathons
+
+            elif m == 'references':
+                all_references = []
+
+                for r in self.references:
+                    all_references.append(r.serialize())
+
+                d['references'] = all_references
+
+            # TODO: Extract is_serializable(self_object, name)
             elif not m.startswith('__'): # No magic please
                 p = getattr(self, m)
                 if not callable(p):
@@ -82,6 +117,29 @@ class Helping:
             if m == 'user':
                 d['user'] = self.user.serialize()
             elif not m.startswith('__'): # No magic please
+                p = getattr(self, m)
+                if not callable(p):
+                    d[m] = p
+
+        return d
+    
+class Reference:
+    link = ''
+    name = ''
+
+    @classmethod
+    def deserialize(cls, d):
+        r = Reference()
+        r.link = d['link']
+        r.name = d['name']
+
+        return r
+    
+    def serialize(self):
+        d = {}
+        props = dir(self)     
+        for m in props:
+            if not m.startswith('__'): # No magic please
                 p = getattr(self, m)
                 if not callable(p):
                     d[m] = p
