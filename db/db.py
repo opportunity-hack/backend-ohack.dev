@@ -85,8 +85,11 @@ def insert_hackathon(h : Hackathon):
 '''
 Link problem statement and hackathon
 '''
-def insert_problem_statement_hackathon(problem_statement: ProblemStatement, hackathon: Hackathon)
+def insert_problem_statement_hackathon(problem_statement: ProblemStatement, hackathon: Hackathon):
     return db.insert_problem_statement_hackathon(problem_statement, hackathon)
+
+def update_problem_statement_hackathons(problem_statement: ProblemStatement, hackathons):
+    return db.update_problem_statement_hackathons(problem_statement, hackathons)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

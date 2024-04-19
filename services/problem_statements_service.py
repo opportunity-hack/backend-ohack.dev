@@ -3,7 +3,7 @@ from ratelimit import limits
 from common.utils.slack import invite_user_to_channel, send_slack, send_slack_audit
 from model.problem_statement import ProblemStatement
 from model.user import User
-from db.db import delete_helping, fetch_problem_statements, insert_helping, delete_problem_statement, fetch_problem_statement, insert_problem_statement, update_problem_statement
+from db.db import delete_helping, fetch_hackathon, fetch_problem_statements, insert_helping, delete_problem_statement, fetch_problem_statement, insert_problem_statement, update_problem_statement, insert_problem_statement_hackathon, update_problem_statement_hackathons
 import logging
 import pytz
 # TODO: Do we need caching on problem statements
@@ -47,8 +47,19 @@ def update_problem_statement_fields(d):
     else:
         return None
     
+# TODO: Do we need caching here?
+# @cached(cache=TTLCache(maxsize=100, ttl=600))
 def get_problem_statement(id):
-    return fetch_problem_statement(id)
+    logger.debug(f"get_problem_statement_by_id start project_id={id}")    
+    
+    problem_statement: ProblemStatement | None = fetch_problem_statement(id)
+    
+    if problem_statement is None:
+        logger.warning("get_problem_statement_by_id end (no results)")
+    else:                                
+        logger.info(f"get_problem_statement_by_id end (with result):{problem_statement}")
+        
+    return problem_statement
 
 def remove_problem_statement(id):
     return delete_problem_statement(id)
@@ -137,55 +148,46 @@ def save_user_helping_status(user: User, d):
 
     return problem_statement
 
-# TODO: Do we need caching here?
-# @cached(cache=TTLCache(maxsize=100, ttl=600))
-def get_problem_statement_by_id(id):
-    logger.debug(f"get_problem_statement_by_id start project_id={id}")    
-    
-    problem_statement: ProblemStatement | None = fetch_problem_statement(id)
-    
-    if problem_statement is None:
-        logger.warning("get_problem_statement_by_id end (no results)")
-    else:                                
-        logger.info(f"get_problem_statement_by_id end (with result):{problem_statement}")
-        
-    return problem_statement
-
 @limits(calls=100, period=ONE_MINUTE)
 def get_problem_statements():
     return fetch_problem_statements()
 
-# TODO:
+# TODO: Look at reshaping JSON payload to be more natural. Do we actually need the event title?
 @limits(calls=100, period=ONE_MINUTE)
-def link_problem_statements_to_events_old(json):    
-    # JSON format should be in the format of
-    # problemStatementId -> [ <eventTitle1>|<eventId1>, <eventTitle2>|<eventId2> ]
+def link_problem_statements_to_events(json):    
+    # JSON should be in the format of
+    # {
+    #   "mapping": {
+    #     "<problemStatementId>" : [ "<eventTitle1>|<eventId1>", "<eventTitle2>|<eventId2>" ]
+    #   }
+    # }
     logger.debug(f"Linking payload {json}")
     
-    db = get_db()  # this connects to our Firestore database
+    result = []
+    
     data = json["mapping"]
     for problemId, eventList in data.items():
-        problem_statement_doc = db.collection(
-            'problem_statements').document(problemId)
         
-        eventObsList = []
+        problem_statement = fetch_problem_statement(problemId)
         
-        for event in eventList:
-            logger.info(f"Checking event: {event}")
-            if "|" in event:
-                eventId = event.split("|")[1]
-            else:
-                eventId = event
-            event_doc = db.collection('hackathons').document(eventId)
-            eventObsList.append(event_doc)
+        if problem_statement is not None:
 
-        logger.info(f" Events to add: {eventObsList}")
-        problem_result = problem_statement_doc.update({
-            "events": eventObsList
-        });
-        
-    clear_cache()
+            hackathons = []
+            
+            for event in eventList:
+                logger.info(f"Checking event: {event}")
+                eventId = None
+                # <eventTitle>|<eventId>
+                if "|" in event:
+                    eventId = event.split("|")[1]
+                else:
+                    eventId = event
 
-    return Message(
-        "Updated Problem Statement to Event Associations"
-    )
+                hackathon = fetch_hackathon(eventId)
+                hackathons.append(hackathon)
+
+            update_problem_statement_hackathons(problem_statement, hackathons)
+
+            result.append(fetch_problem_statement(problem_statement.id))
+
+    return result

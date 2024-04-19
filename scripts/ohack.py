@@ -125,7 +125,6 @@ problem_statement_attributes_parser.add_argument("-f", "--first-thought-of", req
 problem_statement_attributes_parser.add_argument("-g", "--github", required=False, default=None)
 problem_statement_attributes_parser.add_argument("--status", required=False, default=None)
 
-
 create_problem_statement_parser = problem_statements_subparsers.add_parser("create", parents=[problem_statement_attributes_parser, log_level_parser])
 create_problem_statement_parser.add_argument("-t", "--title", required=True)
 
@@ -138,11 +137,16 @@ helping_parser.add_argument("--cannot-help", action='store_true')
 helping_parser.add_argument("--mentor", action='store_true')
 helping_parser.add_argument("--hacker", action='store_true')
 
-hackathons_parser = subparsers.add_parser("hackathons")
-hackathons_subparsers = hackathons_parser.add_subparsers(title="Commands", dest='hackathons_command')
+problem_statement_link_parser = problem_statements_subparsers.add_parser("link")
+problem_statement_link_parser_subparsers  = problem_statement_link_parser.add_subparsers(title="Links", dest='problem_statement_link_command')
 
 hackathon_id_parser = argparse.ArgumentParser(add_help=False)
 hackathon_id_parser.add_argument("--hackathon-id", required=False, default=None)
+
+link_hackathon_parser = problem_statement_link_parser_subparsers.add_parser("hackathon", parents=[problem_statement_id_parser, hackathon_id_parser, log_level_parser])
+
+hackathons_parser = subparsers.add_parser("hackathons")
+hackathons_subparsers = hackathons_parser.add_subparsers(title="Commands", dest='hackathons_command')
 
 get_hackathon_parser = hackathons_subparsers.add_parser("get", parents=[hackathon_id_parser, all_parser, log_level_parser])
 
@@ -290,6 +294,39 @@ def import_hackathons(json_file):
         h = Hackathon.deserialize(temp)
         insert_hackathon(h)
 
+def link_hackathon_to_problem_statement(problem_statement_id, hackathon_id):
+    # JSON should be in the format of
+    # {
+    #   "mapping": {
+    #     "<problemStatementId>" : [ "<eventTitle1>|<eventId1>", "<eventId2>" ]
+    #   }
+    # }
+
+    events = [hackathon_id]
+
+    problem_statement = problem_statements_service.get_problem_statement(problem_statement_id)
+
+    for h in problem_statement.hackathons:
+        if h.id not in events:
+            events.append(h.id)
+
+    payload = {
+        'mapping': {
+            problem_statement_id: events
+        }
+    }
+
+    print(f"payload: {payload}")
+
+    result = problem_statements_service.link_problem_statements_to_events(payload)
+
+    problem_statement = result[0]
+
+    d = problem_statement.serialize()
+
+    logger.info(f'Problem statement: \n {json.dumps(d, indent=4)}')
+    
+
 args = parser.parse_args()
 
 if args.log_debug:
@@ -343,6 +380,14 @@ if hasattr(args, 'command'):
             if args.problem_statements_command == 'helpout':
                 handle_helping(args.problem_statement_id, args.id, args.user_id, args.mentor, args.hacker, args.cannot_help)
     
+            if args.problem_statements_command == 'link':
+
+                if hasattr(args, 'problem_statement_link_command'):
+
+                    if args.problem_statement_link_command == 'hackathon':
+
+                        link_hackathon_to_problem_statement(args.problem_statement_id, args.hackathon_id)
+
     elif args.command == 'hackathons':
          # Handle hackathon related commands
         if hasattr(args, 'hackathons_command'):

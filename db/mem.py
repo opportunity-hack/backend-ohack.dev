@@ -311,19 +311,51 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         self.problem_statement_hackathons.insert({
                 'problem_statement_id': int(problem_statement.id),
-                'hackathon_id': hackathon.id})
+                'hackathon_id': int(hackathon.id)})
+        
+        self.flush_problem_statement_hackathons()
 
-        return problem_statement
+        return self.fetch_problem_statement(problem_statement.id)
+    
+    def update_problem_statement_hackathons(self, problem_statement: ProblemStatement, hackathons):
+
+        existing_joins = self.problem_statement_hackathons.where(lambda j: j.problem_statement_id == problem_statement.id)
+
+        for e in existing_joins:
+            match = next((x for x in hackathons if x.id == e.hackathon_id), None)
+            if match is None:
+                print(f'removing {e}')
+                self.problem_statement_hackathons.remove(e)
+
+        for h in hackathons:
+            match = next((x for x in existing_joins if x.hackathon_id == h.id), None)
+            if match is None:
+                to_insert = {
+                    'problem_statement_id': int(problem_statement.id),
+                    'hackathon_id': int(h.id)
+                }
+                print(f"inserting {to_insert}")
+                self.problem_statement_hackathons.insert(to_insert)
+
+        self.flush_problem_statement_hackathons()
+
+        return self.fetch_problem_statement(problem_statement.id)
 
     # ----------------------- Hackathons ------------------------------------------
     
-    # TODO:
     def fetch_hackathons(self):
-        hackathons = []
+        res = []
 
-        # TODO: fetch donation goals and current donations
+        for p in self.hackathons:
+            h = Hackathon.deserialize(vars(p))
 
-        return hackathons
+            if h is not None:
+                h.donation_goals = self.fetch_donation_goals_by_hackathon_id(h.id)
+                h.donation_current = self.fetch_current_donations_by_hackathon_id(h.id)
+                
+                res.append(h)
+
+        return res
 
     def fetch_hackathon(self, id):
         res = None
@@ -531,7 +563,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             self.problem_statement_hackathons = lt.Table().csv_import(PROBLEM_STATEMENT_HACKATHONS_CSV_FILE_PATH, transforms={'hackathon_id': int, 'problem_statement_id': int})
 
     def flush_problem_statement_hackathons(self):
-        self.hackathon_current_donations.excel_export(PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH)
+        self.problem_statement_hackathons.excel_export(PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH)
 
 
 DatabaseInterface.register(InMemoryDatabaseInterface)

@@ -458,6 +458,49 @@ class FirestoreDatabaseInterface(DatabaseInterface):
        
 
         return h
+    
+    def insert_problem_statement_hackathon(self, problem_statement: ProblemStatement, hackathon: Hackathon):
 
+        db = self.get_db()
+
+        raw: firestore.firestore.DocumentReference = self.fetch_problem_statement_raw(problem_statement.id)
+
+        rawHackathon: firestore.firestore.DocumentReference = self.fetch_hackathon_raw(hackathon.id)
+
+        all_events = [rawHackathon]
+
+        if hasattr(raw, 'events'):
+            for e in raw.events:
+                print(f"event: {e}")
+                all_events.append(e)
+
+        update_res = raw.update({
+            "events": all_events       
+        })
+
+        logger.debug(f"Insert Result: {update_res}")
+
+        return problem_statement if update_res is not None else None
+    
+    def update_problem_statement_hackathons(self, problem_statement: ProblemStatement, hackathons):
+
+        db = self.get_db()
+
+        raw: firestore.firestore.DocumentReference = self.fetch_problem_statement_raw(problem_statement.id)
+
+        all_events = []
+
+        for hackathon in hackathons:
+
+            rawHackathon: firestore.firestore.DocumentReference = self.fetch_hackathon_raw(hackathon.id)
+            all_events.append(rawHackathon)
+
+        update_res = raw.update({
+            "events": all_events       
+        })
+
+        logger.debug(f"Update Result: {update_res}")
+
+        return problem_statement if update_res is not None else None
 
 DatabaseInterface.register(FirestoreDatabaseInterface)
