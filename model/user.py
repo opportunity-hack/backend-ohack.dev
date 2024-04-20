@@ -1,4 +1,4 @@
-metadata_list = ["role", "expertise", "education", "company", "shirt_size"]
+metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size"]
 
 class User:
     id = None
@@ -13,6 +13,7 @@ class User:
     shirt_size = ""
     role = ""
     company = ""
+    why = ""
     badges = []
     teams = []
     hackathons = []
@@ -32,6 +33,7 @@ class User:
         u.shirt_size = d['shirt_size'] if 'shirt_size' in d else ''
         u.role = d['role'] if 'role' in d else ''
         u.company = d['company'] if 'company' in d else ''
+        u.why = d['why'] if 'why' in d else ''
         return u
     
     def serialize(self):

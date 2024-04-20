@@ -102,6 +102,7 @@ user_attributes_parser.add_argument("-n", "--name", required=False, default=None
 user_attributes_parser.add_argument("-e", "--email", required=False, default=None)
 user_attributes_parser.add_argument("--nickname", required=False, default=None)
 user_attributes_parser.add_argument("-p", "--profile-image", required=False, default=None) # Required according to users service
+user_attributes_parser.add_argument("-w", "--why", required=False, default=None)
 
 create_user_parser = users_subparsers.add_parser("create", parents=[user_id_parser, user_attributes_parser, log_level_parser])
 

@@ -8,16 +8,17 @@ from flask import (
     g
 )
 
-from services.users_service import get_profile_metadata
-
 from api.messages.messages_service import (
     get_problem_statement_list_old,
+    get_profile_metadata_old,
     get_public_message,
     get_protected_message,
     get_admin_message,
     get_single_problem_statement_old,
+    get_user_by_id_old,
     save_helping_status_old,
     save_npo,
+    save_profile_metadata_old,
     save_problem_statement_old,
     update_npo,
     remove_npo,
@@ -171,7 +172,7 @@ def add_user_to_team():
 @auth.require_user
 def feedback(user_id):
     # TODO: This is stubbed out, need to change with new function for get_feedback
-    return vars(get_profile_metadata(user_id))
+    return vars(get_profile_metadata_old(user_id))
 
 # Used to provide feedback details - public with key needed
 @bp.route("/news", methods=["POST"])
@@ -213,6 +214,7 @@ async def store_lead():
         return "OK", 200
     
 
+<<<<<<< HEAD
 # -------------------- Problem Statement routes to be deleted --------------------------- #
 @auth.require_user
 @auth.require_org_member_with_permission("admin_permissions")
@@ -245,3 +247,30 @@ def get_problem_statments():
 @bp.route("/problem_statement/<project_id>", methods=["GET"])
 def get_single_problem(project_id):
     return (get_single_problem_statement_old(project_id))
+=======
+# --------------------- TO BE REPLACED ROUTES ------------------------------------------#
+
+# Used to provide profile details - user must be logged in
+@bp.route("/profile", methods=["GET"])
+@auth.require_user
+def profile():            
+    # user_id is a uuid from Propel Auth
+    if auth_user and auth_user.user_id:        
+        return vars(get_profile_metadata_old(auth_user.user_id))
+    else:
+        return None
+
+@bp.route("/profile", methods=["POST"])
+@auth.require_user
+def save_profile():        
+    if auth_user and auth_user.user_id:        
+        return vars(save_profile_metadata_old(auth_user.user_id, request.get_json()))
+    else:
+        return None
+
+
+# Get user profile by user id
+@bp.route("/profile/<id>", methods=["GET"])
+def get_profile_by_id(id):
+    return get_user_by_id_old(id)
+>>>>>>> origin/develop
