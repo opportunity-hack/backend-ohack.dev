@@ -415,7 +415,7 @@ def get_nonprofit_by_name(name):
         logger.info("nonprofit does not exist")
         return None
 
-
+# TODO: Capture service level concerns from here
 def create_new_problem_statement(title, description, status, slack_channel, first_thought_of, skills):
     db = get_db()  # this connects to our Firestore database
 
