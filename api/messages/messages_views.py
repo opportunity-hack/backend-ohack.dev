@@ -214,7 +214,6 @@ async def store_lead():
         return "OK", 200
     
 
-<<<<<<< HEAD
 # -------------------- Problem Statement routes to be deleted --------------------------- #
 @auth.require_user
 @auth.require_org_member_with_permission("admin_permissions")
@@ -247,7 +246,7 @@ def get_problem_statments():
 @bp.route("/problem_statement/<project_id>", methods=["GET"])
 def get_single_problem(project_id):
     return (get_single_problem_statement_old(project_id))
-=======
+
 # --------------------- TO BE REPLACED ROUTES ------------------------------------------#
 
 # Used to provide profile details - user must be logged in
@@ -268,9 +267,7 @@ def save_profile():
     else:
         return None
 
-
 # Get user profile by user id
 @bp.route("/profile/<id>", methods=["GET"])
 def get_profile_by_id(id):
     return get_user_by_id_old(id)
->>>>>>> origin/develop
