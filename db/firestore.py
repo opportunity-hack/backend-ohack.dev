@@ -8,6 +8,7 @@ import json
 from model.problem_statement import ProblemStatement
 from model.user import User
 from model.hackathon import Hackathon
+from model.nonprofit import Nonprofit
 from db.interface import DatabaseInterface
 import logging
 import uuid
@@ -502,5 +503,22 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         logger.debug(f"Update Result: {update_res}")
 
         return problem_statement if update_res is not None else None
+    
+    # ----------------------- Nonprofits ------------------------------------------
+
+    def fetch_npos(self):
+        result = []
+        db = self.get_db()  
+        # steam() gets all records
+        raw = db.collection('nonprofits').order_by( "rank" ).stream() #TODO: What is "rank" about?
+
+        if raw is not None:
+            for n in raw:
+                temp = n.to_dict()
+                temp['id'] = n.id
+                result.append(Nonprofit.deserialize(temp)) 
+
+        return result
+        
 
 DatabaseInterface.register(FirestoreDatabaseInterface)

@@ -91,6 +91,10 @@ def insert_problem_statement_hackathon(problem_statement: ProblemStatement, hack
 def update_problem_statement_hackathons(problem_statement: ProblemStatement, hackathons):
     return db.update_problem_statement_hackathons(problem_statement, hackathons)
 
+# Nonprofits
+def fetch_npos():
+    return db.fetch_npos()
+
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
     return db.get_user_doc_reference(user_id)
