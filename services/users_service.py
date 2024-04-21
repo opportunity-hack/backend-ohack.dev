@@ -4,15 +4,15 @@ from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit
 from model.user import User
-from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
+from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
 import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
+from common.log import get_log_level
 
-#TODO: service level logging?
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = logging.getLogger("ohack")
+logger.setLevel(get_log_level())
 
 #TODO consts file?
 ONE_MINUTE = 1*60
@@ -52,7 +52,7 @@ def finish_saving_update(
         return update_user(user)
 
 @limits(calls=50, period=ONE_MINUTE)
-def upsert_user(
+def update_user_fields(
         id=None,
         user_id=None,
         last_login=None,
@@ -66,7 +66,10 @@ def upsert_user(
     else:
         user = fetch_user_by_user_id(user_id)
 
-    return finish_saving_update(user, last_login, profile_image, name, nickname)
+    if user is not None:
+        return finish_saving_update(user, last_login, profile_image, name, nickname)
+    else:
+        return None
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_user(
@@ -96,7 +99,7 @@ def save_user(
     else:
         user = finish_saving_insert(user_id, email, last_login, profile_image, name, nickname)
 
-    return user.id if user is not None else None
+    return user if user is not None else None
 
 def get_slack_user_from_token(token):
     resp = requests.get(
@@ -123,19 +126,25 @@ def get_slack_user_from_token(token):
     logger.info(f"Slack RESP: {json}")
     return json
 
+def get_user_from_propel_user_id(propel_id):
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    user_id = slack_user["sub"]
+    return get_user_from_slack_id(user_id)
+
 def get_slack_user_from_propel_user_id(propel_id):
     #TODO: Do we want to be using os.getenv here?
 
     url = f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token"
-    logger.debug(f"Propel URL: {url}")
-    resp = requests.get(
-        url, headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
-        )    
-    
-    logger.debug(f"Propel RESP: {resp}")
 
+    logger.debug(f"Propel URL: {url}")
+
+    resp = requests.get(
+        url, 
+        headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
+        )    
+    logger.debug(f"Propel RESP: {resp}")
     json = resp.json()    
-    logger.debug(f"Propel RESP json: {json}")
+    logger.debug(f"Propel RESP JSON: {json}")
     
     slack_token = json['slack']['access_token']
     return get_slack_user_from_token(slack_token)
@@ -254,3 +263,7 @@ def remove_user_by_db_id(id):
 
 def remove_user_by_slack_id(user_id):
     return delete_user_by_user_id(user_id)
+
+@limits(calls=100, period=ONE_MINUTE)
+def get_users():
+    return fetch_users()

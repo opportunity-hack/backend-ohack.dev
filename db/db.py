@@ -1,4 +1,6 @@
 from common.utils import safe_get_env_var
+from model.hackathon import Hackathon
+from model.problem_statement import ProblemStatement
 from model.user import User
 
 from db.interface import DatabaseInterface
@@ -14,6 +16,8 @@ if in_memory:
 else:
     from db.firestore import FirestoreDatabaseInterface
     db = FirestoreDatabaseInterface()
+
+#Users
 
 def fetch_user_by_user_id(user_id):
     u = db.fetch_user_by_user_id(user_id)
@@ -41,6 +45,51 @@ def delete_user_by_user_id(user_id):
 
 def delete_user_by_db_id(id):
     return db.delete_user_by_db_id(id)
+
+def fetch_users():
+    return db.fetch_users()
+
+# Problem Statements
+def fetch_problem_statement(id):
+    return db.fetch_problem_statement(id)
+
+def fetch_problem_statements():
+    return db.fetch_problem_statements()
+
+def insert_problem_statement(problem_statement: ProblemStatement):
+    return db.insert_problem_statement(problem_statement)
+
+def update_problem_statement(problem_statement: ProblemStatement):
+    return db.update_problem_statement(problem_statement)
+
+def delete_problem_statement(id):
+    return db.delete_problem_statement(id)
+
+def insert_helping(problem_statement_id, user: User, mentor_or_hacker, helping_date):
+    return db.insert_helping(problem_statement_id, user, mentor_or_hacker, helping_date)
+
+def delete_helping(problem_statement_id, user: User):
+    return db.delete_helping(problem_statement_id, user)
+
+# Hackathons
+
+def fetch_hackathon(id):
+    return db.fetch_hackathon(id)
+
+def fetch_hackathons():
+    return db.fetch_hackathons()
+
+def insert_hackathon(h : Hackathon):
+    return db.insert_hackathon(h)
+
+'''
+Link problem statement and hackathon
+'''
+def insert_problem_statement_hackathon(problem_statement: ProblemStatement, hackathon: Hackathon):
+    return db.insert_problem_statement_hackathon(problem_statement, hackathon)
+
+def update_problem_statement_hackathons(problem_statement: ProblemStatement, hackathons):
+    return db.update_problem_statement_hackathons(problem_statement, hackathons)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):

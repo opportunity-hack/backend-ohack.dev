@@ -9,20 +9,21 @@ from flask import (
 )
 
 from api.messages.messages_service import (
+    get_problem_statement_list_old,
     get_profile_metadata_old,
     get_public_message,
     get_protected_message,
     get_admin_message,
+    get_single_problem_statement_old,
     get_user_by_id_old,
+    save_helping_status_old,
     save_npo,
     save_profile_metadata_old,
+    save_problem_statement_old,
     update_npo,
     remove_npo,
     get_npo_list,
     get_single_npo,
-    save_problem_statement,
-    get_problem_statement_list,
-    get_single_problem_statement,
     get_single_hackathon_event,
     get_single_hackathon_id,
     save_hackathon,
@@ -31,8 +32,7 @@ from api.messages.messages_service import (
     unjoin_team,
     join_team,
     get_hackathon_list,
-    link_problem_statements_to_events,
-    save_helping_status,
+    link_problem_statements_to_events_old,
     save_news,
     save_lead_async,
     get_news
@@ -126,27 +126,6 @@ def get_single_hackathon_by_event(event_id):
 def get_single_hackathon_by_id(id):
     return (get_single_hackathon_id(id))
 
-# Problem Statement (also called Project) Related Endpoints
-@bp.route("/problem_statement", methods=["POST"])
-@auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
-def add_problem_statement():
-    return vars(save_problem_statement(request.get_json()))
-
-@bp.route("/problem_statements", methods=["GET"])
-def get_problem_statments():    
-    return get_problem_statement_list()
-
-@bp.route("/problem_statement/<project_id>", methods=["GET"])
-def get_single_problem(project_id):
-    return (get_single_problem_statement(project_id))
-
-@auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
-@bp.route("/problem_statements/events", methods=["PATCH"])
-def update_problem_statement_events_link():    
-    return vars(link_problem_statements_to_events(request.get_json()))
-
 @bp.route("/teams", methods=["GET"])
 def get_teams():
     return (get_teams_list())
@@ -187,16 +166,6 @@ def add_user_to_team():
         print("** ERROR Could not obtain user details for PATCH /team")
         return None
 
-# Used to register when person says they are helping, not helping
-# TODO: This route feels like it should be relative to a problem statement. NOT a user.
-@bp.route("/profile/helping", methods=["POST"])
-@auth.require_user
-def register_helping_status():
-    if auth_user and auth_user.user_id:    
-        return vars(save_helping_status(auth_user.user_id, request.get_json()))
-    else:
-        print("** ERROR Could not obtain user details for POST /profile/helping")
-        return None
 
 # Used to provide feedback details - user must be logged in
 @bp.route("/feedback/<user_id>")
@@ -245,6 +214,39 @@ async def store_lead():
         return "OK", 200
     
 
+# -------------------- Problem Statement routes to be deleted --------------------------- #
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
+@bp.route("/problem_statements/events", methods=["PATCH"])
+def update_problem_statement_events_link():    
+    return vars(link_problem_statements_to_events_old(request.get_json()))
+
+# Used to register when person says they are helping, not helping
+# TODO: This route feels like it should be relative to a problem statement. NOT a user.
+@bp.route("/profile/helping", methods=["POST"])
+@auth.require_user
+def register_helping_status():
+    if auth_user and auth_user.user_id:
+        # todo
+        return vars(save_helping_status_old(auth_user.user_id, request.get_json()))
+    else:
+        print("** ERROR Could not obtain user details for POST /profile/helping")
+        return None
+    
+@bp.route("/problem_statement", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
+def add_problem_statement():
+    return vars(save_problem_statement_old(request.get_json()))
+
+@bp.route("/problem_statements", methods=["GET"])
+def get_problem_statments():    
+    return get_problem_statement_list_old()
+
+@bp.route("/problem_statement/<project_id>", methods=["GET"])
+def get_single_problem(project_id):
+    return (get_single_problem_statement_old(project_id))
+
 # --------------------- TO BE REPLACED ROUTES ------------------------------------------#
 
 # Used to provide profile details - user must be logged in
@@ -264,7 +266,6 @@ def save_profile():
         return vars(save_profile_metadata_old(auth_user.user_id, request.get_json()))
     else:
         return None
-
 
 # Get user profile by user id
 @bp.route("/profile/<id>", methods=["GET"])

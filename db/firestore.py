@@ -1,21 +1,26 @@
+import os
+from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, firestore
 from common.utils import safe_get_env_var
 from mockfirestore import MockFirestore
 import json
+from model.problem_statement import ProblemStatement
 from model.user import User
 from model.hackathon import Hackathon
 from db.interface import DatabaseInterface
 import logging
 import uuid
+import logging
+from common.log import get_log_level
+
+logger = logging.getLogger("ohack")
+logger.setLevel(get_log_level())
 
 mockfirestore = None
 
 #TODO: Put in .env? Feels configurable. Or maybe something we would want to protect with a secret?
 SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
-
-# TODO: Select db interface based on env
-in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
 if safe_get_env_var("ENVIRONMENT") == "test":
     mockfirestore = MockFirestore() #Only used when testing
@@ -42,6 +47,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         db = self.get_db()
         default_badge = db.collection('badges').document("fU7c3ne90Rd1TB5P7NTV")
         return default_badge
+
+    # ----------------------- Users --------------------------------------------
 
     def fetch_user_by_user_id(self, user_id):
         db = self.get_db()  # this connects to our Firestore database
@@ -91,7 +98,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             ],
             "teams": []
         })
-        return user.id if insert_res is not None else None
+        return user if insert_res is not None else None
     
     def update_user(self, user: User):
 
@@ -115,7 +122,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
     def fetch_user_by_db_id(self, id):
         db = self.get_db()  # this connects to our Firestore database
-        return self.fetch_user_by_db_id_raw(db, id)
+        user = None
+        temp = self.fetch_user_by_db_id_raw(db, id)
+
+        if temp is not None:
+            ref = temp.reference
+            d = temp.to_dict()
+            d['id'] = ref.id #Get the document id from the reference
+            user = User.deserialize(d)
+
+        return user
 
     def get_user_doc_reference(self, user_id):
         db = self.get_db()
@@ -219,6 +235,272 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         return User.deserialize(user.to_dict())
 
+    def fetch_users(self):
+        results = []
+        db = self.get_db()
+        docs = db.collection('users').stream()  # steam() gets all records
+        if docs is None:
+            pass
+        else:
+            for doc in docs:
+                temp = doc.to_dict()
+                temp['id'] = doc.reference.id
+                if 'last_login' not in temp:
+                    temp['last_login'] = ''
+                
+                if 'user_id' not in temp:
+                    print(f'trash data skiping user {temp}')
+                    continue
+
+                results.append(User.deserialize(temp))
+     
+        return results
+
         
+    # ----------------------- Problem Statements --------------------------------------------
     
+    def fetch_problem_statements(self):
+        results = []
+        db = self.get_db()
+        docs = db.collection('problem_statements').stream()  # steam() gets all records
+        if docs is None:
+            pass
+        else:
+            for doc in docs:
+                # doc is an instance of google.cloud.firestore_v1.base_document.DocumentSnapshot
+                # print(f'doc {doc}')
+                temp = doc.to_dict()
+                print(f'id type {type(doc.reference.id)}')
+                temp['id'] = doc.reference.id
+                results.append(ProblemStatement.deserialize(temp))
+     
+        return results
+
+    def fetch_problem_statement(self, id):
+        print(f'log level {safe_get_env_var("GLOBAL_LOG_LEVEL")}')
+        print(f'log level {get_log_level()}')
+        logger.debug(f'fetch_problem_statement :{id}')
+        res = None
+        db = self.get_db()
+        try:
+            raw = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
+            print(f'raw {raw}')
+            print(f'raw.exists {raw.exists}')
+            # print(f'raw.data {raw.data}')
+            print(f'raw.reference {raw.reference}')
+            print(f'raw.reference.id {raw.reference.id}')
+            temp = raw.to_dict()
+            print(f'temp {temp}')
+            temp['id'] = raw.reference.id
+            res = ProblemStatement.deserialize(temp) if temp is not None else None
+        except KeyError as e:
+            # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
+            logger.debug(f'fetch_problem_statement_by_id error: {e}')
+        return res
+    
+    def fetch_problem_statement_raw(self, db, id):
+        logger.debug(f'fetch_problem_statement_raw id:{id}')
+        print(f"id {id}")
+        p = db.collection('problem_statements').document(id).get()
+        return p
+    
+    def insert_problem_statement(self, problem_statement: ProblemStatement):
+        db = self.get_db()
+
+        # TODO: In this current form, you will overwrite any information that matches the same NPO name
+        
+        problem_statement.id = uuid.uuid1().hex
+            
+        collection = db.collection('problem_statements')
+
+        insert_res = collection.document(problem_statement.id).set({
+            "title": problem_statement.title,
+            "description": problem_statement.description if 'description' in problem_statement else None,
+            "first_thought_of": problem_statement.first_thought_of if 'first_thought_of' in problem_statement else None,
+            "github": problem_statement.github if 'github' in problem_statement else None,
+            # "references": TODO: What is this
+            "status": problem_statement.status if 'status' in problem_statement else None        
+        })
+
+        logger.debug(f"Insert Result: {insert_res}")
+
+        return problem_statement if insert_res is not None else None
+    
+    def update_problem_statement(self, problem_statement: ProblemStatement):
+        db = self.get_db()
+
+        # TODO: In this current form, you will overwrite any information that matches the same NPO name
+            
+        collection = db.collection('problem_statements')
+
+        update_res = collection.document(problem_statement.id).set({
+            "description": problem_statement.description if 'description' in problem_statement else None,
+            "first_thought_of": problem_statement.first_thought_of if 'first_thought_of' in problem_statement else None,
+            "github": problem_statement.github if 'github' in problem_statement else None,
+            # "references": TODO: What is this
+            "status": problem_statement.status if 'status' in problem_statement else None        
+        })
+
+        logger.debug(f"Insert Result: {update_res}")
+
+        return problem_statement if update_res is not None else None
+    
+    def delete_problem_statement(self, db, problem_statement_id):
+        # TODO: delete related entities
+        p = self.fetch_problem_statement(problem_statement_id)
+        
+        if p is not None:
+            # Delete problem statement
+            db.collection("problem_statements").document(problem_statement_id).delete()
+
+        return p
+    
+    def insert_helping(self, problem_statement_id, user: User, mentor_or_hacker):
+        
+        my_date = datetime.now()
+        
+        to_add = {
+            "user": user.id,
+            "slack_user": user.user_id,
+            "type": mentor_or_hacker,
+            "timestamp": my_date.isoformat()
+        }
+
+        db = self.get_db()
+
+        problem_statement_doc = db.collection(
+        'problem_statements').document(problem_statement_id)
+    
+        ps_dict = problem_statement_doc.get().to_dict()
+        helping_list = []
+        if "helping" in ps_dict:
+            helping_list = ps_dict["helping"]
+            logger.debug(f"Helping list: {helping_list}")
+
+            helping_list.append(to_add)
+
+        else:
+            logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
+            helping_list.append(to_add)
+
+
+        logger.debug(f"End Helping list: {helping_list}")
+        problem_result = problem_statement_doc.update({
+            "helping": helping_list
+        })
+
+        return ProblemStatement.deserialize(ps_dict)
+    
+    # ----------------------- Hackathons ------------------------------------------
+
+    def fetch_hackathons(self):
+        hackathons = []
+        db = self.get_db()  # this connects to our Firestore database
+        docs = db.collection('hackathons').stream()
+
+        for doc in docs:
+            temp = doc.to_dict()
+            temp["id"] = doc.id
+            # print(f'temp {temp}')
+            hackathons.append(Hackathon.deserialize(temp))
+
+        return hackathons
+    
+    def fetch_hackathon(self, id):
+        db = self.get_db()
+        raw = self.fetch_hackathon_raw(db, id)
+        temp = raw.to_dict()
+        print(f'temp {temp}')
+        if 'donation_current' in temp:
+            print(f'donation_current type: {type(temp["donation_current"])}')
+        temp['id'] = raw.reference.id
+        return Hackathon.deserialize(temp)
+
+    def fetch_hackathon_raw(self, db, id):
+        logger.debug(f'fetch_hackathon_raw id:{id}')
+        print(f"id {id}")
+        h = db.collection('hackathons').document(id).get()
+        print(f'exists {h.exists}')
+        return h
+
+    def insert_hackathon(self, h: Hackathon):
+        #TODO: Does this throw?
+        db = self.get_db()
+        default_badge = self.get_default_badge()
+        #Set id
+        h.id = uuid.uuid1().hex
+        #TODO: Does this throw?
+
+            #     {
+    #     "donation_current": 0.0,
+    #     "donation_goals": 0.0,
+    #     "end_date": "2019-10-20",
+    #     "id": "LSi9jQED7BWZw3DKaQAx",
+    #     "image_url": "",
+    #     "location": "Arizona",
+    #     "start_date": "2019-10-19",
+    #     "title": "",
+    #     "type": ""
+    # },
+
+        insert_res = db.collection('hackathons').document(h.id).set({
+            "donation_current": h.donation_current,
+            "donation_goals": h.donation_goals,
+            "title": h.title,
+            "image_url": h.image_url,
+            "location": h.location,
+            "start_date": h.start_date,
+            "end_date": h.end_date,
+            "type": h.type
+        })
+
+        return h if insert_res is not None else None
+       
+
+        return h
+    
+    def insert_problem_statement_hackathon(self, problem_statement: ProblemStatement, hackathon: Hackathon):
+
+        db = self.get_db()
+
+        raw: firestore.firestore.DocumentReference = self.fetch_problem_statement_raw(problem_statement.id)
+
+        rawHackathon: firestore.firestore.DocumentReference = self.fetch_hackathon_raw(hackathon.id)
+
+        all_events = [rawHackathon]
+
+        if hasattr(raw, 'events'):
+            for e in raw.events:
+                print(f"event: {e}")
+                all_events.append(e)
+
+        update_res = raw.update({
+            "events": all_events       
+        })
+
+        logger.debug(f"Insert Result: {update_res}")
+
+        return problem_statement if update_res is not None else None
+    
+    def update_problem_statement_hackathons(self, problem_statement: ProblemStatement, hackathons):
+
+        db = self.get_db()
+
+        raw: firestore.firestore.DocumentReference = self.fetch_problem_statement_raw(problem_statement.id)
+
+        all_events = []
+
+        for hackathon in hackathons:
+
+            rawHackathon: firestore.firestore.DocumentReference = self.fetch_hackathon_raw(hackathon.id)
+            all_events.append(rawHackathon)
+
+        update_res = raw.update({
+            "events": all_events       
+        })
+
+        logger.debug(f"Update Result: {update_res}")
+
+        return problem_statement if update_res is not None else None
+
 DatabaseInterface.register(FirestoreDatabaseInterface)

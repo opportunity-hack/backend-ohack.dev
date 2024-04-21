@@ -36,6 +36,23 @@ class User:
         u.why = d['why'] if 'why' in d else ''
         return u
     
+    def serialize(self):
+        d = {}
+        props = dir(self)     
+        for m in props:
+            if m == 'teams':
+                pass #TODO
+            elif m == 'badges':
+                pass #TODO
+            elif m == 'hackathons':
+                pass #TODO
+            elif not m.startswith('__'): # No magic please
+                p = getattr(self, m)
+                if not callable(p):
+                    d[m] = p
+
+        return d
+
     def serialize_profile_metadata(self):
         d = {}
         props = dir(self)

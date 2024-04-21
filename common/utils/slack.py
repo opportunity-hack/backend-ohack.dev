@@ -5,6 +5,7 @@ from ratelimiter import RateLimiter
 from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
+from requests.exceptions import ConnectionError
 load_dotenv()
 
 SLACK_URL = safe_get_env_var("SLACK_WEBHOOK")
@@ -17,6 +18,7 @@ logger.addHandler(logging.StreamHandler())
 # set log level
 logger.setLevel(logging.INFO)
 
+# TODO: What is the purpose of this message?
 def send_slack_audit(action="", message="", payload=None):
     if not SLACK_URL or SLACK_URL == "":
         logger.warning("SLACK_URL not set, returning")
@@ -31,7 +33,10 @@ def send_slack_audit(action="", message="", payload=None):
             "text": f"[{action}] {message}\n{payload}"
         }
 
-    requests.post(json=json, url=SLACK_URL)
+    try: 
+        requests.post(json=json, url=SLACK_URL)
+    except ConnectionError:
+        pass #Eat this error. The request from the frontend should not fail if we can't contact slack
 
 
 @RateLimiter(max_calls=40, period=60)
