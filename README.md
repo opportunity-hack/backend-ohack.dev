@@ -69,12 +69,19 @@ PROPEL_AUTH_KEY=
 PROPEL_AUTH_URL=
 ```
 
-
+### Actually running the project
+#### Command Line
 Run the project in development mode:
 ```bash
 flask run
 ```
 
+#### Visual Studio Code
+##### Interpreters
+Set the interpreter via the command pallete `Python: Select Interpreter` (source)[https://code.visualstudio.com/docs/python/environments#_working-with-python-interpreters]
+
+
+<!-- TODO: Screen grab of list of interpreters showing conda env -->
 
 # References
 - [Firestore UI](https://github.com/thanhlmm/refi-app)
