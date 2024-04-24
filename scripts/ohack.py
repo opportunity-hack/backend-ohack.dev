@@ -156,10 +156,20 @@ import_hackathon_parser = hackathons_subparsers.add_parser("import", parents=[js
 nonprofit_id_parser = argparse.ArgumentParser(add_help=False)
 nonprofit_id_parser.add_argument("--nonprofit-id", required=False, default=None)
 
+nonprofit_attributes_parser = argparse.ArgumentParser(add_help=False)
+nonprofit_attributes_parser.add_argument("--npo-name", required=True) 
+nonprofit_attributes_parser.add_argument("--npo-slack-channel", required=False, default=None) 
+nonprofit_attributes_parser.add_argument("--npo-website", required=False, default=None) 
+nonprofit_attributes_parser.add_argument("--npo-description", required=False, default=None) 
+nonprofit_attributes_parser.add_argument("--need", required=False, default=None) 
+
+
 nonprofits_parser = subparsers.add_parser("nonprofits")
 nonprofits_subparsers = nonprofits_parser.add_subparsers(title="Commands", dest='nonprofits_command')
 
 get_nonprofit_parser = nonprofits_subparsers.add_parser("get", parents=[nonprofit_id_parser, all_parser, log_level_parser])
+
+create_nonprofit_parser = nonprofits_subparsers.add_parser("create", parents=[nonprofit_attributes_parser, log_level_parser])
 
 
 
@@ -347,6 +357,17 @@ def get_nonprofit(id):
     temp = res.serialize()
     logger.info(f'Hackathon: \n {json.dumps(temp, indent=4)}')
 
+def create_nonprofit(name, description, website, slack_channel, need):
+    p = nonprofits_service.save_npo({
+        'name' : name,
+        'description' : description,
+        'website' : website,
+        'slack_channel' : slack_channel,
+        'need' : need
+    })
+
+    logger.info(f'Created: \n {json.dumps(vars(p), indent=4)}')
+
 args = parser.parse_args()
 
 if args.log_debug:
@@ -433,4 +454,11 @@ if hasattr(args, 'command'):
                     get_nonprofits()
                 else:
                     get_nonprofit(args.nonprofit_id)
-                    pass
+                    
+            elif args.nonprofits_command == 'create':
+                create_nonprofit(
+                    args.npo_name, 
+                    args.npo_description, 
+                    args.npo_website, 
+                    args.npo_slack_channel,
+                    args.need)

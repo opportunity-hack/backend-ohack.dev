@@ -452,7 +452,14 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         h.id = self.get_next_hackathon_id()
 
         # Fields on here need to show up in exactly the column order in the CSV
-        d = h.serialize()
+        d = {
+            "id": h.id,
+            "title": h.title,
+            "location": h.location,
+            "start_date": h.start_date,
+            "end_date": h.end_date,
+            "image_url": h.image_url,
+        }
         
         logger.debug(f'Inserting hackathon\n: {h}')
 
@@ -470,6 +477,48 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             res.append(Nonprofit.deserialize(vars(p)))
 
         return res
+    
+    def fetch_npo_raw(self, id):
+        res = None
+        try:
+            res = self.nonprofits.by.id[int(id)] # This is going to return a SimpleNamespace for imported rows.
+        except KeyError as e:
+            # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
+            logger.debug(f'fetch_npo_raw error: {e}')
+        return res
+    
+    def fetch_npo(self, id):
+        res = None
+        try:
+            temp = self.fetch_npo_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            res = Nonprofit.deserialize(vars(temp)) if temp is not None else None
+        except KeyError as e:
+            # A key error here means that User.deserialize was expecting a property in the data that wasn't there
+            logger.debug(f'fetch_npo error: {e}')
+        return res
+
+    def insert_nonprofit(self, npo: Nonprofit):
+
+        npo.id = self.get_next_nonprofit_id()
+
+        # Fields on here need to show up in exactly the column order in the CSV
+        d = {
+            "id": npo.id,
+            "name": npo.name,
+            "slack_channel": npo.slack_channel,
+            "website": npo.website,
+            "description": npo.description,
+            "need": npo.need
+        }
+        
+        print(f'Inserting nonprofit\n: {d}')
+        # logger.debug(f'Inserting nonprofit\n: {d}')
+
+        self.nonprofits.insert(d)
+
+        self.flush_nonprofits()
+
+        return npo
 
     #--------------------------------------- Intialization ------------------------------ #
 
@@ -593,7 +642,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         return max([i for i in self.nonprofits.all.id]) + 1
     
     def flush_nonprofits(self):
-        self.nonprofits.excel_export(NONPROFIT_CSV_FILE_PATH)
+        self.nonprofits.excel_export(NONPROFIT_EXCEL_FILE_PATH)
 
 DatabaseInterface.register(InMemoryDatabaseInterface)
 

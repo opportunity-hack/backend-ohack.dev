@@ -51,8 +51,8 @@ class Nonprofit:
         n.slack_channel = d['slack_channel']
         n.website = d['website']
         n.description = d['description']
-        n.need = int(d['rank']) if 'rank' in d else None
-        n.need = int(d['need']) if 'need' in d else n.need # New prop should win
+        n.need = int(d['rank']) if 'rank' in d and d['rank'] is not None else None
+        n.need = int(d['need']) if 'need' in d and d['need'] is not None else None # New prop should win
 
         if 'contact_email' in d or 'contact_name' in d:
             c = Contact()
@@ -82,3 +82,10 @@ class Nonprofit:
                     d[m] = p
 
         return d
+    
+    def update(self, d):
+        props = dir(self)
+        for m in props:        
+            if m in d:
+                setattr(self, m, d[m])
+        return

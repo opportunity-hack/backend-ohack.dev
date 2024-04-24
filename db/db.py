@@ -1,5 +1,6 @@
 from common.utils import safe_get_env_var
 from model.hackathon import Hackathon
+from model.nonprofit import Nonprofit
 from model.problem_statement import ProblemStatement
 from model.user import User
 
@@ -94,6 +95,12 @@ def update_problem_statement_hackathons(problem_statement: ProblemStatement, hac
 # Nonprofits
 def fetch_npos():
     return db.fetch_npos()
+
+def fetch_npo(id):
+    return db.fetch_npo(id)
+
+def insert_nonprofit(npo: Nonprofit):
+    return db.insert_nonprofit(npo)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
