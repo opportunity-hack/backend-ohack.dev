@@ -2,7 +2,7 @@ from datetime import datetime
 import os
 from ratelimit import limits
 import requests
-from db.db import fetch_npos
+from db.db import fetch_npo, fetch_npos
 from model.nonprofit import Nonprofit
 import logging
 import pytz
@@ -25,3 +25,8 @@ def get_npos():
     # log result
     logger.debug(f"Found {len(npos)} results")
     return npos
+
+def get_npo(id):
+    npo = fetch_npo(id)
+
+    return npo

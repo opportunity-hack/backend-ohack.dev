@@ -342,6 +342,10 @@ def get_nonprofits():
         output.append(n.serialize())
     logger.info(f'Nonprofits: \n {json.dumps(output, indent=4)}')
     
+def get_nonprofit(id):
+    res = nonprofits_service.get_npo(id)
+    temp = res.serialize()
+    logger.info(f'Hackathon: \n {json.dumps(temp, indent=4)}')
 
 args = parser.parse_args()
 
@@ -428,5 +432,5 @@ if hasattr(args, 'command'):
                 if args.all:
                     get_nonprofits()
                 else:
-                    # TODO
+                    get_nonprofit(args.nonprofit_id)
                     pass
