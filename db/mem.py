@@ -1,6 +1,7 @@
 from db.interface import DatabaseInterface
 from model.donation import CurrentDonations, DonationGoals
 from model.hackathon import Hackathon
+from model.nonprofit import Nonprofit
 from model.problem_statement import Helping, ProblemStatement
 from model.user import User
 import os
@@ -22,8 +23,11 @@ PROBLEM_STATEMENTS_EXCEL_FILE_PATH = "../test/data/problem_statements.xlsx"
 PROBLEM_STATEMENT_HELPING_CSV_FILE_PATH = "../test/data/OHack Test Data - Problem Statement Helping.csv"
 PROBLEM_STATEMENT_HELPING_EXCEL_FILE_PATH = "../test/data/problem_statement_helping.xlsx"
 
-HACKATHON_CSV_FILE_PATH = "../test/data/OHack Test Data - Hackathons.csv"
-HACKATHON_EXCEL_FILE_PATH = "../test/data/hackathons.xlsx"
+HACKATHON_CSV_FILE_PATH = "../test/data/OHack Test Data - Nonprofits.csv"
+HACKATHON_EXCEL_FILE_PATH = "../test/data/nonprofits.xlsx"
+
+NONPROFIT_CSV_FILE_PATH = "../test/data/OHack Test Data - Nonprofits.csv"
+NONPROFIT_EXCEL_FILE_PATH = "../test/data/nonprofits.xlsx"
 
 CURRENT_DONATIONS_CSV_FILE_PATH = "../test/data/OHack Test Data - Current Donations.csv"
 CURRENT_DONATIONS_EXCEL_FILE_PATH = "../test/data/current_donations.xlsx"
@@ -52,6 +56,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     hackathon_current_donations = None
     hackathon_donation_goals = None
     problem_statement_hackathons = None
+    nonprofits = None
 
     def __init__(self):
         super().__init__()
@@ -64,6 +69,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.init_current_donations()
         self.init_donation_goals()
         self.init_problem_statement_hackathons()
+        self.init_nonprofits()
 
     # ----------------------- Users -------------------------------------------- #
 
@@ -456,6 +462,15 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
         return h
 
+    #--------------------------------------- NPOs ------------------------------ #
+    def fetch_npos(self):
+        res = []
+
+        for p in self.nonprofits:
+            res.append(Nonprofit.deserialize(vars(p)))
+
+        return res
+
     #--------------------------------------- Intialization ------------------------------ #
 
     def init_users(self):
@@ -565,6 +580,20 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     def flush_problem_statement_hackathons(self):
         self.problem_statement_hackathons.excel_export(PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH)
 
+
+    def init_nonprofits(self):
+        if os.path.exists(NONPROFIT_EXCEL_FILE_PATH):
+            self.nonprofits = lt.Table().excel_import(NONPROFIT_EXCEL_FILE_PATH, transforms={'id': int})
+        else:
+            self.nonprofits = lt.Table().csv_import(NONPROFIT_CSV_FILE_PATH, transforms={'id': int})
+
+        self.nonprofits.create_index('id', unique=True)
+
+    def get_next_nonprofit_id(self) -> int:
+        return max([i for i in self.nonprofits.all.id]) + 1
+    
+    def flush_nonprofits(self):
+        self.nonprofits.excel_export(NONPROFIT_CSV_FILE_PATH)
 
 DatabaseInterface.register(InMemoryDatabaseInterface)
 

@@ -519,6 +519,24 @@ class FirestoreDatabaseInterface(DatabaseInterface):
                 result.append(Nonprofit.deserialize(temp)) 
 
         return result
+    
+    def insert_nonprofit(self, npo: Nonprofit):
+        db = self.get_db()  # this connects to our Firestore database
+        logger.debug("insert NPO")    
+        
+        npo.id = uuid.uuid1().hex
+    
+        contacts = []
+
+        insert_res = db.collection('nonprofits').document(npo.id).set({
+            "contacts": contacts,
+            "name": npo.name,
+            "slack_channel" : npo.slack_channel,
+            "website": npo.website,
+            "description": npo.description
+        })
+
+        return npo if insert_res is not None else None
         
 
 DatabaseInterface.register(FirestoreDatabaseInterface)
