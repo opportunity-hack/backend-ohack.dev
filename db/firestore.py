@@ -533,10 +533,28 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             "name": npo.name,
             "slack_channel" : npo.slack_channel,
             "website": npo.website,
-            "description": npo.description
+            "description": npo.description,
+            "need": npo.need
         })
 
         return npo if insert_res is not None else None
+
+    def update_nonprofit(self, nonprofit: Nonprofit):
+        db = self.get_db()
+            
+        collection = db.collection('nonprofits')
+
+        update_res = collection.document(nonprofit.id).set({
+            "name": nonprofit.name,
+            "slack_channel": nonprofit.slack_channel,
+            "website": nonprofit.website,
+            "description": nonprofit.description,
+            "need": nonprofit.need     
+        })
+
+        logger.debug(f"Update Result: {update_res}")
+
+        return nonprofit if update_res is not None else None
         
 
 DatabaseInterface.register(FirestoreDatabaseInterface)

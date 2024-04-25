@@ -171,6 +171,7 @@ get_nonprofit_parser = nonprofits_subparsers.add_parser("get", parents=[nonprofi
 
 create_nonprofit_parser = nonprofits_subparsers.add_parser("create", parents=[nonprofit_attributes_parser, log_level_parser])
 
+update_nonprofit_parser = nonprofits_subparsers.add_parser("update", parents=[nonprofit_id_parser, nonprofit_attributes_parser, log_level_parser])
 
 
 def do_get_user(user_id, id):
@@ -358,7 +359,7 @@ def get_nonprofit(id):
     logger.info(f'Hackathon: \n {json.dumps(temp, indent=4)}')
 
 def create_nonprofit(name, description, website, slack_channel, need):
-    p = nonprofits_service.save_npo({
+    n = nonprofits_service.save_npo({
         'name' : name,
         'description' : description,
         'website' : website,
@@ -366,7 +367,19 @@ def create_nonprofit(name, description, website, slack_channel, need):
         'need' : need
     })
 
-    logger.info(f'Created: \n {json.dumps(vars(p), indent=4)}')
+    logger.info(f'Created: \n {json.dumps(vars(n), indent=4)}')
+
+def update_nonprofit(id, name, description, website, slack_channel, need):
+    n = nonprofits_service.update_npo({
+        'id': id,
+        'name' : name,
+        'description' : description,
+        'website' : website,
+        'slack_channel' : slack_channel,
+        'need' : need
+    })
+
+    logger.info(f'Updated: \n {json.dumps(vars(n), indent=4)}')
 
 args = parser.parse_args()
 
@@ -457,6 +470,15 @@ if hasattr(args, 'command'):
                     
             elif args.nonprofits_command == 'create':
                 create_nonprofit(
+                    args.npo_name, 
+                    args.npo_description, 
+                    args.npo_website, 
+                    args.npo_slack_channel,
+                    args.need)
+            
+            elif args.nonprofits_command == 'update':
+                update_nonprofit(
+                    args.nonprofit_id,
                     args.npo_name, 
                     args.npo_description, 
                     args.npo_website, 

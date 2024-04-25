@@ -511,14 +511,32 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             "need": npo.need
         }
         
-        print(f'Inserting nonprofit\n: {d}')
-        # logger.debug(f'Inserting nonprofit\n: {d}')
+        logger.debug(f'Inserting nonprofit\n: {d}')
 
         self.nonprofits.insert(d)
 
         self.flush_nonprofits()
 
         return npo
+
+    def update_nonprofit(self, nonprofit: Nonprofit):
+
+        # TODO: Maybe, call self.problem_statements.add_field to add fields that are on the class but not the fetched object: https://pythonhosted.org/littletable/littletable.Table-class.html#add_field
+
+        d = self.nonprofits.by.id[int(nonprofit.id)]
+        d.id = int(nonprofit.id)
+
+        d.name = nonprofit.name
+        d.slack_channel = nonprofit.slack_channel
+        d.website = nonprofit.website
+        d.description = nonprofit.description
+        d.need = nonprofit.need
+
+        logger.debug(f'Updating nonprofit\n: {d}')
+
+        self.flush_nonprofits()
+
+        return Nonprofit.deserialize(vars(d))
 
     #--------------------------------------- Intialization ------------------------------ #
 

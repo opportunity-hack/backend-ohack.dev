@@ -102,6 +102,9 @@ def fetch_npo(id):
 def insert_nonprofit(npo: Nonprofit):
     return db.insert_nonprofit(npo)
 
+def update_nonprofit(nonprofit: Nonprofit):
+    return db.update_nonprofit(nonprofit)
+
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
     return db.get_user_doc_reference(user_id)
