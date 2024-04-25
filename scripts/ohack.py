@@ -66,7 +66,7 @@ logging.getLogger().addHandler(console)
 
 from model.problem_statement import ProblemStatement
 
-from services import users_service, problem_statements_service
+from services import users_service, problem_statements_service, nonprofits_service
 from model.user import User
 from common.utils import safe_get_env_var
 from model.hackathon import Hackathon
@@ -153,6 +153,27 @@ get_hackathon_parser = hackathons_subparsers.add_parser("get", parents=[hackatho
 
 import_hackathon_parser = hackathons_subparsers.add_parser("import", parents=[json_parser, log_level_parser])
 
+nonprofit_id_parser = argparse.ArgumentParser(add_help=False)
+nonprofit_id_parser.add_argument("--nonprofit-id", required=False, default=None)
+
+nonprofit_attributes_parser = argparse.ArgumentParser(add_help=False)
+nonprofit_attributes_parser.add_argument("--npo-name", required=True) 
+nonprofit_attributes_parser.add_argument("--npo-slack-channel", required=False, default=None) 
+nonprofit_attributes_parser.add_argument("--npo-website", required=False, default=None) 
+nonprofit_attributes_parser.add_argument("--npo-description", required=False, default=None) 
+nonprofit_attributes_parser.add_argument("--need", required=False, default=None) 
+
+
+nonprofits_parser = subparsers.add_parser("nonprofits")
+nonprofits_subparsers = nonprofits_parser.add_subparsers(title="Commands", dest='nonprofits_command')
+
+get_nonprofit_parser = nonprofits_subparsers.add_parser("get", parents=[nonprofit_id_parser, all_parser, log_level_parser])
+
+create_nonprofit_parser = nonprofits_subparsers.add_parser("create", parents=[nonprofit_attributes_parser, log_level_parser])
+
+update_nonprofit_parser = nonprofits_subparsers.add_parser("update", parents=[nonprofit_id_parser, nonprofit_attributes_parser, log_level_parser])
+
+delete_nonprofit_parser = nonprofits_subparsers.add_parser("delete", parents=[nonprofit_id_parser, log_level_parser])
 
 
 def do_get_user(user_id, id):
@@ -326,7 +347,46 @@ def link_hackathon_to_problem_statement(problem_statement_id, hackathon_id):
     d = problem_statement.serialize()
 
     logger.info(f'Problem statement: \n {json.dumps(d, indent=4)}')
+
+def get_nonprofits():
+    res = nonprofits_service.get_npos()
+    output = []
+    for n in res:
+        output.append(n.serialize())
+    logger.info(f'Nonprofits: \n {json.dumps(output, indent=4)}')
     
+def get_nonprofit(id):
+    res = nonprofits_service.get_npo(id)
+    temp = res.serialize()
+    logger.info(f'Hackathon: \n {json.dumps(temp, indent=4)}')
+
+def create_nonprofit(name, description, website, slack_channel, need):
+    n = nonprofits_service.save_npo({
+        'name' : name,
+        'description' : description,
+        'website' : website,
+        'slack_channel' : slack_channel,
+        'need' : need
+    })
+
+    logger.info(f'Created: \n {json.dumps(vars(n), indent=4)}')
+
+def update_nonprofit(id, name, description, website, slack_channel, need):
+    n = nonprofits_service.update_npo({
+        'id': id,
+        'name' : name,
+        'description' : description,
+        'website' : website,
+        'slack_channel' : slack_channel,
+        'need' : need
+    })
+
+    logger.info(f'Updated: \n {json.dumps(vars(n), indent=4)}')
+
+def delete_nonprofit(id):
+    n = nonprofits_service.delete_npo(id)
+    d = n.serialize()
+    logger.info(f'Deleted: \n {json.dumps(d, indent=4)}')
 
 args = parser.parse_args()
 
@@ -403,3 +463,34 @@ if hasattr(args, 'command'):
 
             elif args.hackathons_command == 'import':
                 import_hackathons(args.json)
+
+    if args.command == 'nonprofits':
+        # Handle user related commands
+        if hasattr(args, 'nonprofits_command'):
+            logger.info(f'Nonprofits command: {args.nonprofits_command}')
+
+            if args.nonprofits_command == 'get':
+                if args.all:
+                    get_nonprofits()
+                else:
+                    get_nonprofit(args.nonprofit_id)
+                    
+            elif args.nonprofits_command == 'create':
+                create_nonprofit(
+                    args.npo_name, 
+                    args.npo_description, 
+                    args.npo_website, 
+                    args.npo_slack_channel,
+                    args.need)
+            
+            elif args.nonprofits_command == 'update':
+                update_nonprofit(
+                    args.nonprofit_id,
+                    args.npo_name, 
+                    args.npo_description, 
+                    args.npo_website, 
+                    args.npo_slack_channel,
+                    args.need)
+                
+            elif args.nonprofits_command == 'delete':
+                delete_nonprofit(args.nonprofit_id)
