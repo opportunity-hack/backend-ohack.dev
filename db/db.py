@@ -12,6 +12,7 @@ db:DatabaseInterface = None
 in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
 if in_memory: 
+    print("Using in memory database")
     from db.mem import InMemoryDatabaseInterface
     db = InMemoryDatabaseInterface()
 else:

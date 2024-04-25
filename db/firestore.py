@@ -494,7 +494,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         if raw is not None:
             for n in raw:
-                result.append() 
+                result.append(convert_to_entity(n, Nonprofit)) 
 
         return result
     
