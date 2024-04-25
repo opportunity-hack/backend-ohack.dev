@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from db.interface import DatabaseInterface
 from model.donation import CurrentDonations, DonationGoals
 from model.hackathon import Hackathon
@@ -43,7 +44,6 @@ HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH = "../test/data/hackathon_donation_goal
 
 PROBLEM_STATEMENT_HACKATHONS_CSV_FILE_PATH = "../test/data/OHack Test Data - Problem Statement Hackathons.csv"
 PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH = "../test/data/problem_statement_hackathons.xlsx"
-
 
 class InMemoryDatabaseInterface(DatabaseInterface):
 
@@ -537,6 +537,14 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.flush_nonprofits()
 
         return Nonprofit.deserialize(vars(d))
+    
+    def delete_nonprofit(self, nonprofit_id):
+        raw = self.fetch_npo_raw(nonprofit_id)
+        self.nonprofits.remove(raw)
+
+        self.flush_nonprofits()
+
+        return Nonprofit.deserialize(vars(raw))
 
     #--------------------------------------- Intialization ------------------------------ #
 

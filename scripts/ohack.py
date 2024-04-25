@@ -173,6 +173,8 @@ create_nonprofit_parser = nonprofits_subparsers.add_parser("create", parents=[no
 
 update_nonprofit_parser = nonprofits_subparsers.add_parser("update", parents=[nonprofit_id_parser, nonprofit_attributes_parser, log_level_parser])
 
+delete_nonprofit_parser = nonprofits_subparsers.add_parser("delete", parents=[nonprofit_id_parser, log_level_parser])
+
 
 def do_get_user(user_id, id):
     u:User | None = None
@@ -381,6 +383,11 @@ def update_nonprofit(id, name, description, website, slack_channel, need):
 
     logger.info(f'Updated: \n {json.dumps(vars(n), indent=4)}')
 
+def delete_nonprofit(id):
+    n = nonprofits_service.delete_npo(id)
+    d = n.serialize()
+    logger.info(f'Deleted: \n {json.dumps(d, indent=4)}')
+
 args = parser.parse_args()
 
 if args.log_debug:
@@ -484,3 +491,6 @@ if hasattr(args, 'command'):
                     args.npo_website, 
                     args.npo_slack_channel,
                     args.need)
+                
+            elif args.nonprofits_command == 'delete':
+                delete_nonprofit(args.nonprofit_id)

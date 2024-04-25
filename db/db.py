@@ -105,6 +105,9 @@ def insert_nonprofit(npo: Nonprofit):
 def update_nonprofit(nonprofit: Nonprofit):
     return db.update_nonprofit(nonprofit)
 
+def delete_nonprofit(nonprofit_id):
+    return db.delete_nonprofit(nonprofit_id)
+
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
     return db.get_user_doc_reference(user_id)

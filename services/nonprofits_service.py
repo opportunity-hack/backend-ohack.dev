@@ -2,7 +2,7 @@ from datetime import datetime
 import os
 from ratelimit import limits
 import requests
-from db.db import fetch_npo, fetch_npos, insert_nonprofit, update_nonprofit
+from db.db import delete_nonprofit, fetch_npo, fetch_npos, insert_nonprofit, update_nonprofit
 from model.nonprofit import Nonprofit
 import logging
 import pytz
@@ -64,4 +64,12 @@ def update_npo(d):
 
     else:
         return None
+    
+def delete_npo(id): 
+    n: Nonprofit | None = fetch_npo(id)
+
+    if n is not None:
+        n = delete_nonprofit(id)
+
+    return n
     

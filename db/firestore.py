@@ -37,6 +37,11 @@ logger = logging.getLogger(__name__)
 # set log level
 logger.setLevel(logging.INFO)
 
+def convert_to_entity(doc: firestore.firestore.DocumentSnapshot, cls):
+    d = doc.to_dict()
+    d['id'] = doc.id
+    return cls.deserialize(d)
+
 class FirestoreDatabaseInterface(DatabaseInterface):
     def get_db(self):
         if safe_get_env_var("ENVIRONMENT") == "test":
@@ -54,12 +59,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     def fetch_user_by_user_id(self, user_id):
         db = self.get_db()  # this connects to our Firestore database
         user = None
-        temp = self.fetch_user_by_user_id_raw(db, user_id)
-        if temp is not None:
-            ref = temp.reference
-            d = temp.to_dict()
-            d['id'] = ref.id #Get the document id from the reference
-            user = User.deserialize(d)
+        raw = self.fetch_user_by_user_id_raw(db, user_id)
+        if raw is not None:
+            user = convert_to_entity(raw, User)
         return user
 
     def fetch_user_by_user_id_raw(self, db, user_id):
@@ -124,13 +126,10 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     def fetch_user_by_db_id(self, id):
         db = self.get_db()  # this connects to our Firestore database
         user = None
-        temp = self.fetch_user_by_db_id_raw(db, id)
+        raw = self.fetch_user_by_db_id_raw(db, id)
 
-        if temp is not None:
-            ref = temp.reference
-            d = temp.to_dict()
-            d['id'] = ref.id #Get the document id from the reference
-            user = User.deserialize(d)
+        if raw is not None:
+            user = convert_to_entity(raw, User)
 
         return user
 
@@ -269,31 +268,17 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         else:
             for doc in docs:
                 # doc is an instance of google.cloud.firestore_v1.base_document.DocumentSnapshot
-                # print(f'doc {doc}')
-                temp = doc.to_dict()
-                print(f'id type {type(doc.reference.id)}')
-                temp['id'] = doc.reference.id
-                results.append(ProblemStatement.deserialize(temp))
+                results.append(convert_to_entity(doc, ProblemStatement))
      
         return results
 
     def fetch_problem_statement(self, id):
-        print(f'log level {safe_get_env_var("GLOBAL_LOG_LEVEL")}')
-        print(f'log level {get_log_level()}')
         logger.debug(f'fetch_problem_statement :{id}')
         res = None
         db = self.get_db()
         try:
             raw = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
-            print(f'raw {raw}')
-            print(f'raw.exists {raw.exists}')
-            # print(f'raw.data {raw.data}')
-            print(f'raw.reference {raw.reference}')
-            print(f'raw.reference.id {raw.reference.id}')
-            temp = raw.to_dict()
-            print(f'temp {temp}')
-            temp['id'] = raw.reference.id
-            res = ProblemStatement.deserialize(temp) if temp is not None else None
+            res = convert_to_entity(raw, ProblemStatement) if raw is not None and raw.exists else None
         except KeyError as e:
             # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
             logger.debug(f'fetch_problem_statement_by_id error: {e}')
@@ -346,13 +331,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         return problem_statement if update_res is not None else None
     
-    def delete_problem_statement(self, db, problem_statement_id):
+    def delete_problem_statement(self, problem_statement_id):
+        p: ProblemStatement | None = None
+
         # TODO: delete related entities
-        p = self.fetch_problem_statement(problem_statement_id)
+        raw: firestore.firestore.DocumentSnapshot  = self.fetch_problem_statement_raw(problem_statement_id)
         
-        if p is not None:
+        if raw is not None and raw.exists:
             # Delete problem statement
-            db.collection("problem_statements").document(problem_statement_id).delete()
+            p = convert_to_entity(raw, ProblemStatement)
+            raw.reference.delete()
 
         return p
     
@@ -400,22 +388,14 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         docs = db.collection('hackathons').stream()
 
         for doc in docs:
-            temp = doc.to_dict()
-            temp["id"] = doc.id
-            # print(f'temp {temp}')
-            hackathons.append(Hackathon.deserialize(temp))
+            hackathons.append(convert_to_entity(doc, Hackathon))
 
         return hackathons
     
     def fetch_hackathon(self, id):
         db = self.get_db()
         raw = self.fetch_hackathon_raw(db, id)
-        temp = raw.to_dict()
-        print(f'temp {temp}')
-        if 'donation_current' in temp:
-            print(f'donation_current type: {type(temp["donation_current"])}')
-        temp['id'] = raw.reference.id
-        return Hackathon.deserialize(temp)
+        return Hackathon.deserialize(convert_to_entity(raw, Hackathon))
 
     def fetch_hackathon_raw(self, db, id):
         logger.debug(f'fetch_hackathon_raw id:{id}')
@@ -514,11 +494,21 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         if raw is not None:
             for n in raw:
-                temp = n.to_dict()
-                temp['id'] = n.id
-                result.append(Nonprofit.deserialize(temp)) 
+                result.append() 
 
         return result
+    
+    def fetch_npo(self, id):
+        db = self.get_db()
+        raw = self.fetch_hackathon_raw(db, id)
+        return convert_to_entity(raw, Nonprofit)
+
+    def fetch_npo_raw(self, db, id):
+        logger.debug(f'fetch_npo_raw id:{id}')
+        print(f"id {id}")
+        n = db.collection('nonprofits').document(id).get()
+        print(f'exists {n.exists}')
+        return n
     
     def insert_nonprofit(self, npo: Nonprofit):
         db = self.get_db()  # this connects to our Firestore database
@@ -555,6 +545,19 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         logger.debug(f"Update Result: {update_res}")
 
         return nonprofit if update_res is not None else None
+    
+    def delete_nonprofit(self, nonprofit_id):
+        n: Nonprofit | None = None
+
+        # TODO: delete related entities
+        doc: firestore.firestore.DocumentSnapshot = self.fetch_npo_raw(nonprofit_id)
+        
+        if doc is not None and doc.exists:
+            # Delete nonprofit
+            n = convert_to_entity(doc, Nonprofit)
+            doc.reference.delete()
+
+        return n
         
 
 DatabaseInterface.register(FirestoreDatabaseInterface)
