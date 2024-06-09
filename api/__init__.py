@@ -49,6 +49,8 @@ from api.newsletters import newsletter_views
 # Leaving this disabled for now - team can fix this based on fixes for above module import
 #from api.newsletters import subscription_views
 from api.certificates import certificate_views
+from api.users import users_views
+from api.problemstatements import problem_statement_views
 
 from common.utils import safe_get_env_var
 import os
@@ -75,7 +77,7 @@ def create_app():
     ##########################################
 
     csp = {
-        'default-src': ['\'self\''],
+        'default-src': ['\'self\'', '\'http://127.0.0.1:6060\''],
         'frame-ancestors': ['\'none\'']
     }
 
@@ -139,5 +141,7 @@ def create_app():
     app.register_blueprint(newsletter_views.bp)
     app.register_blueprint(certificate_views.bp)
     #app.register_blueprint(subscription_views.bp)
+    app.register_blueprint(users_views.bp)
+    app.register_blueprint(problem_statement_views.bp)
 
     return app

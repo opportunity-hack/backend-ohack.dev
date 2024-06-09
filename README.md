@@ -56,23 +56,32 @@ FLASK_RUN_PORT=6060
 FLASK_ENV=development
 PORT=6060
 
-# AUTH0 Settings
+
 CLIENT_ORIGIN_URL=
-AUTH0_AUDIENCE=
-AUTH0_DOMAIN=
-AUTH0_USER_MGMT_CLIENT_ID=
-AUTH0_USER_MGMT_SECRET=
 
 # Firebase Settings
 FIREBASE_CERT_CONFIG=
+
+OPENAI_API_KEY=
+
+#Propel Auth Settings
+PROPEL_AUTH_KEY=
+PROPEL_AUTH_URL=
 ```
 
-
+### Actually running the project
+#### Command Line
 Run the project in development mode:
 ```bash
 flask run
 ```
 
+#### Visual Studio Code
+##### Interpreters
+Set the interpreter via the command pallete `Python: Select Interpreter` (source)[https://code.visualstudio.com/docs/python/environments#_working-with-python-interpreters]
+
+
+<!-- TODO: Screen grab of list of interpreters showing conda env -->
 
 # References
 - [Firestore UI](https://github.com/thanhlmm/refi-app)
@@ -82,7 +91,7 @@ flask run
 
 ## Getting Firestore Emulator Running
 - [Setting up a fully functional database in Firebase Emulator](https://medium.com/rpdstartup/setting-up-a-fully-functional-database-in-firebase-emulator-b0199fff0252)
-- [Get gCloud CLI](https://cloud.google.com/docs/authentication/provide-credentials-adc) since the Python code will rely on this to connec to FireStore
+- [Get gCloud CLI](https://cloud.google.com/docs/authentication/provide-credentials-adc) since the Python code will rely on this to connect to FireStore
 ```
 brew install java11
 sudo ln -sfn /usr/local/opt/openjdk\@11/libexec/openjdk.jdk /Library/Java/JavaVirtualMachines/openjdk.11.jdk

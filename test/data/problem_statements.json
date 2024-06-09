@@ -1,0 +1,337 @@
+ [
+    {
+        "debug": true,
+        "description": "Nonprofits are using paper forms. The cost to digitize these forms to an HTML form in order to integrate it into their existing systems is difficult. Google Forms is great, yes, but it still requires some effort and knowledge without allowing integration with existing software applications. We have been working with ASU on two senior capstones around this problem that we can leverage as a head start.",
+        "first_thought_of": "2017",
+        "github": {
+            "name": "digitize paper forms",
+            "link": "https://github.com/opportunity-hack/digitize-paper-forms"
+        },
+        "helping": [],
+        "status": "post-hackathon",
+        "title": "Digitize Paper Forms"
+    },
+    {
+        "debug": true,
+        "description": "Having an online tax receipt will enable donors to drop off faster and increase our community support. Staff time will be utilized more efficiently and directed towards helping more clients. ",
+        "first_thought_of": "2020",
+        "github": "https://github.com/2020-opportunity-hack/Team-13/",
+        "helping": [],
+        "status": "production",
+        "title": "Contactless Donation & Tax Receipt - Approval & Tracker"
+    },
+    {
+        "debug": true,
+        "description": "Collecting, collating, managing, and evaluating information about our clients - including their household information, number and purpose of visits, and referrals provided - is a complicated and disjointed venture. For example, we use one program to track food bank households (Link2Feed) and an Access database created by a staff member to cross-track those clients as well as the clients coming to us for any other service in-house. This database is a vast improvement over the Excel spreadsheets we used prior, but has multiple functionality barriers. Among these barriers, only one user may access the database and enter data at one time, reports can be challenging to run, duplicate households are often found when auditing, and the database cannot be accessed outside of the network like an online database may be.\n\nWe are requesting assistance with creating a database that can:\n\nEnable multi-user functionality concurrently\nTrack households and individuals\nAllow us to include demographic information\nEnable us to track office visits and quickly identify which program(s) a household or individual utilized\nFacilitate real-time reporting that includes the ability to both schedule standard reports and create custom reports\nTrack donors and the value of volunteer hours",
+        "first_thought_of": "2019",
+        "github": [
+            {
+                "link": "https://github.com/2019-Arizona-Opportunity-Hack/Team9",
+                "name": "Code"
+            }
+        ],
+        "helping": [],
+        "status": "hackathon",
+        "title": "Data collection, data analysis, and data reporting"
+    },
+    {
+        "debug": true,
+        "description": "From pens, paper, and white boards to Excel spreadsheets and free volunteer scheduling programs we have tried to keep organized and reach our goals. In the end we feel frustrated, unorganized, scattered, and potentially ill-prepared for our lessons. This in turn could result in a student not being able to ride or worse yet not even being able to have a lesson that day; which breaks their heart and ours. In some cases this might even cause physical setbacks to their bodies.   ",
+        "first_thought_of": "2020",
+        "github": [
+            {
+                "name": "Scheduling Portal",
+                "link": "https://github.com/opportunity-hack/girard-training-stables"
+            }
+        ],
+        "helping": [],
+        "status": "post-hackathon",
+        "title": "Horse Volunteer Scheduling"
+    },
+    {
+        "debug": true,
+        "description": "We are interested in creating an app called \"Teacher League\". This app would introduce competition in the academic space while create a new way for the community to engage educators. Through Teacher League teachers submit videos to compete against each other in subject matter competitions. Anyone with the app can view the videos and vote on which teacher is the winner. The teacher with the most votes receives cash and prizes.",
+        "first_thought_of": "2019",
+        "github": [
+            {
+                "link": "https://github.com/2019-Arizona-Opportunity-Hack/Team-11",
+                "name": "Team 11 GitHub"
+            }
+        ],
+        "helping": [],
+        "status": "hackathon",
+        "title": "Teacher League"
+    },
+    {
+        "debug": true,
+        "description": "Like many nonprofits, Control Alt Delete struggles to illustrate how a donation supports their mission of helping women to escape domestic violence.  The anonymity that Control Alt Delete maintains is necessary, but hurts their ability to collect grant funding which shifts their focus to fundraising to support their cause.  If they are able to make donations more tangible to donors through their website, social media, and even augmented reality, the hope is that they can increase the people they can support through increased donations.",
+        "first_thought_of": "2021",
+        "github": [
+            {
+                "link": "https://github.com/opportunity-hack/domestic-violence-social-awareness-game",
+                "name": "social awareness game"
+            }
+        ],
+        "helping": [],
+        "status": "production",
+        "title": "Tangible Donations"
+    },
+    {
+        "debug": true,
+        "description": "Create an easy way for nonprofit staff to upload PDF, JPG, PPT documents (that can be from 2-10 pages or 2-10 JPG images of documents)\nProvide a mechanism for the nonprofit staff to select different summarizations from the PDF documents and allow for easy copy/paste of this information into a website or WhatsApp",
+        "first_thought_of": "2021",
+        "github": {
+            "link": "",
+            "name": ""
+        },
+        "helping": [],
+        "status": "concept",
+        "title": "Document Summarization"
+    },
+    {
+        "debug": true,
+        "description": "A common problem exists with gathering and managing emails at volunteer or regular events - the normal process involves participants writing down their contact information by hand. This introduced problems with deciphering the contact info and proved to be ineffective. As a result, they were looking for a way to easily track and manage participant involvement in order to keep in contact with and retain their donors, recipients, and volunteers.",
+        "first_thought_of": "2019",
+        "github": [
+            {
+                "name": "Code",
+                "link": "https://github.com/2019-Arizona-Opportunity-Hack/Team-3"
+            }
+        ],
+        "helping": [],
+        "status": "production",
+        "title": "Volunteer Registration and Sign-up"
+    },
+    {
+        "debug": true,
+        "description": "Allow donations to fund a specific project\n\n1. New alternative to _post-hackathon_ statement of work (SOW) projects\n2. Hackers can reach out to their network to increase donations\n3. Sponsors can donate to complete projects\n4. Mentors get some monetary reward\n5. Donation can also be for maintenance/features after launch\n6. Hackers can join and work on projects without a prize bounty\n7. Opportunity Hack needs to earmark these funds only for prize payouts for these projects\n",
+        "first_thought_of": "2022",
+        "github": [
+            {
+                "name": "Frontend",
+                "link": "https://github.com/opportunity-hack/frontend-ohack.dev"
+            },
+            {
+                "name": "Backend",
+                "link": "https://github.com/opportunity-hack/backend-ohack.dev"
+            }
+        ],
+        "helping": [],
+        "status": "concept",
+        "title": "ohack.dev: Cash Prize Bounty"
+    },
+    {
+        "debug": true,
+        "description": "Publish to social media\nSend Slack and emails to community\nAsk for mentors and hackers\nClose signups once max capacity is reached (5 hackers, 5 mentors)\n",
+        "first_thought_of": "2022",
+        "github": [
+            {
+                "link": "https://github.com/opportunity-hack/frontend-ohack.dev",
+                "name": "Frontend"
+            },
+            {
+                "link": "https://github.com/opportunity-hack/backend-ohack.dev",
+                "name": "Backend"
+            }
+        ],
+        "helping": [],
+        "status": "concept",
+        "title": "ohack.dev: New Project Launch Announcement"
+    },
+    {
+        "debug": true,
+        "description": "The organization's donation mechanism does not deter people from donating as much as the challenge of raising visibility about this issue and encouraging people to donate to help address the issue. The issue is: 99% of all clients are financially abused. We help with one time assistance with rent/utility/move in payments allowing the women we help to remain housed during this transition to independence. These Survivors have needed financial and logistical help as they take control of their finances and futures. This is why we focused on considering gamification as a way to introduce people to an issue that people shun away from because domestic violence predominately attracts negative news. Introducing people to the issue doesn't necessarily lead to a donation unless there is something tangible like a feel-good story that they leave with.",
+        "first_thought_of": "2021",
+        "github": [
+            {
+                "link": "https://github.com/2021-opportunity-hack/Team-4",
+                "name": "Social awareness game"
+            }
+        ],
+        "helping": [],
+        "status": "production",
+        "title": "Domestic Violence Awareness Game"
+    },
+    {
+        "debug": true,
+        "description": "A mobile app or web app that first responders can use to secure needed resources like a cab ride, hotel stay, meals and moving companies.\n\nWith a quick method of addressing the needs of those fleeing domestic violence, a request for service can go out to all community partners and they can reply to commit to helping right then.",
+        "first_thought_of": "2019",
+        "github": [
+            {
+                "name": "Team 12",
+                "link": "https://github.com/2019-Arizona-Opportunity-Hack/Team-12"
+            },
+            {
+                "link": "https://github.com/falvarado0326/SafeSpace-1",
+                "name": "Team 4"
+            },
+            {
+                "name": "Team 1",
+                "link": "https://github.com/2019-Arizona-Opportunity-Hack/Team-1/"
+            }
+        ],
+        "helping": [],
+        "status": "hackathon",
+        "title": "First Responder Connect"
+    },
+    {
+        "debug": true,
+        "description": "Allow mentors/hackers to give feedback to hackers for hard/soft skills\nAllow people to publish feedback publicly to add to their resume\nCreate milestones for certain feedback achievements\n# of feedback given + received\nFeedback score for programming language\nAllow mentors/hackers to show how much effort they contributed\nCommits\nStandups\nVideo chats\nDesign documents\nDisplay the nonprofits hackers/mentors supported\n",
+        "first_thought_of": "2022",
+        "github": [
+            {
+                "link": "https://github.com/opportunity-hack/frontend-ohack.dev",
+                "name": "Frontend"
+            },
+            {
+                "name": "Backend",
+                "link": "https://github.com/opportunity-hack/backend-ohack.dev"
+            }
+        ],
+        "helping": [],
+        "status": "concept",
+        "title": "ohack.dev: Hackers and Mentors Build Clout"
+    },
+    {
+        "debug": true,
+        "description": "Although we've been creating value for nonprofits, we haven't created a way for people to be constantly involved in our mission.  We only have two events per-year, and we need something that helps us to scale to be more effective.  We're building ohack.dev to help us do that!",
+        "first_thought_of": "2021",
+        "github": [
+            {
+                "name": "frontend",
+                "link": "https://github.com/opportunity-hack/frontend-ohack.dev"
+            },
+            {
+                "link": "https://github.com/opportunity-hack/backend-ohack.dev",
+                "name": "backend"
+            }
+        ],
+        "helping": [],
+        "status": "production",
+        "title": "Create ohack.dev"
+    },
+    {
+        "debug": true,
+        "description": "We are looking for help to develop an online portal (career advisory) listing various career opportunities/avenues for KISS students and alumni. The aim of the portal is to mentor and guide the students while studying at KISS (and after they graduate) to ensure they are placed in both public and private services, in order to achieve a better representation of the indigenous communities.",
+        "first_thought_of": "2021",
+        "github": "",
+        "helping": [],
+        "status": "production",
+        "title": "Educational and Career Portal"
+    },
+    {
+        "debug": true,
+        "description": "Allow for mentors and hackers to self-service and join projects\nSearch capability\nProfile match based on skill (e.g. Python projects, etc.)\nMatch based on impact area (e.g. Students, Medical, Animals, etc.)\nFavor projects that aren\u2019t yet full (5 hackers, 5 mentors)\nSolves the \u201cI want to help, but there are no hackathons coming up\u201d problem\nSolves the \u201cI work for ESPN and want to help a nonprofit\u201d problem\n",
+        "first_thought_of": "2022",
+        "github": [
+            {
+                "name": "Frontend",
+                "link": "https://github.com/opportunity-hack/frontend-ohack.dev"
+            },
+            {
+                "name": "Backend",
+                "link": "https://github.com/opportunity-hack/backend-ohack.dev"
+            }
+        ],
+        "helping": [],
+        "status": "concept",
+        "title": "ohack.dev: Help people find interesting projects"
+    },
+    {
+        "debug": true,
+        "description": "Volunteers without a technical background can use ohack.dev to:\nSource projects from nonprofits\nFollow-up with nonprofits\nRecruit sponsors to fund projects\nEngage with previous hackers and mentors to get them to join\nSocial media engagement\nSend newsletter to Women in Tech, Out in Tech, etc.\nSlack engagement\n",
+        "first_thought_of": "2022",
+        "github": [
+            {
+                "link": "https://github.com/opportunity-hack/frontend-ohack.dev",
+                "name": "Frontend"
+            },
+            {
+                "link": "https://github.com/opportunity-hack/backend-ohack.dev",
+                "name": "Backend"
+            }
+        ],
+        "helping": [],
+        "status": "concept",
+        "title": "ohack.dev: Enable Other Volunteer Opportunities"
+    },
+    {
+        "debug": true,
+        "description": "Allow nonprofit/admin to mark project as completed\nCreate certificate\nPublish social media acknowledgement\nTrigger call for judges\nTrigger scheduling for live demo once judges are found\nRecord live demo\nPublish demo on social media\nTrigger request to mentors for LinkedIn referrals\n",
+        "first_thought_of": "2022",
+        "github": [
+            {
+                "name": "Frontend",
+                "link": "https://github.com/opportunity-hack/frontend-ohack.dev"
+            },
+            {
+                "link": "https://github.com/opportunity-hack/backend-ohack.dev",
+                "name": "Backend"
+            }
+        ],
+        "helping": [],
+        "status": "concept",
+        "title": "ohack.dev: Victory Lap on Completion"
+    },
+    {
+        "debug": true,
+        "description": "Build a digital version of a guided journal that is currently printed and in PDF form\n\nThe digital version should be supported on mobile and personal computers\n\nIf the parent or student wants to share their journal, there should be an option to send the journal via email as a PDF",
+        "first_thought_of": "2021",
+        "github": {
+            "link": "",
+            "name": ""
+        },
+        "helping": [],
+        "status": "concept",
+        "title": "Digital Science Journal"
+    },
+    {
+        "debug": true,
+        "description": "Introduce a simple and free A/B testing system into the Shopify App store, current solutions range from $29 to $99 a month and for a small nonprofit organization, this is not sustainable",
+        "first_thought_of": "2021",
+        "github": {
+            "link": "",
+            "name": ""
+        },
+        "helping": [],
+        "status": "concept",
+        "title": " Free and Open-Source Shopify A/B Testing Solution"
+    },
+    {
+        "debug": true,
+        "description": "Lorem ipsum dolor sit amet, consectetur adipiscing elit, sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.",
+        "first_thought_of": "2021",
+        "github": [
+            {
+                "link": "https://github.com/opportunity-hack",
+                "name": "Placeholder"
+            }
+        ],
+        "helping": [],
+        "status": "post-hackathon",
+        "title": "Data Analysis"
+    },
+    {
+        "debug": true,
+        "description": "Some non-profits have \"clients\" that require demographics and treatment to be tracked easily. This usually requires some scheduling component as well as a historical record of visits with services provided, then reports follow. There are open-source EHR solutions on the internet, but none are simple enough for non-profits to use without dedicated training.",
+        "first_thought_of": "2015",
+        "github": [
+            {
+                "link": "https://github.com/opportunity-hack/simple-electronic-healthcare-records-EHR",
+                "name": "simple-electronic-healthcare-records-EHR"
+            }
+        ],
+        "helping": [],
+        "status": "post-hackathon",
+        "title": "Simple EHR"
+    },
+    {
+        "debug": true,
+        "description": "We need to build the most amazing coloring book, sourced from kids\u2019 sketches, that will make everyone want to buy one. These inspiring coloring books made by kids will also be provided to kids in need in our community, through Susie Q's Kids comfort bag program.",
+        "first_thought_of": "2023",
+        "github": [],
+        "helping": [],
+        "status": "concept",
+        "title": "From Sketches to Smiles: A Coloring Book that Gives Back"
+    }
+]
