@@ -241,9 +241,11 @@ def get_hackathon_list(is_current_only=None):
         logger.debug("Found no results, returning empty list")
         return {[]}
     else:
+        logger.debug("Found results, processing...")
         results = []
         for doc in docs:
-            d = doc_to_json(doc.id, doc)
+            logger.debug(f"Processing doc {doc.id}")
+            d = doc_to_json(doc.id, doc)            
             # If any value from the keys is a DocumentReference or DocumentSnapshot, call doc_to_json
             for key in d.keys():
                 logger.debug(f"Checking key {key}")
