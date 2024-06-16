@@ -271,3 +271,4 @@ def save_profile():
 @bp.route("/profile/<id>", methods=["GET"])
 def get_profile_by_id(id):
     return get_user_by_id_old(id)
+

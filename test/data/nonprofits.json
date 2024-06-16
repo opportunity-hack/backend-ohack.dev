@@ -1,0 +1,74 @@
+[
+    {
+        "description": "Girard Training Stables was founded in 2013 when our director saw a need for quality, affordable lessons in the West Valley of Phoenix,  Arizona. We provide English and Western riding lessons to traditional and adaptive students.  GTS is a PATH certified facility and have participated in Special Olympic events. We provide various volunteer opportunities for both students, adults, and members of the community.  \n      We believe that anybody should be able to ride horses. Finances are a lousy reason to tell someone that they can't learn to ride. We believe that being around horses is good for humans, physically, mentally, and emotionally. We don't believe in just showing up and riding. We believe in getting your hands dirty, feeling your horse's soft fur, and getting to know your horse before climbing on. We believe in community. Being outside is GOOD, especially for kids, but for grownups, too. We believe that it is okay for only one person to win a blue ribbon. We also believe that it is okay to be frustrated about this, as long as you take a deep breath and resolve to try again. We believe in experiential learning and working through a problem to try to solve it.",
+        "id": "89076bcc077811edbfdeb29c4ac23549",
+        "name": "Girard Training Stables",
+        "need": "1",
+        "slack_channel": "npo-girard-training-stables",
+        "website": ""
+    },
+    {
+        "description": "The mission of Dress for Success San Jose is empower women to achieve economic independence by providing a network of support, professional attire and development tools to help women thrive in work and in life.",
+        "id": "893a6072077811edbfdeb29c4ac23549",
+        "name": "Dress for Success San Jose",
+        "need": "1",
+        "slack_channel": "",
+        "website": ""
+    },
+    {
+        "description": "Control Alt Delete helps people escape domestic violence. 99% of all clients are financially abused. We help with one time assistance with rent/utility/move in payments allowing the women we help to remain housed during this transition to independence. These Survivors have needed this help as they take control of their finances and futures.",
+        "id": "8a24c20c077811edbfdeb29c4ac23549",
+        "name": "Control Alt Delete LLC",
+        "need": "2",
+        "slack_channel": "npo-control-alt-delete",
+        "website": ""
+    },
+    {
+        "description": "Our organization provides resources to families, elderly and homeless. We also provide opportunities for youth.",
+        "id": "86b0d2e6077811edbfdeb29c4ac23549",
+        "name": "Zuri's Circle",
+        "need": "3",
+        "slack_channel": "",
+        "website": ""
+    },
+    {
+        "description": "We exist to create simple technical solutions for nonprofit organizations.  We utilize volunteers, who are industry professionals or local students to the area in order to provide them valuable experience as they create these solutions for nonprofit organizations.  We also look to create durable bonds between volunteers, mentors, and their local communities as they work together to create meaningful change to society.",
+        "id": "tRK5YPrc8vpHQabMYIDO",
+        "name": "Opportunity Hack Inc.",
+        "need": "4",
+        "slack_channel": "general",
+        "website": "www.ohack.org"
+    },
+    {
+        "description": "",
+        "id": "8a70c620077811edbfdeb29c4ac23549",
+        "name": "Kalinga Institute of Social Sciences KISS",
+        "need": "5",
+        "slack_channel": "npo-kiss-kalinga-institute-of-social-sciences",
+        "website": "kiss.ac.in/about/"
+    },
+    {
+        "description": "SARSEF's mission is creating Arizona\u2019s future critical thinkers and problem solvers through science and engineering. Everything we do is guided by our organizational values: innovation, equity, and engagement.\n\nSARSEF started in 1955 on the University of Arizona campus. Over the years, SARSEF encouraged preK12 students to pursue their dreams in science and engineering fields, adding programs and events to serve the entire community and state. By 1999, SARSEF grew too big for even the largest space on the campus and formed a nonprofit so the organization could serve even more children.\n\nIn 2010, SARSEF realized too few of the students crossing the STEM science, technology, engineering, and math doorstep were girls, and even less were racial or ethnic minorities. SARSEF focused its mission on providing free STEM education and education to fill the gaps that existed in our state. Since that time, SARSEF has specifically dedicated and prioritized its time, resources, and passion to reach underrepresented female students and students of color populations in STEM  before biases and stereotypes are formed. SARSEF now impacts over 50,000 students in Arizona each year through our STEM education programs and activities.\n\nWith SARSEF, children don\u2019t have to wait to become scientists or engineers. With curiosity as their guide, they can start asking questions they care about and use science and engineering to find solutions that are meaningful to them, and even, the world.\n\nThrough this exploration of science, technology, engineering, and math STEM, students gain critical thinking and problemsolving skills that are important for whatever career they choose.\n\nSARSEF focuses on engaging student populations underrepresented in the fields of STEM. We prioritize creating opportunity in schools in areas of poverty as defined by Title I designations.\n\nWe foster communities of support for students in STEM by building the confidence and toolboxes of some of their greatest advocates \u2013 teachers and caregivers. Our educators travel to schools and community centers throughout the state to provide student outreach, teacher professional development, and parent workshops at no cost to Title I schools.\n\nwww.sarsef.org",
+        "id": "8a3e8160077811edbfdeb29c4ac23549",
+        "name": "SARSEF: Southern Arizona Research, Science and Engineering Foundation",
+        "need": "6",
+        "slack_channel": "npo-sarsef",
+        "website": "https://sarsef.org/"
+    },
+    {
+        "description": "Our mission is to offer scientificallyinformed programs based in traumainformed Mindful Awareness and SocialEmotional Learning which equitably support children, educators and communities with tools to manage stress and navigate life\u2019s challenges.\nWe envision a cohesive society where humankind is supported by equitable tools for selfefficacy and mental health wellbeing through systemic changes for stronger, safer and more connected communities.",
+        "id": "8a8aa068077811edbfdeb29c4ac23549",
+        "name": "Mindfulness First",
+        "need": "7",
+        "slack_channel": "npo-mindfulness-first",
+        "website": ""
+    },
+    {
+        "description": "SafeSpace is an app that is set to transform the way sexual assault survivors access the help they need. Our app is designed to be discreet, so users can seek help without fear of being found out. We have taken great care to ensure that SafeSpace is a safe and secure space where victims can access six critical resources that can help them escape abuse and start the healing process.",
+        "id": "399e8bc0028a11ee851be2f442f28a45",
+        "name": "SafeSpace",
+        "need": "8",
+        "slack_channel": "safespace",
+        "website": "https://youtu.be/RPFZjCt10eM"
+    }
+]

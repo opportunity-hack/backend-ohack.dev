@@ -1,5 +1,6 @@
 from common.utils import safe_get_env_var
 from model.hackathon import Hackathon
+from model.nonprofit import Nonprofit
 from model.problem_statement import ProblemStatement
 from model.user import User
 
@@ -11,6 +12,7 @@ db:DatabaseInterface = None
 in_memory = safe_get_env_var("IN_MEMORY_DATABASE") == 'True'
 
 if in_memory: 
+    print("Using in memory database")
     from db.mem import InMemoryDatabaseInterface
     db = InMemoryDatabaseInterface()
 else:
@@ -90,6 +92,22 @@ def insert_problem_statement_hackathon(problem_statement: ProblemStatement, hack
 
 def update_problem_statement_hackathons(problem_statement: ProblemStatement, hackathons):
     return db.update_problem_statement_hackathons(problem_statement, hackathons)
+
+# Nonprofits
+def fetch_npos():
+    return db.fetch_npos()
+
+def fetch_npo(id):
+    return db.fetch_npo(id)
+
+def insert_nonprofit(npo: Nonprofit):
+    return db.insert_nonprofit(npo)
+
+def update_nonprofit(nonprofit: Nonprofit):
+    return db.update_nonprofit(nonprofit)
+
+def delete_nonprofit(nonprofit_id):
+    return db.delete_nonprofit(nonprofit_id)
 
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
