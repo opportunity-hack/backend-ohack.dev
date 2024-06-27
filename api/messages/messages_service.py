@@ -1156,6 +1156,7 @@ def get_history_old(db_id):
         "expertise": res["expertise"] if "expertise" in res else "",
         "education": res["education"] if "education" in res else "",
         "shirt_size": res["shirt_size"] if "shirt_size" in res else "",
+        "github": res["github"] if "github" in res else "",
         "why": res["why"] if "why" in res else "",
         "role": res["role"] if "role" in res else "",
         "company": res["company"] if "company" in res else ""
@@ -1246,7 +1247,7 @@ def save_profile_metadata_old(propel_id, json):
         logger.info(f"User exists: {user.id}")        
 
     # Only update metadata that is in the json
-    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size"]
+    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size", "github"]
 
     d = {}
 
@@ -1275,7 +1276,7 @@ def get_user_by_id_old(id):
     doc_get = doc.get()
     res = doc_get.to_dict()
     # Only keep these fields since this is a public api
-    fields = ["name", "profile_image", "user_id", "nickname"]
+    fields = ["name", "profile_image", "user_id", "nickname", "github"]
     # Check if the field is in the response first
     res = {k: res[k] for k in fields if k in res}
 
