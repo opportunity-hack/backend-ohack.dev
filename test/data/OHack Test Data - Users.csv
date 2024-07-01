@@ -1,2 +1,2 @@
-id,name,email_address,user_id,last_login,profile_image,nickname,expertise,education,shirt_size,role,company
-1,Some Dude,somedude@somedude.com,some-dude,2024-04-09 12:12:02.285570,a picture,,,,,,
+id,name,email_address,user_id,last_login,profile_image,nickname,expertise,education,shirt_size,github,role,company
+1,Some Dude,somedude@somedude.com,some-dude,2024-04-09 12:12:02.285570,a picture,,,,,,,

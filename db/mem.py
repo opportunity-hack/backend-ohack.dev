@@ -1,6 +1,8 @@
+from types import SimpleNamespace
 from db.interface import DatabaseInterface
 from model.donation import CurrentDonations, DonationGoals
 from model.hackathon import Hackathon
+from model.nonprofit import Nonprofit
 from model.problem_statement import Helping, ProblemStatement
 from model.user import User
 import os
@@ -22,8 +24,11 @@ PROBLEM_STATEMENTS_EXCEL_FILE_PATH = "../test/data/problem_statements.xlsx"
 PROBLEM_STATEMENT_HELPING_CSV_FILE_PATH = "../test/data/OHack Test Data - Problem Statement Helping.csv"
 PROBLEM_STATEMENT_HELPING_EXCEL_FILE_PATH = "../test/data/problem_statement_helping.xlsx"
 
-HACKATHON_CSV_FILE_PATH = "../test/data/OHack Test Data - Hackathons.csv"
-HACKATHON_EXCEL_FILE_PATH = "../test/data/hackathons.xlsx"
+HACKATHON_CSV_FILE_PATH = "../test/data/OHack Test Data - Nonprofits.csv"
+HACKATHON_EXCEL_FILE_PATH = "../test/data/nonprofits.xlsx"
+
+NONPROFIT_CSV_FILE_PATH = "../test/data/OHack Test Data - Nonprofits.csv"
+NONPROFIT_EXCEL_FILE_PATH = "../test/data/nonprofits.xlsx"
 
 CURRENT_DONATIONS_CSV_FILE_PATH = "../test/data/OHack Test Data - Current Donations.csv"
 CURRENT_DONATIONS_EXCEL_FILE_PATH = "../test/data/current_donations.xlsx"
@@ -40,7 +45,6 @@ HACKATHON_DONATION_GOALS_EXCEL_FILE_PATH = "../test/data/hackathon_donation_goal
 PROBLEM_STATEMENT_HACKATHONS_CSV_FILE_PATH = "../test/data/OHack Test Data - Problem Statement Hackathons.csv"
 PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH = "../test/data/problem_statement_hackathons.xlsx"
 
-
 class InMemoryDatabaseInterface(DatabaseInterface):
 
     users = None
@@ -52,6 +56,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     hackathon_current_donations = None
     hackathon_donation_goals = None
     problem_statement_hackathons = None
+    nonprofits = None
 
     def __init__(self):
         super().__init__()
@@ -64,6 +69,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.init_current_donations()
         self.init_donation_goals()
         self.init_problem_statement_hackathons()
+        self.init_nonprofits()
 
     # ----------------------- Users -------------------------------------------- #
 
@@ -446,7 +452,14 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         h.id = self.get_next_hackathon_id()
 
         # Fields on here need to show up in exactly the column order in the CSV
-        d = h.serialize()
+        d = {
+            "id": h.id,
+            "title": h.title,
+            "location": h.location,
+            "start_date": h.start_date,
+            "end_date": h.end_date,
+            "image_url": h.image_url,
+        }
         
         logger.debug(f'Inserting hackathon\n: {h}')
 
@@ -455,6 +468,83 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.flush_hackathons()
 
         return h
+
+    #--------------------------------------- NPOs ------------------------------ #
+    def fetch_npos(self):
+        res = []
+
+        for p in self.nonprofits:
+            res.append(Nonprofit.deserialize(vars(p)))
+
+        return res
+    
+    def fetch_npo_raw(self, id):
+        res = None
+        try:
+            res = self.nonprofits.by.id[int(id)] # This is going to return a SimpleNamespace for imported rows.
+        except KeyError as e:
+            # A key error here means that littletable could not convert the loaded row into a SimpleNamespace because the row was missing a property
+            logger.debug(f'fetch_npo_raw error: {e}')
+        return res
+    
+    def fetch_npo(self, id):
+        res = None
+        try:
+            temp = self.fetch_npo_raw(id) # This is going to return a SimpleNamespace for imported rows.
+            res = Nonprofit.deserialize(vars(temp)) if temp is not None else None
+        except KeyError as e:
+            # A key error here means that User.deserialize was expecting a property in the data that wasn't there
+            logger.debug(f'fetch_npo error: {e}')
+        return res
+
+    def insert_nonprofit(self, npo: Nonprofit):
+
+        npo.id = self.get_next_nonprofit_id()
+
+        # Fields on here need to show up in exactly the column order in the CSV
+        d = {
+            "id": npo.id,
+            "name": npo.name,
+            "slack_channel": npo.slack_channel,
+            "website": npo.website,
+            "description": npo.description,
+            "need": npo.need
+        }
+        
+        logger.debug(f'Inserting nonprofit\n: {d}')
+
+        self.nonprofits.insert(d)
+
+        self.flush_nonprofits()
+
+        return npo
+
+    def update_nonprofit(self, nonprofit: Nonprofit):
+
+        # TODO: Maybe, call self.problem_statements.add_field to add fields that are on the class but not the fetched object: https://pythonhosted.org/littletable/littletable.Table-class.html#add_field
+
+        d = self.nonprofits.by.id[int(nonprofit.id)]
+        d.id = int(nonprofit.id)
+
+        d.name = nonprofit.name
+        d.slack_channel = nonprofit.slack_channel
+        d.website = nonprofit.website
+        d.description = nonprofit.description
+        d.need = nonprofit.need
+
+        logger.debug(f'Updating nonprofit\n: {d}')
+
+        self.flush_nonprofits()
+
+        return Nonprofit.deserialize(vars(d))
+    
+    def delete_nonprofit(self, nonprofit_id):
+        raw = self.fetch_npo_raw(nonprofit_id)
+        self.nonprofits.remove(raw)
+
+        self.flush_nonprofits()
+
+        return Nonprofit.deserialize(vars(raw))
 
     #--------------------------------------- Intialization ------------------------------ #
 
@@ -565,6 +655,20 @@ class InMemoryDatabaseInterface(DatabaseInterface):
     def flush_problem_statement_hackathons(self):
         self.problem_statement_hackathons.excel_export(PROBLEM_STATEMENT_HACKATHONS_EXCEL_FILE_PATH)
 
+
+    def init_nonprofits(self):
+        if os.path.exists(NONPROFIT_EXCEL_FILE_PATH):
+            self.nonprofits = lt.Table().excel_import(NONPROFIT_EXCEL_FILE_PATH, transforms={'id': int})
+        else:
+            self.nonprofits = lt.Table().csv_import(NONPROFIT_CSV_FILE_PATH, transforms={'id': int})
+
+        self.nonprofits.create_index('id', unique=True)
+
+    def get_next_nonprofit_id(self) -> int:
+        return max([i for i in self.nonprofits.all.id]) + 1
+    
+    def flush_nonprofits(self):
+        self.nonprofits.excel_export(NONPROFIT_EXCEL_FILE_PATH)
 
 DatabaseInterface.register(InMemoryDatabaseInterface)
 

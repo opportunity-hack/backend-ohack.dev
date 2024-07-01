@@ -1,4 +1,4 @@
-metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size"]
+metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github"]
 
 class User:
     id = None
@@ -11,6 +11,7 @@ class User:
     expertise = ""
     education = ""
     shirt_size = ""
+    github = ""
     role = ""
     company = ""
     why = ""
@@ -31,6 +32,7 @@ class User:
         u.expertise = d['expertise'] if 'expertise' in d else ''
         u.education = d['education'] if 'education' in d else ''
         u.shirt_size = d['shirt_size'] if 'shirt_size' in d else ''
+        u.github = d['github'] if 'github' in d else ''
         u.role = d['role'] if 'role' in d else ''
         u.company = d['company'] if 'company' in d else ''
         u.why = d['why'] if 'why' in d else ''
