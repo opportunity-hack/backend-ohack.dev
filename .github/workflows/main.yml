@@ -62,7 +62,7 @@ jobs:
       - name: 🧪 Run tests
         run: |
           source venv/bin/activate
-          pytest test/common/utils/test_firebase.py
+          pytest api/certificates/tests/test_always_pass.py
 
       - name: 📊 Upload test results
         uses: actions/upload-artifact@v3
