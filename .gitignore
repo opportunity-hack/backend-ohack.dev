@@ -1,4 +1,4 @@
-.env*
+.env
 package-lock.json
 .flaskenv
 .DS_Store
