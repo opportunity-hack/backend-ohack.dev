@@ -1,0 +1,15 @@
+[MASTER]
+init-hook='import sys; sys.path.append("./api")'
+ignore=venv
+extension-pkg-whitelist=flask
+
+[MESSAGES CONTROL]
+# Disable some of the Pylint messages
+disable=
+    C0114,  # missing-module-docstring
+    C0116,  # missing-function-docstring    
+    R0903,  # too-few-public-methods
+
+[REPORTS]
+# Tweak the report output
+reports=no
