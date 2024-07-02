@@ -28,7 +28,6 @@ def get_npos():
 
 def get_npo(id):
     npo = fetch_npo(id)
-
     return npo
 
 @limits(calls=50, period=ONE_MINUTE)

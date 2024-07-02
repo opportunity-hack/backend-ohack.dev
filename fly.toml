@@ -1,0 +1,22 @@
+# fly.toml app configuration file generated for backend-ohack-prod on 2024-07-01T15:53:09-07:00
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'backend-ohack'
+primary_region = 'sjc'
+
+[build]
+
+[http_service]
+  internal_port = 6060
+  force_https = true
+  auto_stop_machines = true
+  auto_start_machines = true
+  min_machines_running = 1
+  processes = ['app']
+
+[[vm]]
+  memory = '1gb'
+  cpu_kind = 'shared'
+  cpus = 1
