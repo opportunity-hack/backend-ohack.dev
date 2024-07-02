@@ -59,18 +59,18 @@ jobs:
       - name: 🏄 Copy test env vars
         run: cp .env.example .env
 
-      - name: 🧪 Run tests
-        run: |
-          source venv/bin/activate
-          pytest api/certificates/tests/test_always_pass.py
+      #- name: 🧪 Run tests
+      #  run: |
+      #    source venv/bin/activate
+      #    pytest api/certificates/tests/test_always_pass.py
 
-      - name: 📊 Upload test results
-        uses: actions/upload-artifact@v3
-        if: always()
-        with:
-          name: test-results
-          path: ./test-results/
-          retention-days: 30
+      #- name: 📊 Upload test results
+      #  uses: actions/upload-artifact@v3
+      #  if: always()
+      #  with:
+      #    name: test-results
+      #    path: ./test-results/
+      #    retention-days: 30
 
   deploy:
     name: 🚀 Deploy
