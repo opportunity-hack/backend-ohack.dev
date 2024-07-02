@@ -62,7 +62,7 @@ jobs:
       - name: 🧪 Run tests
         run: |
           source venv/bin/activate
-          pytest conftest.py
+          pytest test/common/utils/test_firebase.py
 
       - name: 📊 Upload test results
         uses: actions/upload-artifact@v3
