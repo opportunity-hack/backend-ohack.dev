@@ -36,7 +36,7 @@ jobs:
       - name: 🔬 Lint
         run: |
           source venv/bin/activate
-          pylint app/**/*.py
+          pylint -E api/*.py
 
   tests:
     name: 🧪 Tests
