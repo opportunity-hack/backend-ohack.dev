@@ -50,6 +50,7 @@ from api.newsletters import newsletter_views
 #from api.newsletters import subscription_views
 from api.certificates import certificate_views
 from api.users import users_views
+from api.hearts import hearts_views
 from api.problemstatements import problem_statement_views
 
 from common.utils import safe_get_env_var
@@ -142,6 +143,7 @@ def create_app():
     app.register_blueprint(certificate_views.bp)
     #app.register_blueprint(subscription_views.bp)
     app.register_blueprint(users_views.bp)
+    app.register_blueprint(hearts_views.bp)
     app.register_blueprint(problem_statement_views.bp)
 
     return app
