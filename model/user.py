@@ -18,6 +18,7 @@ class User:
     badges = []
     teams = []
     hackathons = []
+    history = {}
 
     @classmethod
     def deserialize(cls, d):
@@ -36,6 +37,35 @@ class User:
         u.role = d['role'] if 'role' in d else ''
         u.company = d['company'] if 'company' in d else ''
         u.why = d['why'] if 'why' in d else ''
+
+        # Handle history in a generic way
+        '''
+         "history": {
+            "how": {
+            "code_reliability": 2,
+            "customer_driven_innovation_and_design_thinking": 1,
+            "iterations_of_code_pushed_to_production": 1.5,
+            "standups_completed": 2.5
+            },
+            "what": {
+            "code_quality": 0.5,
+            "design_architecture": 0.5,
+            "documentation": 0.5,
+            "observability": 0,
+            "productionalized_projects": 0.5,
+            "requirements_gathering": 0.5,
+            "unit_test_coverage": 0,
+            "unit_test_writing": 0
+                }
+            },
+        '''
+        if 'history' in d:
+            if 'how' in d['history']:
+                u.how = d['history']['how']
+            if 'what' in d['history']:
+                u.what = d['history']['what']  
+            u.history = d['history'] 
+
         return u
     
     def serialize(self):
