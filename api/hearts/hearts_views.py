@@ -10,12 +10,12 @@ from flask import (
 )
 
 bp_name = 'api-hearts'
-bp_url_prefix = '/api/hearts'
+bp_url_prefix = '/api'
 bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
 
 
 # Used to provide profile details - user must be logged in
-@bp.route("/", methods=["GET"])
+@bp.route("/hearts", methods=["GET"])
 @auth.require_user
 def get_hearts():         
     print("get_hearts")   
@@ -23,7 +23,7 @@ def get_hearts():
     print(f"res: {res}")
     return {"hearts": res}
 
-@bp.route("/", methods=["POST"])
+@bp.route("/hearts", methods=["POST"])
 #@auth.require_user
 def save_hearts():        
     print("save_hearts")
