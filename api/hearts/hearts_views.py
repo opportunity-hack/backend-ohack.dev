@@ -24,13 +24,12 @@ def get_hearts():
     return {"hearts": res}
 
 @bp.route("/hearts", methods=["POST"])
-#@auth.require_user
+@auth.require_user
 def save_hearts():        
     print("save_hearts")
     if auth_user and auth_user.user_id: 
         print(f"request.get_json(): {request.get_json()}")        
-        # u: User | None = users_service.save_profile_metadata(auth_user.user_id, request.get_json())
-        #return vars(u) if u is not None else None
-        return "Biuttera"
+        res = hearts_service.save_hearts(auth_user.user_id, request.get_json())
+        return {"hearts": res}
     else:
-        return "Biutter"
+        return "Error: Could not obtain user details for POST /hearts"
