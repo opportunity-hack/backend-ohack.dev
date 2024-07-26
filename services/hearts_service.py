@@ -129,7 +129,7 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
                   message=f"{intro_message}\nHey <@{slack_user_id}> :astronaut-hooray-woohoo-yeahfistpump: You have been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}\nYour profile should now reflect these updates: https://ohack.dev/profile")
         
         # Send to public channel too
-        send_slack(channel="testtest",
+        send_slack(channel="general",
                    message=f"{intro_message}\n:astronaut-hooray-woohoo-yeahfistpump: <@{slack_user_id}> has been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}")
     else:
         # Example: ["code_reliability", "iterations_of_code_pushed_to_production
