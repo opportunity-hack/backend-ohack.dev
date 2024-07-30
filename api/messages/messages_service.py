@@ -844,7 +844,13 @@ async def save_lead(json):
         slack_message = f"New lead! Name:`{json['name']}` Email:`{json['email']}`"
         send_slack(slack_message, "ohack-dev-leads")
 
-        send_welcome_email( json["name"], json["email"] )
+        success_send_email = send_welcome_email( json["name"], json["email"] )
+        if success_send_email:
+            logger.info(f"Sent welcome email to {json['email']}")
+            # Update db to add when email was sent
+            collection.document(insert_res[1].id).update({
+                "welcome_email_sent": datetime.now().isoformat()
+            })
         return True
 
 # Create an event loop and run the save_lead function asynchronously
@@ -926,6 +932,7 @@ def send_welcome_email(name, email):
     email = resend.Emails.SendParams(params)
     resend.Emails.send(email)
     print(email)
+    return True
 
 
 @cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
