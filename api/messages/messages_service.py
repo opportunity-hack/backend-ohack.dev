@@ -843,12 +843,90 @@ async def save_lead(json):
         # Sent slack message to #ohack-dev-leads
         slack_message = f"New lead! Name:`{json['name']}` Email:`{json['email']}`"
         send_slack(slack_message, "ohack-dev-leads")
+
+        send_welcome_email( json["name"], json["email"] )
         return True
 
 # Create an event loop and run the save_lead function asynchronously
 @limits(calls=30, period=ONE_MINUTE)
 async def save_lead_async(json):
     await save_lead(json)
+
+def add_utm(url, source="email", medium="welcome", campaign="newsletter_signup", content=None):
+    utm_string = f"utm_source={source}&utm_medium={medium}&utm_campaign={campaign}"
+    if content:
+        utm_string += f"&utm_content={content}"
+    return f"{url}?{utm_string}"
+
+
+def send_welcome_email(name, email):
+    import resend
+    import random
+
+    resend.api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY")
+
+    subject = "Welcome to Opportunity Hack: Code for Good!"
+
+    # Rotate between images
+    images = [
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_1.webp",
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_2.webp",
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_3.webp"
+    ]
+    chosen_image = random.choice(images)
+    image_number = images.index(chosen_image) + 1
+    image_utm_content = f"header_image_{image_number}"
+
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Welcome to Opportunity Hack</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <img src="{add_utm(chosen_image, content=f'header_image_{image_number}')}" alt="Opportunity Hack Event" style="width: 100%; max-width: 600px; height: auto; margin-bottom: 20px;">
+        
+        <h1 style="color: #0088FE;">Hey {name}!! Welcome to Opportunity Hack!</h1>
+        
+        <p>We're thrilled you've joined our community of tech volunteers making a difference!</p>
+        
+        <p>At Opportunity Hack, we believe in harnessing the power of code for social good. Our mission is simple: connect skilled volunteers like you with nonprofits that need tech solutions.</p>
+        
+        <h2 style="color: #0088FE;">Ready to dive in?</h2>
+        <ul>
+            <li><a href="{add_utm('https://ohack.dev/nonprofits', content=image_utm_content)}">Explore Nonprofit Projects</a></li>
+            <li><a href="{add_utm('https://ohack.dev/about/hearts', content=image_utm_content)}">Learn about our Hearts System</a></li>
+            <li><a href="{add_utm('https://ohack.dev/office-hours', content=image_utm_content)}">Join our weekly Office Hours</a></li>
+            <li><a href="{add_utm('https://ohack.dev/profile', content=image_utm_content)}">Update your profile</a></li>
+            <li><a href="{add_utm('https://github.com/opportunity-hack/frontend-ohack.dev/issues', content=image_utm_content)}">Jump in: check out our open GitHub Issues</a></li>
+        </ul>
+        
+        <p>Got questions? Reach out on our <a href="{add_utm('https://ohack.dev/signup', content=image_utm_content)}">Slack channel</a>.</p>
+        
+        <p>Together, we can code for change!</p>
+        
+        <p>The Opportunity Hack Team</p>
+        
+        <!-- Tracking pixel for email opens -->
+        <img src="{add_utm('https://ohack.dev/track/open.gif', content=image_utm_content)}" alt="" width="1" height="1" border="0" style="height:1px!important;width:1px!important;border-width:0!important;margin-top:0!important;margin-bottom:0!important;margin-right:0!important;margin-left:0!important;padding-top:0!important;padding-bottom:0!important;padding-right:0!important;padding-left:0!important"/>
+    </body>
+    </html>
+    """
+
+    params = {
+        "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+        "to": f"{name} <{email}>",
+        "subject": subject,
+        "html": html_content,
+    }
+
+    email = resend.Emails.SendParams(params)
+    resend.Emails.send(email)
+    print(email)
+
 
 @cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
 def get_news(news_limit=3, news_id=None):
