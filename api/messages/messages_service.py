@@ -864,6 +864,46 @@ def add_utm(url, source="email", medium="welcome", campaign="newsletter_signup",
         utm_string += f"&utm_content={content}"
     return f"{url}?{utm_string}"
 
+# This was only needed to send the first wave of emails for leads, no longer needed
+def send_welcome_emails():
+    logger.info("Sending welcome emails")
+    # Get all leads where welcome_email_sent is None
+    db = get_db()    
+    
+    # Get all leads from the DB
+    query = db.collection('leads').stream()
+    # Go through each lead and remove the ones that have already been sent
+    leads = []
+    for lead in query:
+        lead_dict = lead.to_dict()        
+        if "welcome_email_sent" not in lead_dict and "email" in lead_dict and lead_dict["email"] is not None and lead_dict["email"] != "":
+            leads.append(lead)
+
+    
+    send_email = False # Change to True to send emails
+
+    # Don't send to duplicate emails - case insensitive
+    emails = set()
+
+    for lead in leads:
+        lead_dict = lead.to_dict()
+        email = lead_dict["email"].lower()        
+        if email in emails:
+            logger.info(f"Skipping duplicate email {email}")
+            continue
+
+        logger.info(f"Sending welcome email to '{lead_dict['name']}' {email} for {lead.id}")
+
+        if send_email:
+            success_send_email = send_welcome_email(lead_dict["name"], email)
+            if success_send_email:
+                logger.info(f"Sent welcome email to {email}")
+                # Update db to add when email was sent
+                lead.reference.update({
+                    "welcome_email_sent": datetime.now().isoformat()
+                })
+        emails.add(email)
+
 
 def send_welcome_email(name, email):
     import resend
@@ -921,6 +961,12 @@ def send_welcome_email(name, email):
     </body>
     </html>
     """
+
+
+    # If name is none, or an empty string, or an unassigned string, or a unprintable character like a space string set it to "OHack Friend"
+    if name is None or name == "" or name == "Unassigned" or name.isspace():
+        name = "OHack Friend"
+    
 
     params = {
         "from": "Opportunity Hack <welcome@apply.ohack.dev>",
