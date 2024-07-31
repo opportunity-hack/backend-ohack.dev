@@ -35,7 +35,8 @@ from api.messages.messages_service import (
     link_problem_statements_to_events_old,
     save_news,
     save_lead_async,
-    get_news
+    get_news,
+    get_all_profiles
 )
 
    
@@ -272,4 +273,17 @@ def save_profile():
 @bp.route("/profile/<id>", methods=["GET"])
 def get_profile_by_id(id):
     return get_user_by_id_old(id)
+
+
+def getOrgId(req):
+    # Ref: https://docs.propelauth.com/reference/backend-apis/flask#req-to-org-id
+    return "77f70865-7da9-4588-850b-a5ebb6974410" # PropelAuth wants you to pass this in as a req param, but let's keep it simple
+
+
+# Used to provide profile details - user must be logged in
+@bp.route("/admin/profiles", methods=["GET"])
+@auth.require_org_member_with_permission("profile.admin", req_to_org_id=getOrgId)
+def all_profiles():                            
+        return get_all_profiles()
+
 
