@@ -276,8 +276,8 @@ def get_profile_by_id(id):
 
 
 def getOrgId(req):
-    # Ref: https://docs.propelauth.com/reference/backend-apis/flask#req-to-org-id
-    return "77f70865-7da9-4588-850b-a5ebb6974410" # PropelAuth wants you to pass this in as a req param, but let's keep it simple
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
 
 
 # Used to provide profile details - user must be logged in
