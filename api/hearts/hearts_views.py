@@ -23,8 +23,12 @@ def get_hearts():
     print(f"res: {res}")
     return {"hearts": res}
 
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
+    
 @bp.route("/hearts", methods=["POST"])
-@auth.require_user
+@auth.require_org_member_with_permission("heart.admin", req_to_org_id=getOrgId)
 def save_hearts():        
     print("save_hearts")
     if auth_user and auth_user.user_id: 
