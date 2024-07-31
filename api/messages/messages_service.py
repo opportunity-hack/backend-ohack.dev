@@ -1235,6 +1235,22 @@ def get_profile_metadata_old(propel_id):
 
     return Message(response)
 
+
+def get_all_profiles():
+    db = get_db()
+    docs = db.collection('users').stream()  # steam() gets all records
+    if docs is None:
+        return {[]}
+    else:
+        results = []
+        for doc in docs:
+            results.append(doc_to_json(docid=doc.id, doc=doc))
+
+    # log result
+    logger.info(results)        
+    return { "profiles": results }
+
+
 # Caching is not needed because the parent method already is caching
 @limits(calls=100, period=ONE_MINUTE)
 def get_history_old(db_id):
