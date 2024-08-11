@@ -24,6 +24,8 @@ from datetime import datetime, timedelta
 import os
 
 from db.db import fetch_user_by_user_id, get_user_doc_reference
+import resend
+import random
 
 
 
@@ -575,6 +577,74 @@ def unjoin_team(propel_user_id, json):
     return Message(
         "Removed from Team")
 
+@limits(calls=100, period=ONE_MINUTE)
+def save_npo_application(json):
+    send_slack_audit(action="save_npo_application", message="Saving", payload=json)
+    db = get_db()  # this connects to our Firestore database
+    logger.debug("NPO Application Save")
+
+    # Check Google Captcha
+    token = json["token"]
+    recaptcha_response = requests.post(
+        f"https://www.google.com/recaptcha/api/siteverify?secret={google_recaptcha_key}&response={token}")
+    recaptcha_response_json = recaptcha_response.json()
+    logger.info(f"Recaptcha Response: {recaptcha_response_json}")
+
+    if recaptcha_response_json["success"] == False:
+        return Message(
+            "Recaptcha failed"
+        )
+
+
+    '''
+    Save this data into the Firestore database in the project_applications collection
+    name: '',
+    email: '',
+    organization: '',
+    idea: '',
+    isNonProfit: false,    
+    '''
+    doc_id = uuid.uuid1().hex
+
+    name = json["name"]
+    email = json["email"]
+    organization = json["organization"]
+    idea = json["idea"]
+    isNonProfit = json["isNonProfit"]
+
+    collection = db.collection('project_applications')
+    
+    insert_res = collection.document(doc_id).set({
+        "name": name,
+        "email": email,
+        "organization": organization,
+        "idea": idea,
+        "isNonProfit": isNonProfit,
+        "timestamp": datetime.now().isoformat()        
+    })
+
+    logger.info(f"Insert Result: {insert_res}")
+
+    send_nonprofit_welcome_email(name, email)
+
+    # Send a Slack message to nonprofit-form-submissions with all content
+    slack_message = f'''
+:rocket: New NPO Application :rocket:
+Name: `{name}`
+Email: `{email}`
+Organization: `{organization}`
+Idea: `{idea}`
+Is Nonprofit: `{isNonProfit}`
+'''
+    send_slack(slack_message, "nonprofit-form-submissions")
+
+
+
+    return Message(
+        "Saved NPO Application"
+    )
+
+
 
 @limits(calls=100, period=ONE_MINUTE)
 def save_npo(json):    
@@ -904,11 +974,91 @@ def send_welcome_emails():
                 })
         emails.add(email)
 
+def send_nonprofit_welcome_email(organization_name, contact_name, email):    
+    resend.api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY")
 
-def send_welcome_email(name, email):
-    import resend
-    import random
+    subject = "Welcome to Opportunity Hack: Tech Solutions for Your Nonprofit!"
 
+    images = [
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_1.webp",
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_2.webp",
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_3.webp"
+    ]
+    chosen_image = random.choice(images)
+    image_number = images.index(chosen_image) + 1
+    image_utm_content = f"nonprofit_header_image_{image_number}"
+
+    '''
+    TODO: Add these pages and then move these down into the email we send
+
+    <li><a href="{add_utm('https://ohack.dev/nonprofits/dashboard', content=image_utm_content)}">Access Your Nonprofit Dashboard</a> - Track your project's progress</li>
+    <li><a href="{add_utm('https://ohack.dev/about/process', content=image_utm_content)}">Understanding Our Process</a> - Learn how we match you with volunteers</li>
+    <li><a href="{add_utm('https://ohack.dev/nonprofits/resources', content=image_utm_content)}">Nonprofit Resources</a> - Helpful guides for working with tech teams</li>
+    <li><a href="{add_utm('https://ohack.dev/nonprofits/success-stories', content=image_utm_content)}">Success Stories</a> - See how other nonprofits have benefited</li>
+
+    <li><a href="{add_utm('https://ohack.dev/nonprofits/project-submission', content=image_utm_content)}">Submit or Update Your Project</a></li>
+    <li><a href="{add_utm('https://ohack.dev/nonprofits/volunteer-communication', content=image_utm_content)}">Tips for Communicating with Volunteers</a></li>
+    '''
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Welcome to Opportunity Hack</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <img src="{add_utm(chosen_image, content=f'nonprofit_header_image_{image_number}')}" alt="Opportunity Hack Event" style="width: 100%; max-width: 600px; height: auto; margin-bottom: 20px;">
+        
+        <h1 style="color: #0088FE;">Welcome {organization_name} to Opportunity Hack!</h1>
+        
+        <p>Dear {contact_name},</p>
+        
+        <p>We're excited to welcome {organization_name} to the Opportunity Hack community! We're here to connect your nonprofit with skilled tech volunteers to bring your ideas to life.</p>
+        
+        <h2 style="color: #0088FE;">What's Next?</h2>
+        <ul>            
+            <li><a href="{add_utm('https://ohack.dev/office-hours', content=image_utm_content)}">Join our weekly Office Hours</a> - Get your questions answered</li>
+            <li><a href="{add_utm('https://ohack.dev/nonprofits', content=image_utm_content)}">Explore Nonprofit Projects</a> - See what we've worked on</li>                        
+        </ul>
+        
+        <h2 style="color: #0088FE;">Important Links:</h2>
+        <ul>
+            
+            <li><a href="{add_utm('https://www.ohack.dev/hack', content=image_utm_content)}">Upcoming Hackathons and Events</a></li>
+        </ul>
+        
+        <p>Questions or need assistance? Reach out on our <a href="{add_utm('https://ohack.dev/signup', content=image_utm_content)}">Slack channel</a> or email us at support@ohack.dev.</p>
+        
+        <p>We're excited to work with you to create tech solutions that amplify your impact!</p>
+        
+        <p>Best regards,<br>The Opportunity Hack Team</p>
+        
+        <!-- Tracking pixel for email opens -->
+        <img src="{add_utm('https://ohack.dev/track/open.gif', content=image_utm_content)}" alt="" width="1" height="1" border="0" style="height:1px!important;width:1px!important;border-width:0!important;margin-top:0!important;margin-bottom:0!important;margin-right:0!important;margin-left:0!important;padding-top:0!important;padding-bottom:0!important;padding-right:0!important;padding-left:0!important"/>
+    </body>
+    </html>
+    """
+
+    if organization_name is None or organization_name == "" or organization_name == "Unassigned" or organization_name.isspace():
+        organization_name = "Nonprofit Partner"
+    
+    if contact_name is None or contact_name == "" or contact_name == "Unassigned" or contact_name.isspace():
+        contact_name = "Nonprofit Friend"
+
+    params = {
+        "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+        "to": f"{contact_name} <{email}>",
+        "subject": subject,
+        "html": html_content,
+    }
+
+    email = resend.Emails.SendParams(params)
+    resend.Emails.send(email)    
+    return True
+
+def send_welcome_email(name, email):    
     resend.api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY")
 
     subject = "Welcome to Opportunity Hack: Code for Good!"
