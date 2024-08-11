@@ -36,7 +36,8 @@ from api.messages.messages_service import (
     save_news,
     save_lead_async,
     get_news,
-    get_all_profiles
+    get_all_profiles,
+    save_npo_application
 )
 
    
@@ -96,6 +97,10 @@ def get_npos():
 def get_npo(npo_id):
     return (get_single_npo(npo_id))
 
+# This isn't authenticated, but we're using Google reCAPTCHA to prevent abuse
+@bp.route("/npo/submit-application", methods=["POST"])
+def submit_npo_application():
+    return vars(save_npo_application(request.get_json()))
 
 
 #
