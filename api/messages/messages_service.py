@@ -625,7 +625,11 @@ def save_npo_application(json):
 
     logger.info(f"Insert Result: {insert_res}")
 
+    logger.info(f"Sending welcome email to {name} {email}")
+
     send_nonprofit_welcome_email(name, email)
+
+    logger.info(f"Sending slack message to nonprofit-form-submissions")
 
     # Send a Slack message to nonprofit-form-submissions with all content
     slack_message = f'''
@@ -636,7 +640,9 @@ Organization: `{organization}`
 Idea: `{idea}`
 Is Nonprofit: `{isNonProfit}`
 '''
-    send_slack(slack_message, "nonprofit-form-submissions")
+    send_slack(channel="nonprofit-form-submissions", message=slack_message, icon=":rocket:")
+
+    logger.info(f"Sent slack message to nonprofit-form-submissions")
 
 
 
@@ -1053,9 +1059,12 @@ def send_nonprofit_welcome_email(organization_name, contact_name, email):
         "subject": subject,
         "html": html_content,
     }
+    logger.info(f"Sending nonprofit application email to {email}")
 
     email = resend.Emails.SendParams(params)
     resend.Emails.send(email)    
+
+    logger.info(f"Sent nonprofit application email to {email}")
     return True
 
 def send_welcome_email(name, email):    
