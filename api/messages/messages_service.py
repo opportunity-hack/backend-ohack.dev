@@ -590,10 +590,10 @@ def save_npo_application(json):
     recaptcha_response_json = recaptcha_response.json()
     logger.info(f"Recaptcha Response: {recaptcha_response_json}")
 
-    # if recaptcha_response_json["success"] == False:
-    #     return Message(
-    #         "Recaptcha failed"
-    #     )
+    if recaptcha_response_json["success"] == False:
+        return Message(
+            "Recaptcha failed"
+        )
 
 
     '''
