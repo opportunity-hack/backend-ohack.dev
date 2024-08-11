@@ -627,7 +627,7 @@ def save_npo_application(json):
 
     logger.info(f"Sending welcome email to {name} {email}")
 
-    send_nonprofit_welcome_email(name, email)
+    send_nonprofit_welcome_email(organization, name, email)
 
     logger.info(f"Sending slack message to nonprofit-form-submissions")
 
@@ -640,11 +640,9 @@ Organization: `{organization}`
 Idea: `{idea}`
 Is Nonprofit: `{isNonProfit}`
 '''
-    send_slack(channel="nonprofit-form-submissions", message=slack_message, icon=":rocket:")
+    send_slack(channel="nonprofit-form-submissions", message=slack_message, icon_emoji=":rocket:")
 
     logger.info(f"Sent slack message to nonprofit-form-submissions")
-
-
 
     return Message(
         "Saved NPO Application"
@@ -1035,7 +1033,7 @@ def send_nonprofit_welcome_email(organization_name, contact_name, email):
             <li><a href="{add_utm('https://www.ohack.dev/hack', content=image_utm_content)}">Upcoming Hackathons and Events</a></li>
         </ul>
         
-        <p>Questions or need assistance? Reach out on our <a href="{add_utm('https://ohack.dev/signup', content=image_utm_content)}">Slack channel</a> or email us at support@ohack.dev.</p>
+        <p>Questions or need assistance? Reach out on our <a href="{add_utm('https://ohack.dev/signup', content=image_utm_content)}">Slack channel</a> or email us at support@ohack.org.</p>
         
         <p>We're excited to work with you to create tech solutions that amplify your impact!</p>
         
