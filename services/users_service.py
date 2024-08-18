@@ -11,8 +11,8 @@ from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 from common.log import get_log_level
 
-logger = logging.getLogger("ohack")
-logger.setLevel(get_log_level())
+logger = logging.getLogger("myapp")
+logger.setLevel(logging.INFO)
 
 #TODO consts file?
 ONE_MINUTE = 1*60
@@ -267,3 +267,82 @@ def remove_user_by_slack_id(user_id):
 @limits(calls=100, period=ONE_MINUTE)
 def get_users():
     return fetch_users()
+
+def save_volunteering_time(propel_id, json):
+    logger.info(f"Save Volunteering Time for {propel_id} {json}")
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
+
+    logger.info(f"Save Volunteering Time for {slack_user_id} {json}")
+
+    # Get the user
+    user = fetch_user_by_user_id(slack_user_id)
+    if user is None:
+        logger.error(f"User not found for {slack_user_id}")
+        return
+
+    timestamp = datetime.now().isoformat() + "Z"  
+    reason = json["reason"] # The kind of volunteering being done  
+    
+    if "finalHours" in json:
+        finalHours = json["finalHours"] # This is sent at when volunteering is done        
+        if finalHours is None:
+            logger.error(f"finalHours is None for {slack_user_id}")
+            return
+            
+        user.volunteering.append({
+            "timestamp": timestamp,
+            "finalHours": round(finalHours,2),
+            "reason": reason
+            })
+
+        # Add to the total
+        upsert_profile_metadata(user)
+
+    # We keep track of what the user is committing to do but we don't show this
+    # The right way to do this is likely to get a session id when they start volunteering and the frontend uses that to close out the volunteering session when it is done
+    # But this way is simpler for now
+    elif "commitmentHours" in json:
+        commitmentHours = json["commitmentHours"] # This is sent at the start of volunteering        
+        if commitmentHours is None:
+            logger.error(f"commitmentHours is None for {slack_user_id}")
+            return
+        
+        user.volunteering.append({
+            "timestamp": timestamp,
+            "commitmentHours": round(commitmentHours,2),
+            "reason": reason
+            })
+        upsert_profile_metadata(user)
+
+    # Clear cache for get_profile_metadata
+    get_profile_metadata.cache_clear()
+
+    return user
+
+
+def get_volunteering_time(propel_id, start_date, end_date):
+    logger.info(f"Get Volunteering Time for {propel_id} {start_date} {end_date}")
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
+
+    logger.info(f"Get Volunteering Time for {slack_user_id} start: {start_date} end: {end_date}")
+
+    # Get the user
+    user = fetch_user_by_user_id(slack_user_id)
+    if user is None:
+        return
+
+    # Filter the volunteering data
+    volunteering = []
+    for v in user.volunteering:
+        if "finalHours" in v:
+            if start_date is not None and end_date is not None:
+                if v["timestamp"] >= start_date and v["timestamp"] <= end_date:
+                    volunteering.append(v)
+            else:
+                volunteering.append(v)
+    
+    total = sum([v["finalHours"] for v in volunteering])    
+    
+    return volunteering, total

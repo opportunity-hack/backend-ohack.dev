@@ -43,3 +43,33 @@ def get_profile_by_db_id(id):
         return p #Already a dict
     else: 
         return None
+    
+
+@bp.route("/volunteering", methods=["POST"])
+@auth.require_user
+def save_volunteering_time():        
+    if auth_user and auth_user.user_id: 
+        u: User | None = users_service.save_volunteering_time(auth_user.user_id, request.get_json())
+        return vars(u) if u is not None else None
+    else:
+        return None
+    
+
+@bp.route("/volunteering", methods=["GET"])
+@auth.require_user
+def get_volunteering_time():        
+    # Get url params
+    start_date = request.args.get('start_date')
+    end_date = request.args.get('end_date')
+    
+    if auth_user and auth_user.user_id:
+        volunteering, total = users_service.get_volunteering_time(auth_user.user_id, start_date, end_date)
+        return {
+            "totalHours": total,
+            "volunteering": volunteering
+        }
+    else:
+        return None
+    
+    
+    
