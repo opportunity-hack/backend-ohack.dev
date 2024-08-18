@@ -1,4 +1,4 @@
-metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github"]
+metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "volunteering"]
 
 class User:
     id = None
@@ -19,6 +19,7 @@ class User:
     teams = []
     hackathons = []
     history = {}
+    volunteering = []
 
     @classmethod
     def deserialize(cls, d):
@@ -37,6 +38,7 @@ class User:
         u.role = d['role'] if 'role' in d else ''
         u.company = d['company'] if 'company' in d else ''
         u.why = d['why'] if 'why' in d else ''
+        u.volunteering = d['volunteering'] if 'volunteering' in d else []
 
         # Handle history in a generic way
         '''

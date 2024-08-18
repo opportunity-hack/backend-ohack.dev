@@ -996,9 +996,7 @@ def send_nonprofit_welcome_email(organization_name, contact_name, email):
     TODO: Add these pages and then move these down into the email we send
 
     <li><a href="{add_utm('https://ohack.dev/nonprofits/dashboard', content=image_utm_content)}">Access Your Nonprofit Dashboard</a> - Track your project's progress</li>
-    <li><a href="{add_utm('https://ohack.dev/about/process', content=image_utm_content)}">Understanding Our Process</a> - Learn how we match you with volunteers</li>
     <li><a href="{add_utm('https://ohack.dev/nonprofits/resources', content=image_utm_content)}">Nonprofit Resources</a> - Helpful guides for working with tech teams</li>
-    <li><a href="{add_utm('https://ohack.dev/nonprofits/success-stories', content=image_utm_content)}">Success Stories</a> - See how other nonprofits have benefited</li>
 
     <li><a href="{add_utm('https://ohack.dev/nonprofits/project-submission', content=image_utm_content)}">Submit or Update Your Project</a></li>
     <li><a href="{add_utm('https://ohack.dev/nonprofits/volunteer-communication', content=image_utm_content)}">Tips for Communicating with Volunteers</a></li>
@@ -1024,12 +1022,13 @@ def send_nonprofit_welcome_email(organization_name, contact_name, email):
         <h2 style="color: #0088FE;">What's Next?</h2>
         <ul>            
             <li><a href="{add_utm('https://ohack.dev/office-hours', content=image_utm_content)}">Join our weekly Office Hours</a> - Get your questions answered</li>
+            <li><a href="{add_utm('https://ohack.dev/about/process', content=image_utm_content)}">Understanding Our Process</a> - Learn how we match you with volunteers</li>
             <li><a href="{add_utm('https://ohack.dev/nonprofits', content=image_utm_content)}">Explore Nonprofit Projects</a> - See what we've worked on</li>                        
         </ul>
         
         <h2 style="color: #0088FE;">Important Links:</h2>
         <ul>
-            
+            <li><a href="{add_utm('https://www.ohack.dev/about/success-stories', content=image_utm_content)}">Success Stories</a> - See how other nonprofits have benefited</li>
             <li><a href="{add_utm('https://www.ohack.dev/hack', content=image_utm_content)}">Upcoming Hackathons and Events</a></li>
         </ul>
         
