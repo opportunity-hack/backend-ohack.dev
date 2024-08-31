@@ -27,6 +27,7 @@ from api.messages.messages_service import (
     get_single_hackathon_event,
     get_single_hackathon_id,
     save_hackathon,
+    update_hackathon_volunteers,
     get_teams_list,
     save_team,
     unjoin_team,
@@ -46,6 +47,10 @@ from api.messages.messages_service import (
 bp_name = 'api-messages'
 bp_url_prefix = '/api/messages'
 bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
+
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
 
 
 @bp.route("/public")
@@ -111,6 +116,13 @@ def submit_npo_application():
 @auth.require_org_member_with_permission("admin_permissions")
 def add_hackathon():
     return vars(save_hackathon(request.get_json()))
+
+@bp.route("/hackathon/<event_id>/volunteers", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_hackathon_volunteers_mentors_judges(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(update_hackathon_volunteers(event_id, request.get_json(), auth_user.user_id))
 
 
 @bp.route("/hackathons", methods=["GET"])
@@ -278,11 +290,6 @@ def save_profile():
 @bp.route("/profile/<id>", methods=["GET"])
 def get_profile_by_id(id):
     return get_user_by_id_old(id)
-
-
-def getOrgId(req):
-    # Get the org_id from the req
-    return req.headers.get("X-Org-Id")
 
 
 # Used to provide profile details - user must be logged in
