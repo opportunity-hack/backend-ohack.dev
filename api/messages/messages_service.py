@@ -787,6 +787,92 @@ def update_npo(json):
         "Updated NPO"
     )
 
+@limits(calls=50, period=ONE_MINUTE)
+def update_hackathon_volunteers(event_id, json, propel_id):
+    db = get_db()
+    logger.info("Update Hackathon Volunteers")
+    logger.info("JSON: " + str(json))
+    send_slack_audit(action="update_hackathon_volunteers", message="Updating", payload=json)
+
+    # Since we know this user is an admin, prefix all vars with admin_
+    admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
+
+    # Query for event_id column
+    doc = db.collection('hackathons').where("event_id", "==", event_id).stream()    
+    doc = list(doc)
+    doc = doc[0] if len(doc) > 0 else None    
+
+    # Convert from DocumentSnapshot to DocumentReference
+    if isinstance(doc, firestore.DocumentSnapshot):
+        doc = doc.reference                    
+
+    # If we don't find the event, return
+    if doc is None:
+        return Message("No Hackathon Found")
+    
+    volunteer_type = json["type"]
+    timestamp = json["timestamp"]
+    name = json["name"]
+    # We will use timestamp and name to find the volunteer
+
+    if volunteer_type == "mentors":
+        logger.info("Updating Mentor")
+        # Get the mentor block
+        mentor_block = doc.get().to_dict()["mentors"]
+        
+        # Find the mentor
+        for mentor in mentor_block:
+            logger.info(f"Comparing {mentor['name']} with {name} and {mentor['timestamp']} with {timestamp}")
+            if mentor["name"] == name and mentor["timestamp"] == timestamp:
+                # For each field in mentor, update with the new value from json
+                for key in mentor.keys():
+                    if key in json:
+                        if key == "timestamp" or key == "name": # Don't want to update these since they are primary keys
+                            continue
+                        mentor[key] = json[key]                        
+                                                
+                mentor["updated_timestamp"] = datetime.now().isoformat()
+                mentor["updated_by"] = admin_name
+
+                logger.info(f"Found mentor {mentor}")                
+                break
+        # Update the mentor block with the json for this mentor
+        doc.update({
+            "mentors": mentor_block
+        })
+    elif volunteer_type == "judge":
+        # Get the judge block
+        judge_block = doc.get().to_dict()["judges"]
+        # Find the judge
+        for judge in judge_block:
+            if judge["name"] == name and judge["timestamp"] == timestamp:
+                # For each field in judge, update with the new value from json
+                for key in judge.keys():
+                    if key in json:
+                        if key == "timestamp" or key == "name":
+                            continue
+                        judge[key] = json[key]
+                judge["updated_timestamp"] = datetime.now().isoformat()
+                judge["updated_by"] = admin_name
+
+                logger.info(f"Found judge {judge}")
+                break
+        # Update the judge block with the json for this judge
+        doc.update({
+            "judges": judge_block
+        })
+
+    # Clear cache
+    get_single_hackathon_event.cache_clear()
+        
+    return Message(
+        "Updated Hackathon Volunteers"
+    )
+    
+
+    
+
+
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_hackathon(json):
