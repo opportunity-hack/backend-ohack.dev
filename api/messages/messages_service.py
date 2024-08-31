@@ -907,6 +907,10 @@ def update_hackathon_volunteers(event_id, json, propel_id):
         
         # Find the mentor
         for mentor in mentor_block:
+            # Add slack_user_id to mentor key if it doesn't exist with an empty string
+            if "slack_user_id" not in mentor:
+                mentor["slack_user_id"] = ""
+                
             logger.info(f"Comparing {mentor['name']} with {name} and {mentor['timestamp']} with {timestamp}")
             if mentor["name"] == name and mentor["timestamp"] == timestamp:
                 # For each field in mentor, update with the new value from json
@@ -930,6 +934,10 @@ def update_hackathon_volunteers(event_id, json, propel_id):
         judge_block = doc.get().to_dict()["judges"]
         # Find the judge
         for judge in judge_block:
+            # Add slack_user_id to judge key if it doesn't exist with an empty string
+            if "slack_user_id" not in judge:
+                judge["slack_user_id"] = ""
+
             if judge["name"] == name and judge["timestamp"] == timestamp:
                 # For each field in judge, update with the new value from json
                 for key in judge.keys():
