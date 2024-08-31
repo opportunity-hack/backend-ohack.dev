@@ -900,6 +900,9 @@ def update_hackathon_volunteers(event_id, json, propel_id):
     name = json["name"]
     # We will use timestamp and name to find the volunteer
 
+    # This will help to make sure we don't always have all data in the Google Sheets/Forms and can add it later
+    fields_that_should_always_be_present = ["slack_user_id", "pronouns", "linkedinProfile"]
+
     if volunteer_type == "mentors":
         logger.info("Updating Mentor")
         # Get the mentor block
@@ -907,10 +910,12 @@ def update_hackathon_volunteers(event_id, json, propel_id):
         
         # Find the mentor
         for mentor in mentor_block:
-            # Add slack_user_id to mentor key if it doesn't exist with an empty string
-            if "slack_user_id" not in mentor:
-                mentor["slack_user_id"] = ""
-                
+            # Check if fields_that_should_always_be_present are present and if not add empty string
+            for field in fields_that_should_always_be_present:
+                if field not in mentor:
+                    mentor[field] = ""
+            
+
             logger.info(f"Comparing {mentor['name']} with {name} and {mentor['timestamp']} with {timestamp}")
             if mentor["name"] == name and mentor["timestamp"] == timestamp:
                 # For each field in mentor, update with the new value from json
@@ -934,9 +939,10 @@ def update_hackathon_volunteers(event_id, json, propel_id):
         judge_block = doc.get().to_dict()["judges"]
         # Find the judge
         for judge in judge_block:
-            # Add slack_user_id to judge key if it doesn't exist with an empty string
-            if "slack_user_id" not in judge:
-                judge["slack_user_id"] = ""
+            # Check if fields_that_should_always_be_present are present and if not add empty string
+            for field in fields_that_should_always_be_present:
+                if field not in judge:
+                    judge[field] = ""
 
             if judge["name"] == name and judge["timestamp"] == timestamp:
                 # For each field in judge, update with the new value from json
