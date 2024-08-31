@@ -39,7 +39,9 @@ from api.messages.messages_service import (
     save_lead_async,
     get_news,
     get_all_profiles,
-    save_npo_application
+    save_npo_application,
+    get_npo_applications,
+    update_npo_application
 )
 
    
@@ -108,6 +110,18 @@ def get_npo(npo_id):
 def submit_npo_application():
     return vars(save_npo_application(request.get_json()))
 
+@bp.route("/npo/applications", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_npo_applications_api():
+    return get_npo_applications()
+
+@bp.route("/npo/applications/<application_id>", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_npo_application_api(application_id):
+    if auth_user and auth_user.user_id:
+        return vars(update_npo_application(application_id, request.get_json(), auth_user.user_id))
 
 #
 # Hackathon Related Endpoints

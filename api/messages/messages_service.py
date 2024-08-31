@@ -578,6 +578,53 @@ def unjoin_team(propel_user_id, json):
         "Removed from Team")
 
 @limits(calls=100, period=ONE_MINUTE)
+def update_npo_application( application_id, json, propel_id):
+    send_slack_audit(action="update_npo_application", message="Updating", payload=json)
+    db = get_db()
+    logger.info("NPO Application Update")
+    doc = db.collection('project_applications').document(application_id)
+    if doc:
+        doc_dict = doc.get().to_dict()
+        send_slack_audit(action="update_npo_application",
+                         message="Updating", payload=doc_dict)
+        doc.update(json)
+    
+    # Clear cache for get_npo_applications
+    logger.info(f"Clearing cache for application_id={application_id}")    
+
+    clear_cache()
+    
+    return Message(
+        "Updated NPO Application"
+    )
+
+
+@limits(calls=100, period=ONE_MINUTE)
+def get_npo_applications():
+    logger.info("get_npo_applications Start")
+    db = get_db()    
+    
+    # Use a transaction to ensure consistency
+    @firestore.transactional
+    def get_latest_docs(transaction):
+        docs = db.collection('project_applications').get(transaction=transaction)
+        return [doc_to_json(docid=doc.id, doc=doc) for doc in docs]
+
+    
+    # Use a transaction to get the latest data
+    transaction = db.transaction()
+    results = get_latest_docs(transaction)
+
+    if not results:
+        return {"applications": []}
+    
+    logger.info(results)
+    logger.info("get_npo_applications End")
+    
+    return {"applications": results}
+
+
+@limits(calls=100, period=ONE_MINUTE)
 def save_npo_application(json):
     send_slack_audit(action="save_npo_application", message="Saving", payload=json)
     db = get_db()  # this connects to our Firestore database
