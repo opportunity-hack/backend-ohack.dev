@@ -25,6 +25,7 @@ from api.messages.messages_service import (
     get_npo_list,
     get_single_npo,
     get_single_hackathon_event,
+    bulk_add_volunteers,
     get_single_hackathon_id,
     save_hackathon,
     update_hackathon_volunteers,
@@ -123,6 +124,15 @@ def add_hackathon():
 def update_hackathon_volunteers_mentors_judges(event_id):
     if auth_user and auth_user.user_id:
         return vars(update_hackathon_volunteers(event_id, request.get_json(), auth_user.user_id))
+
+
+@bp.route("/hackathon/<event_id>/volunteers/bulk", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def add_bulk_volunteers(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(bulk_add_volunteers(event_id, request.get_json(), auth_user.user_id))
+    
 
 
 @bp.route("/hackathons", methods=["GET"])
