@@ -593,7 +593,7 @@ def update_npo_application( application_id, json, propel_id):
     logger.info(f"Clearing cache for application_id={application_id}")    
 
     clear_cache()
-    
+
     return Message(
         "Updated NPO Application"
     )
@@ -836,6 +836,81 @@ def update_npo(json):
 
 
 @limits(calls=100, period=ONE_MINUTE)
+def single_add_volunteer(event_id, json, propel_id):
+    db = get_db()
+    logger.info("Single Add Volunteer")
+    logger.info("JSON: " + str(json))
+    send_slack_audit(action="single_add_volunteer", message="Adding", payload=json)
+
+    # Since we know this user is an admin, prefix all vars with admin_
+    admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
+
+    # Query for event_id column
+    doc = db.collection('hackathons').where("event_id", "==", event_id).stream()    
+    doc = list(doc)
+    doc = doc[0] if len(doc) > 0 else None    
+
+    # Convert from DocumentSnapshot to DocumentReference
+    if isinstance(doc, firestore.DocumentSnapshot):
+        doc = doc.reference                    
+
+    # If we don't find the event, return
+    if doc is None:
+        return Message("No Hackathon Found")
+    
+    volunteer_type = json["type"]            
+
+    # This will help to make sure we don't always have all data in the Google Sheets/Forms and can add it later
+    fields_that_should_always_be_present = ["name", "timestamp"]
+
+    if volunteer_type == "mentors":
+        logger.info("Adding Mentor")
+        # Get the mentor block
+        mentor_block = doc.get().to_dict()["mentors"]
+        # Add the new mentor
+        mentor = json 
+        mentor["created_by"] = admin_name
+        mentor["created_timestamp"] = datetime.now().isoformat()        
+        mentor_block.append(mentor)
+        # Update the mentor block with the new mentor
+        doc.update({
+            "mentors": mentor_block
+        })
+    elif volunteer_type == "judges":
+        logger.info("Adding Judge")
+        # Get the judge block
+        judge_block = doc.get().to_dict()["judges"]
+        # Add the new judge
+        judge = json
+        judge["created_by"] = admin_name
+        judge["created_timestamp"] = datetime.now().isoformat()
+        judge_block.append(judge)
+        # Update the judge block with the new judge
+        doc.update({
+            "judges": judge_block
+        })
+    elif volunteer_type == "volunteers":
+        logger.info("Adding Volunteer")
+        # Get the volunteer block
+        volunteer_block = doc.get().to_dict()["volunteers"]
+        # Add the new volunteer
+        volunteer = json
+        volunteer["created_by"] = admin_name
+        volunteer["created_timestamp"] = datetime.now().isoformat()
+        volunteer_block.append(volunteer)
+        # Update the volunteer block with the new volunteer
+        doc.update({
+            "volunteers": volunteer_block
+        })
+
+    # Clear cache
+    get_single_hackathon_event.cache_clear()
+
+    return Message(
+        "Added Hackathon Volunteer"
+    )
+
+@limits(calls=100, period=ONE_MINUTE)
 def bulk_add_volunteers(event_id, json, propel_id):
     db = get_db()
     logger.info("Bulk Add Volunteers")
@@ -909,6 +984,30 @@ def bulk_add_volunteers(event_id, json, propel_id):
         # Update the judge block with the new judges
         doc.update({
             "judges": judge_block
+        })
+    elif volunteer_type == "volunteers":
+        logger.info("Adding Volunteers")
+        # Get the volunteer block
+        volunteer_block = doc.get().to_dict()["volunteers"]
+        # Add the new volunteers
+        for volunteer in volunteers:
+            # Do some sanity checks
+            if "name" not in volunteer:
+                logger.info("Skipping volunteer with no name")
+                continue
+            if "timestamp" not in volunteer:
+                logger.info("Skipping volunteer with no timestamp")
+                continue
+            if volunteer["name"] == "" or volunteer["timestamp"] == "":
+                logger.info("Skipping volunteer with empty name, timestamp")
+                continue
+
+            volunteer["created_by"] = admin_name
+            volunteer["created_timestamp"] = datetime.now().isoformat()
+            volunteer_block.append(volunteer)
+        # Update the volunteer block with the new volunteers
+        doc.update({
+            "volunteers": volunteer_block
         })
 
     # Clear cache
@@ -1006,6 +1105,32 @@ def update_hackathon_volunteers(event_id, json, propel_id):
         # Update the judge block with the json for this judge
         doc.update({
             "judges": judge_block
+        })
+    elif volunteer_type == "volunteers":
+        # Get the volunteer block
+        volunteer_block = doc.get().to_dict()["volunteers"]
+        # Find the volunteer
+        for volunteer in volunteer_block:
+            # Check if fields_that_should_always_be_present are present and if not add empty string
+            for field in fields_that_should_always_be_present:
+                if field not in volunteer:
+                    volunteer[field] = ""
+
+            if volunteer["name"] == name and volunteer["timestamp"] == timestamp:
+                # For each field in volunteer, update with the new value from json
+                for key in volunteer.keys():
+                    if key in json:
+                        if key == "timestamp" or key == "name":
+                            continue
+                        volunteer[key] = json[key]
+                volunteer["updated_timestamp"] = datetime.now().isoformat()
+                volunteer["updated_by"] = admin_name
+
+                logger.info(f"Found volunteer {volunteer}")
+                break
+        # Update the volunteer block with the json for this volunteer
+        doc.update({
+            "volunteers": volunteer_block
         })
 
     # Clear cache
