@@ -6,6 +6,24 @@ from flask import Flask
 from flask_cors import CORS
 from flask_talisman import Talisman
 import logging.config
+from readme_metrics import MetricsApiConfig
+from readme_metrics.flask_readme import ReadMeMetrics
+
+   
+def grouping_function(request):
+  env = safe_get_env_var("FLASK_ENV")
+  if True:
+        return {
+        # User's API Key
+        "api_key": f"{env}-readme-api-key",
+        # Username to show in ReadMe's dashboard
+        "label": env,
+        # User's email address
+        "email": f"{env}@example.com",
+        }
+  else:
+      return None
+  
 
 dict_config = {
     'version': 1,
@@ -132,6 +150,16 @@ def create_app():
             methods=["GET", "POST", "PATCH", "DELETE"],
             max_age=86400
         )
+    # Define ReadMe's Metrics middleware
+    metrics_extension = ReadMeMetrics(
+        MetricsApiConfig(
+            api_key=safe_get_env_var("README_API_KEY"),
+            grouping_function=grouping_function            
+            )
+    )
+
+    metrics_extension.init_app(app)
+
 
     ##########################################
     # Blueprint Registration
