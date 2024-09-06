@@ -39,3 +39,4 @@ openpyxl==3.1.2
 pylint==3.2.5
 pytest==8.2.2
 resend==2.3.0
+readme-metrics[Flask]==3.1.0
