@@ -16,9 +16,9 @@ mockfirestore = MockFirestore() #Only used when testing
 
 # add logger
 import logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("myapp")
 # set log level
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 def get_db():
@@ -86,6 +86,24 @@ def get_user_by_email(email_address):
         adict = doc.to_dict()
         adict["id"] = doc.id
         return adict
+
+
+def get_github_contributions_for_user(login):
+    logger.info(f"Getting github contributions for user {login}")
+
+    db = get_db()  # this connects to our Firestore database
+    docs = db.collection('github_contributors').where("login", "==", login).stream()    
+
+    logger.info(f"Found {docs} contributions for user {login}")
+
+    github_history = []
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        github_history.append(adict)
+
+    return github_history        
+
 
 
 def create_user(name, email_address, slack_id):

@@ -1,6 +1,6 @@
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
-from common.utils.firebase import get_hackathon_by_event_id, upsert_news
+from common.utils.firebase import get_hackathon_by_event_id, upsert_news, get_github_contributions_for_user
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
 from api.messages.message import Message
@@ -30,7 +30,7 @@ import random
 
 
 logger = logging.getLogger("myapp")
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
@@ -1712,6 +1712,16 @@ def get_problem_statement_list_old():
     # log result
     logger.debug(results)        
     return { "problem_statements": results }
+
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=100, period=ONE_MINUTE)
+def get_github_profile(github_username):
+    logger.debug(f"Getting Github Profile for {github_username}")
+
+    return {
+        "github_history": get_github_contributions_for_user(github_username)
+    }
+
 
 # -------------------- User functions to be deleted ---------------------------------------- #
 

@@ -42,7 +42,8 @@ from api.messages.messages_service import (
     get_all_profiles,
     save_npo_application,
     get_npo_applications,
-    update_npo_application
+    update_npo_application,
+    get_github_profile
 )
 
    
@@ -316,6 +317,10 @@ def save_profile():
     else:
         return None
 
+@bp.route("/profile/github/<username>", methods=["GET"])
+def get_github_profile_api(username):    
+    return get_github_profile(username)
+    
 # Get user profile by user id
 @bp.route("/profile/<id>", methods=["GET"])
 def get_profile_by_id(id):
