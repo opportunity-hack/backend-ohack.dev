@@ -1035,3 +1035,17 @@ def upsert_news(news):
         logger.info("news does not exist")
 
     db.collection("news").add(news)
+
+def upsert_praise(praise):
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Adding praise {praise}")
+
+    #Check if the vibe field exists.
+    if "praise_gif" not in praise:
+        logger.info("vibe field not found, setting praise['vibe'] to None")
+        praise["praise_gif"] = None
+
+    logger.info(f"Adding refined praise {praise} into the database")
+
+    db.collection("praises").add(praise)
+    logger.info("praise successfully saved")

@@ -1,5 +1,6 @@
 import os 
-
+import logging
+import json
 from common.auth import auth, auth_user
 
 from flask import (
@@ -43,10 +44,12 @@ from api.messages.messages_service import (
     save_npo_application,
     get_npo_applications,
     update_npo_application,
-    get_github_profile
+    get_github_profile,
+    save_praise
 )
 
-   
+logger = logging.getLogger("myapp")
+logger.setLevel(logging.DEBUG)
 
 
 bp_name = 'api-messages'
@@ -262,6 +265,27 @@ async def store_lead():
     else:
         return "OK", 200
     
+# -------------------- Praises routes begin here --------------------------- #
+@bp.route("/praise", methods=["POST"])
+def store_praise():    
+    # Check header for token
+    # if token is valid, store news
+    # else return 401
+    
+    token = request.headers.get("X-Api-Key")
+
+    # Check BACKEND_NEWS_TOKEN
+    if token == None or token != os.getenv("BACKEND_PRAISE_TOKEN"):
+        return "Unauthorized", 401
+    else:
+        logger.debug(f"Hre is the request object {request.get_json()}")
+        # try:
+        #     logger.debug(f"Here is the request object: {request.get_json()}")
+        # except Exception as e:
+        #     logger.error(f"Error logging request object: {e}")
+        return vars(save_praise(request.get_json()))
+
+# -------------------- Praises routes end here --------------------------- #
 
 # -------------------- Problem Statement routes to be deleted --------------------------- #
 @auth.require_user
