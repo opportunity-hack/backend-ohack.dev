@@ -1847,6 +1847,8 @@ def get_history_old(db_id):
         "expertise": res["expertise"] if "expertise" in res else "",
         "education": res["education"] if "education" in res else "",
         "shirt_size": res["shirt_size"] if "shirt_size" in res else "",
+        "linkedin_url": res["linkedin_url"] if "linkedin_url" in res else "",
+        "instagram_url": res["instagram_url"] if "instagram_url" in res else "",        
         "github": res["github"] if "github" in res else "",
         "why": res["why"] if "why" in res else "",
         "role": res["role"] if "role" in res else "",
@@ -1938,7 +1940,7 @@ def save_profile_metadata_old(propel_id, json):
         logger.info(f"User exists: {user.id}")        
 
     # Only update metadata that is in the json
-    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size", "github"]
+    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "linkedin_url", "instagram_url"]
 
     d = {}
 
@@ -1975,3 +1977,70 @@ def get_user_by_id_old(id):
     logger.debug(f"Get User By ID Result: {res}")
     return res    
 
+
+@limits(calls=50, period=ONE_MINUTE)
+def save_feedback(propel_user_id, json):
+    db = get_db()
+    logger.info("Saving Feedback")
+    send_slack_audit(action="save_feedback", message="Saving", payload=json)
+
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    user_db_id = get_user_from_slack_id(slack_user["sub"]).id 
+    feedback_giver_id = slack_user["sub"]
+
+    doc_id = uuid.uuid1().hex
+    feedback_receiver_id = json.get("feedback_receiver_id")
+    relationship = json.get("relationship")
+    duration = json.get("duration")
+    confidence_level = json.get("confidence_level")
+    is_anonymous = json.get("is_anonymous", False)
+    feedback_data = json.get("feedback", {})
+
+    collection = db.collection('feedback')
+    
+    insert_res = collection.document(doc_id).set({
+        "feedback_giver_slack_id": feedback_giver_id,
+        "feedback_giver_id": user_db_id,
+        "feedback_receiver_id": feedback_receiver_id,
+        "relationship": relationship,
+        "duration": duration,
+        "confidence_level": confidence_level,
+        "is_anonymous": is_anonymous,
+        "feedback": feedback_data,
+        "timestamp": datetime.now().isoformat()
+    })
+
+    logger.info(f"Insert Result: {insert_res}")
+
+    # Notify the feedback receiver
+    notify_feedback_receiver(feedback_receiver_id)
+
+    # Clear cache
+    get_user_feedback.cache_clear()
+
+    return Message("Feedback saved successfully")
+
+def notify_feedback_receiver(feedback_receiver_id):
+    # Implement notification logic here
+    # This could be sending an email, a Slack message, or updating a notification field in the user's document
+    pass
+
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=100, period=ONE_MINUTE)
+def get_user_feedback(propel_user_id):
+    logger.info(f"Getting feedback for propel_user_id: {propel_user_id}")    
+    db = get_db()
+
+    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    db_user_id = get_user_from_slack_id(slack_user["sub"]).id
+    
+    feedback_docs = db.collection('feedback').where("feedback_receiver_id", "==", db_user_id).stream()
+    
+    feedback_list = []
+    for doc in feedback_docs:
+        feedback = doc.to_dict()
+        if feedback.get("is_anonymous", False):
+            feedback.pop("feedback_giver_id", None)
+        feedback_list.append(feedback)
+    
+    return {"feedback": feedback_list}

@@ -45,7 +45,9 @@ from api.messages.messages_service import (
     get_npo_applications,
     update_npo_application,
     get_github_profile,
-    save_praise
+    save_praise,
+    save_feedback,
+    get_user_feedback
 )
 
 logger = logging.getLogger("myapp")
@@ -358,3 +360,21 @@ def all_profiles():
         return get_all_profiles()
 
 
+@bp.route("/feedback", methods=["POST"])
+@auth.require_user
+def submit_feedback():
+    if auth_user and auth_user.user_id:
+        return vars(save_feedback(auth_user.user_id, request.get_json()))
+    else:
+        return {"error": "Unauthorized"}, 401
+    
+@bp.route("/feedback", methods=["GET"])
+@auth.require_user
+def get_feedback():
+    """
+    Get feedback for a user - note that you can only get this for the current logged in user    
+    """
+    if auth_user and auth_user.user_id:
+        return get_user_feedback(auth_user.user_id)
+    else:
+        return {"error": "Unauthorized"}, 401
