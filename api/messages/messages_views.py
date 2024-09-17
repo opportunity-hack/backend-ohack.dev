@@ -1,5 +1,6 @@
 import os 
-
+import logging
+import json
 from common.auth import auth, auth_user
 
 from flask import (
@@ -42,10 +43,15 @@ from api.messages.messages_service import (
     get_all_profiles,
     save_npo_application,
     get_npo_applications,
-    update_npo_application
+    update_npo_application,
+    get_github_profile,
+    save_praise,
+    save_feedback,
+    get_user_feedback
 )
 
-   
+logger = logging.getLogger("myapp")
+logger.setLevel(logging.DEBUG)
 
 
 bp_name = 'api-messages'
@@ -261,6 +267,27 @@ async def store_lead():
     else:
         return "OK", 200
     
+# -------------------- Praises routes begin here --------------------------- #
+@bp.route("/praise", methods=["POST"])
+def store_praise():    
+    # Check header for token
+    # if token is valid, store news
+    # else return 401
+    
+    token = request.headers.get("X-Api-Key")
+
+    # Check BACKEND_NEWS_TOKEN
+    if token == None or token != os.getenv("BACKEND_PRAISE_TOKEN"):
+        return "Unauthorized", 401
+    else:
+        logger.debug(f"Hre is the request object {request.get_json()}")
+        # try:
+        #     logger.debug(f"Here is the request object: {request.get_json()}")
+        # except Exception as e:
+        #     logger.error(f"Error logging request object: {e}")
+        return vars(save_praise(request.get_json()))
+
+# -------------------- Praises routes end here --------------------------- #
 
 # -------------------- Problem Statement routes to be deleted --------------------------- #
 @auth.require_user
@@ -316,6 +343,10 @@ def save_profile():
     else:
         return None
 
+@bp.route("/profile/github/<username>", methods=["GET"])
+def get_github_profile_api(username):    
+    return get_github_profile(username)
+    
 # Get user profile by user id
 @bp.route("/profile/<id>", methods=["GET"])
 def get_profile_by_id(id):
@@ -329,3 +360,21 @@ def all_profiles():
         return get_all_profiles()
 
 
+@bp.route("/feedback", methods=["POST"])
+@auth.require_user
+def submit_feedback():
+    if auth_user and auth_user.user_id:
+        return vars(save_feedback(auth_user.user_id, request.get_json()))
+    else:
+        return {"error": "Unauthorized"}, 401
+    
+@bp.route("/feedback", methods=["GET"])
+@auth.require_user
+def get_feedback():
+    """
+    Get feedback for a user - note that you can only get this for the current logged in user    
+    """
+    if auth_user and auth_user.user_id:
+        return get_user_feedback(auth_user.user_id)
+    else:
+        return {"error": "Unauthorized"}, 401

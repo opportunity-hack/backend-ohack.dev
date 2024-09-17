@@ -16,9 +16,9 @@ mockfirestore = MockFirestore() #Only used when testing
 
 # add logger
 import logging
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("myapp")
 # set log level
-logger.setLevel(logging.INFO)
+logger.setLevel(logging.DEBUG)
 
 
 def get_db():
@@ -86,6 +86,34 @@ def get_user_by_email(email_address):
         adict = doc.to_dict()
         adict["id"] = doc.id
         return adict
+
+
+def get_github_contributions_for_user(login):
+    logger.info(f"Getting github contributions for user {login}")
+
+    db = get_db()  # this connects to our Firestore database
+    
+    # Use a collection group query to search across all contributor subcollections
+    contributors_ref = db.collection_group('github_contributors').where("login", "==", login)
+    
+    docs = contributors_ref.stream()
+
+    github_history = []
+    for doc in docs:
+        contribution = doc.to_dict()
+        # Add document ID
+        contribution["id"] = doc.id
+        # Add organization and repository information
+        repo_ref = doc.reference.parent.parent
+        org_ref = repo_ref.parent.parent
+        contribution["repo_name"] = repo_ref.id
+        contribution["org_name"] = org_ref.id
+        github_history.append(contribution)
+
+    logger.info(f"Found {len(github_history)} contributions for user {login}")
+
+    return github_history     
+
 
 
 def create_user(name, email_address, slack_id):
@@ -1017,3 +1045,17 @@ def upsert_news(news):
         logger.info("news does not exist")
 
     db.collection("news").add(news)
+
+def upsert_praise(praise):
+    db = get_db()  # this connects to our Firestore database
+    logger.info(f"Adding praise {praise}")
+
+    #Check if the vibe field exists.
+    if "praise_gif" not in praise:
+        logger.info("vibe field not found, setting praise['vibe'] to None")
+        praise["praise_gif"] = None
+
+    logger.info(f"Adding refined praise {praise} into the database")
+
+    db.collection("praises").add(praise)
+    logger.info("praise successfully saved")
