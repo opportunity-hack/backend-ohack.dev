@@ -92,17 +92,27 @@ def get_github_contributions_for_user(login):
     logger.info(f"Getting github contributions for user {login}")
 
     db = get_db()  # this connects to our Firestore database
-    docs = db.collection('github_contributors').where("login", "==", login).stream()    
-
-    logger.info(f"Found {docs} contributions for user {login}")
+    
+    # Use a collection group query to search across all contributor subcollections
+    contributors_ref = db.collection_group('github_contributors').where("login", "==", login)
+    
+    docs = contributors_ref.stream()
 
     github_history = []
     for doc in docs:
-        adict = doc.to_dict()
-        adict["id"] = doc.id
-        github_history.append(adict)
+        contribution = doc.to_dict()
+        # Add document ID
+        contribution["id"] = doc.id
+        # Add organization and repository information
+        repo_ref = doc.reference.parent.parent
+        org_ref = repo_ref.parent.parent
+        contribution["repo_name"] = repo_ref.id
+        contribution["org_name"] = org_ref.id
+        github_history.append(contribution)
 
-    return github_history        
+    logger.info(f"Found {len(github_history)} contributions for user {login}")
+
+    return github_history     
 
 
 
