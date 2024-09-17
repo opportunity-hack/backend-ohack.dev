@@ -1,6 +1,6 @@
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
-from common.utils.firebase import get_hackathon_by_event_id, upsert_news, get_github_contributions_for_user
+from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
 from api.messages.message import Message
@@ -30,6 +30,7 @@ import random
 
 
 logger = logging.getLogger("myapp")
+logger.setLevel(logging.DEBUG)
 logger.setLevel(logging.DEBUG)
 
 
@@ -1234,6 +1235,26 @@ def save_news(json):
     logger.info("Cleared cache for get_news")
 
     return Message("Saved News")
+
+def save_praise(json):
+    logger.debug(f"Attempting to save the praise with the json object {json}")
+    # Take in Slack message and summarize it using GPT-3.5
+    # Make sure these fields exist praise_receiver, praise_channel, praise_message
+    check_fields = ["praise_receiver", "praise_channel", "praise_message"]
+    for field in check_fields:
+        if field not in json:
+            logger.error(f"Missing field {field} in {json}")
+            return Message("Missing field")
+        
+    logger.debug(f"Detected required fields, attempting to save praise")
+    upsert_praise(json)
+
+    logger.info("Updated praise successfully")
+
+    #get_news.cache_clear()
+    #logger.info("Cleared cache for get_news")
+
+    return Message("Saved praise")
 
 async def save_lead(json):
     token = json["token"]
