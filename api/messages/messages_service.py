@@ -2011,8 +2011,8 @@ def save_feedback(propel_user_id, json):
     })
 
     logger.info(f"Insert Result: {insert_res}")
-
-    # Notify the feedback receiver
+    
+    
     notify_feedback_receiver(feedback_receiver_id)
 
     # Clear cache
@@ -2021,9 +2021,24 @@ def save_feedback(propel_user_id, json):
     return Message("Feedback saved successfully")
 
 def notify_feedback_receiver(feedback_receiver_id):
-    # Implement notification logic here
-    # This could be sending an email, a Slack message, or updating a notification field in the user's document
-    pass
+    db = get_db()
+    user_doc = db.collection('users').document(feedback_receiver_id).get()
+    if user_doc.exists:
+        user_data = user_doc.to_dict()
+        slack_user_id = user_data.get('user_id', '').split('-')[-1]  # Extract Slack user ID
+        logger.info(f"User with ID {feedback_receiver_id} found")
+        logger.info(f"Sending notification to user {slack_user_id}")
+        
+        message = (
+            f"Hello <@{slack_user_id}>! You've received new feedback. "
+            "Visit https://www.ohack.dev/myfeedback to view it."
+        )
+        
+        # Send Slack message
+        send_slack(message=message, channel=slack_user_id)
+        logger.info(f"Notification sent to user {slack_user_id}")
+    else:
+        logger.warning(f"User with ID {feedback_receiver_id} not found")
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=100, period=ONE_MINUTE)
