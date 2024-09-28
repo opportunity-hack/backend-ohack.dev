@@ -86,19 +86,19 @@ def admin():
 
 @bp.route("/npo", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def add_npo(): 
     return vars(save_npo(request.get_json()))
 
-@bp.route("/npo/edit", methods=["PATCH"])
+@bp.route("/npo", methods=["PATCH"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def edit_npo(): 
     return vars(update_npo(request.get_json()))
 
 @bp.route("/npo", methods=["DELETE"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("volunteer.admin")
 def delete_npo():        
     return vars(remove_npo(request.get_json()))
 
@@ -378,3 +378,25 @@ def get_feedback():
         return get_user_feedback(auth_user.user_id)
     else:
         return {"error": "Unauthorized"}, 401
+    
+
+@bp.route("/giveaway", methods=["POST"])
+@auth.require_user
+def submit_giveaway():
+    if auth_user and auth_user.user_id:
+        return vars(save_giveaway(auth_user.user_id, request.get_json()))
+    else:
+        return {"error": "Unauthorized"}, 401
+
+
+@bp.route("/giveaway", methods=["GET"])
+@auth.require_user
+def get_giveaway():
+    """
+    Get feedback for a user - note that you can only get this for the current logged in user    
+    """
+    if auth_user and auth_user.user_id:
+        return get_user_giveaway(auth_user.user_id)
+    else:
+        return {"error": "Unauthorized"}, 401
+    

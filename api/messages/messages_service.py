@@ -16,6 +16,10 @@ from firebase_admin.firestore import DocumentReference, DocumentSnapshot
 from firebase_admin import credentials, firestore
 import requests
 
+from common.utils.validators import validate_email, validate_url
+from common.exceptions import InvalidInputError
+
+
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 
@@ -696,49 +700,92 @@ Is Nonprofit: `{isNonProfit}`
         "Saved NPO Application"
     )
 
-
-
 @limits(calls=100, period=ONE_MINUTE)
-def save_npo(json):    
+def save_npo(json):
     send_slack_audit(action="save_npo", message="Saving", payload=json)
     db = get_db()  # this connects to our Firestore database
-    logger.debug("NPO Save")    
-    # TODO: In this current form, you will overwrite any information that matches the same NPO name
+    logger.info("NPO Save - Starting")
 
-    doc_id = uuid.uuid1().hex
+    try:
+        # Input validation and sanitization
+        required_fields = ['name', 'description', 'website', 'slack_channel']
+        for field in required_fields:
+            if field not in json or not json[field].strip():
+                raise InvalidInputError(f"Missing or empty required field: {field}")
 
-    name = json["name"]
-    email = json["email"]
-    npoName = json["npoName"]
-    slack_channel = json["slack_channel"]
-    website = json["website"]
-    description = json["description"]
-    temp_problem_statements = json["problem_statements"]
-    
+        name = json['name'].strip()
+        description = json['description'].strip()
+        website = json['website'].strip()
+        slack_channel = json['slack_channel'].strip()
+        contact_people = json.get('contact_people', [])
+        contact_email = json.get('contact_email', [])
+        problem_statements = json.get('problem_statements', [])
+        image = json.get('image', '').strip()
+        rank = int(json.get('rank', 0))
 
-    # We need to convert this from just an ID to a full object
-    # Ref: https://stackoverflow.com/a/59394211
-    problem_statements = []
-    for ps in temp_problem_statements:
-        problem_statements.append(db.collection("problem_statements").document(ps))
-     
-    collection = db.collection('nonprofits')
-    
-    insert_res = collection.document(doc_id).set({
-        "contact_email": [email], # TODO: Support more than one email
-        "contact_people": [name], # TODO: Support more than one name
-        "name": npoName,
-        "slack_channel" :slack_channel,
-        "website": website,
-        "description": description,
-        "problem_statements": problem_statements
-    })
+        # Validate email addresses
+        contact_email = [email.strip() for email in contact_email if validate_email(email.strip())]
 
-    logger.debug(f"Insert Result: {insert_res}")
+        # Validate URL
+        if not validate_url(website):
+            raise InvalidInputError("Invalid website URL")
 
-    return Message(
-        "Saved NPO"
-    )
+        # Convert problem_statements from IDs to DocumentReferences
+        problem_statement_refs = [
+            db.collection("problem_statements").document(ps)
+            for ps in problem_statements
+            if ps.strip()
+        ]
+
+        # Prepare data for Firestore
+        npo_data = {
+            "name": name,
+            "description": description,
+            "website": website,
+            "slack_channel": slack_channel,
+            "contact_people": contact_people,
+            "contact_email": contact_email,
+            "problem_statements": problem_statement_refs,
+            "image": image,
+            "rank": rank,
+            "created_at": firestore.SERVER_TIMESTAMP,
+            "updated_at": firestore.SERVER_TIMESTAMP
+        }
+
+        # Use a transaction to ensure data consistency
+        @firestore.transactional
+        def save_npo_transaction(transaction):
+            # Check if NPO with the same name already exists
+            existing_npo = db.collection('nonprofits').where("name", "==", name).limit(1).get()
+            if len(existing_npo) > 0:
+                raise InvalidInputError(f"Nonprofit with name '{name}' already exists")
+
+            # Generate a new document ID
+            new_doc_ref = db.collection('nonprofits').document()
+            
+            # Set the data in the transaction
+            transaction.set(new_doc_ref, npo_data)
+            
+            return new_doc_ref
+
+        # Execute the transaction
+        transaction = db.transaction()
+        new_npo_ref = save_npo_transaction(transaction)
+
+        logger.info(f"NPO Save - Successfully saved nonprofit: {new_npo_ref.id}")
+        send_slack_audit(action="save_npo", message="Saved successfully", payload={"id": new_npo_ref.id})
+
+        # Clear cache
+        clear_cache()
+
+        return Message(f"Saved NPO with ID: {new_npo_ref.id}")
+
+    except InvalidInputError as e:
+        logger.error(f"NPO Save - Invalid input: {str(e)}")
+        return Message(f"Failed to save NPO: {str(e)}", status="error")
+    except Exception as e:
+        logger.exception("NPO Save - Unexpected error occurred")
+        return Message("An unexpected error occurred while saving the NPO", status="error")
 
 def clear_cache():
     doc_to_json.cache_clear()
@@ -801,14 +848,10 @@ def link_problem_statements_to_events(json):
 
     
 
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=20, period=ONE_MINUTE)
 def update_npo(json):
     db = get_db()  # this connects to our Firestore database
 
-    logger.debug("Clearing cache")    
-    clear_cache()
-
-    logger.debug("Done Clearing cache")
     logger.debug("NPO Edit")
     send_slack_audit(action="update_npo", message="Updating", payload=json)
     
@@ -816,25 +859,59 @@ def update_npo(json):
     temp_problem_statements = json["problem_statements"]
 
     doc = db.collection('nonprofits').document(doc_id)
+    if doc:
+        doc_dict = doc.get().to_dict()
+        send_slack_audit(action="update_npo", message="Updating", payload=doc_dict)
+        
+        # Extract all fields from the json
+        name = json["name"]
+        contact_email = json.get("contact_email", [])
+        contact_people = json.get("contact_people", [])
+        slack_channel = json["slack_channel"]
+        website = json["website"]
+        description = json["description"]
+        image = json.get("image", "")
+        rank = json.get("rank", 0)
 
-    # We need to convert this from just an ID to a full object
-    # Ref: https://stackoverflow.com/a/59394211
-    problem_statements = []
-    for ps in temp_problem_statements:
-        problem_statements.append(db.collection(
-            "problem_statements").document(ps))
-    
+        # Convert contact_email and contact_people to lists if they're not already
+        if isinstance(contact_email, str):
+            contact_email = [email.strip() for email in contact_email.split(',')]
+        if isinstance(contact_people, str):
+            contact_people = [person.strip() for person in contact_people.split(',')]
 
-    update_result = doc.update({      
-        "problem_statements": problem_statements
-    })
+        # We need to convert this from just an ID to a full object
+        # Ref: https://stackoverflow.com/a/59394211
+        problem_statements = []
+        for ps in temp_problem_statements:
+            problem_statements.append(db.collection("problem_statements").document(ps))
 
-    logger.debug(f"Update Result: {update_result}")
+        update_data = {
+            "contact_email": contact_email,
+            "contact_people": contact_people,
+            "name": name,
+            "slack_channel": slack_channel,
+            "website": website,
+            "description": description,
+            "problem_statements": problem_statements,
+            "image": image,
+            "rank": rank
+        }
 
-    return Message(
-        "Updated NPO"
-    )
+        # Remove any fields that are None to avoid overwriting with null values
+        update_data = {k: v for k, v in update_data.items() if v is not None}
 
+        doc.update(update_data)
+
+        logger.debug("NPO Edit - Update successful")
+        send_slack_audit(action="update_npo", message="Update successful", payload=update_data)
+
+        # Clear cache
+        clear_cache()
+
+        return Message("Updated NPO")
+    else:
+        logger.error(f"NPO Edit - Document with id {doc_id} not found")
+        return Message("NPO not found", status="error")
 
 @limits(calls=100, period=ONE_MINUTE)
 def single_add_volunteer(event_id, json, propel_id):
