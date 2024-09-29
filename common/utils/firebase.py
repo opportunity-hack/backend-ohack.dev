@@ -5,6 +5,8 @@ import json
 from mockfirestore import MockFirestore
 import datetime
 import re
+from google.cloud.firestore import FieldFilter
+
 
 cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
 cred = credentials.Certificate(cert_env)
@@ -1059,3 +1061,48 @@ def upsert_praise(praise):
 
     db.collection("praises").add(praise)
     logger.info("praise successfully saved")
+
+
+def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
+    """
+    Retrieve volunteers for a specific event and type.
+
+    Args:
+        event_id (str): The ID of the event.
+        volunteer_type (str): The type of volunteer (e.g., 'mentor', 'judge', 'volunteer').
+
+    Returns:
+        dict: A dictionary containing a list of volunteer data.
+    """
+    logger.debug(f"Getting {volunteer_type}s for event_id={event_id}")
+
+    if not event_id:
+        logger.warning(f"get {volunteer_type}s end (no event_id provided)")
+        return {"data": []}
+
+    db = get_db()
+    
+    try:
+        # Use FieldFilter for more explicit and type-safe queries
+        query = db.collection("volunteers").where(
+            filter=FieldFilter("event_id", "==", event_id)
+        ).where(
+            filter=FieldFilter("volunteer_type", "==", volunteer_type)
+        )
+
+        # Stream the documents and convert to list of dicts also with their id from the database
+        volunteers = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]
+
+        if not volunteers:
+            logger.info(f"No {volunteer_type}s found for event_id={event_id}")
+            logger.debug(f"get {volunteer_type}s end (no results)")
+            return {"data": []}
+
+        logger.info(f"Retrieved {len(volunteers)} {volunteer_type}s for event_id={event_id}")
+        logger.debug(f"get {volunteer_type}s end (with results)")
+        
+        return {"data": volunteers}
+
+    except Exception as e:
+        logger.error(f"Error retrieving {volunteer_type}s: {str(e)}")
+        return {"data": [], "error": str(e)}

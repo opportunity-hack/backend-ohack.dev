@@ -1,6 +1,6 @@
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
-from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user
+from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user,get_volunteer_from_db_by_event
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
 from api.messages.message import Message
@@ -34,7 +34,6 @@ import random
 
 
 logger = logging.getLogger("myapp")
-logger.setLevel(logging.DEBUG)
 logger.setLevel(logging.DEBUG)
 
 
@@ -175,6 +174,25 @@ def get_single_hackathon_id(id):
         logger.info(f"get_single_hackathon_id end (with result):{result}")
         return result
     return {}
+
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+@limits(calls=2000, period=ONE_MINUTE)
+def get_volunteer_by_event(event_id, volunteer_type):
+    logger.debug(f"get {volunteer_type} start event_id={event_id}")   
+
+    if event_id is None:
+        logger.warning(f"get {volunteer_type} end (no results)")
+        return []
+     
+    results = get_volunteer_from_db_by_event(event_id, volunteer_type)
+
+    if results is None:
+        logger.warning(f"get {volunteer_type} end (no results)")
+        return []
+    else:                
+        logger.debug(f"get {volunteer_type} end (with result):{results}")        
+        return results
+
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)
@@ -922,68 +940,33 @@ def single_add_volunteer(event_id, json, propel_id):
 
     # Since we know this user is an admin, prefix all vars with admin_
     admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
-
-    # Query for event_id column
-    doc = db.collection('hackathons').where("event_id", "==", event_id).stream()    
-    doc = list(doc)
-    doc = doc[0] if len(doc) > 0 else None    
-
-    # Convert from DocumentSnapshot to DocumentReference
-    if isinstance(doc, firestore.DocumentSnapshot):
-        doc = doc.reference                    
-
-    # If we don't find the event, return
-    if doc is None:
-        return Message("No Hackathon Found")
     
-    volunteer_type = json["type"]            
+    # Rename json["type"] to volunteer_type
+    if "type" in json:
+        json["volunteer_type"] = json["type"]
+        del json["type"]
+      
+    # Add created_by and created_timestamp
+    json["created_by"] = admin_name
+    json["created_timestamp"] = datetime.now().isoformat()
 
-    # This will help to make sure we don't always have all data in the Google Sheets/Forms and can add it later
     fields_that_should_always_be_present = ["name", "timestamp"]
 
-    if volunteer_type == "mentors":
-        logger.info("Adding Mentor")
-        # Get the mentor block
-        mentor_block = doc.get().to_dict()["mentors"]
-        # Add the new mentor
-        mentor = json 
-        mentor["created_by"] = admin_name
-        mentor["created_timestamp"] = datetime.now().isoformat()        
-        mentor_block.append(mentor)
-        # Update the mentor block with the new mentor
-        doc.update({
-            "mentors": mentor_block
-        })
-    elif volunteer_type == "judges":
-        logger.info("Adding Judge")
-        # Get the judge block
-        judge_block = doc.get().to_dict()["judges"]
-        # Add the new judge
-        judge = json
-        judge["created_by"] = admin_name
-        judge["created_timestamp"] = datetime.now().isoformat()
-        judge_block.append(judge)
-        # Update the judge block with the new judge
-        doc.update({
-            "judges": judge_block
-        })
-    elif volunteer_type == "volunteers":
-        logger.info("Adding Volunteer")
-        # Get the volunteer block
-        volunteer_block = doc.get().to_dict()["volunteers"]
-        # Add the new volunteer
-        volunteer = json
-        volunteer["created_by"] = admin_name
-        volunteer["created_timestamp"] = datetime.now().isoformat()
-        volunteer_block.append(volunteer)
-        # Update the volunteer block with the new volunteer
-        doc.update({
-            "volunteers": volunteer_block
-        })
-
-    # Clear cache
-    get_single_hackathon_event.cache_clear()
-
+    # We don't want to add the same name for the same event_id, so check that first
+    doc = db.collection('volunteers').where("event_id", "==", event_id).where("name", "==", json["name"]).stream()
+    # If we don't have a duplicate, then return
+    if len(list(doc)) > 0:
+        return Message("Volunteer already exists")
+    
+    # Query for event_id column in hackathons to ensure it exists
+    doc = db.collection('hackathons').where("event_id", "==", event_id).stream()
+    # If we don't find the event, return
+    if len(list(doc)) == 0:
+        return Message("No Hackathon Found")
+    
+    # Add the volunteer
+    doc = db.collection('volunteers').add(json)
+    
     return Message(
         "Added Hackathon Volunteer"
     )
@@ -1097,131 +1080,51 @@ def bulk_add_volunteers(event_id, json, propel_id):
 
 
 @limits(calls=50, period=ONE_MINUTE)
-def update_hackathon_volunteers(event_id, json, propel_id):
+def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
     db = get_db()
-    logger.info("Update Hackathon Volunteers")
+    logger.info(f"update_hackathon_volunteers for event_id={event_id} propel_id={propel_id}")
     logger.info("JSON: " + str(json))
     send_slack_audit(action="update_hackathon_volunteers", message="Updating", payload=json)
+
+    if "id" not in json:
+        logger.error("Missing id field")
+        return Message("Missing id field")
+
+    volunteer_id = json["id"]
 
     # Since we know this user is an admin, prefix all vars with admin_
     admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
 
     # Query for event_id column
-    doc = db.collection('hackathons').where("event_id", "==", event_id).stream()    
-    doc = list(doc)
-    doc = doc[0] if len(doc) > 0 else None    
-
-    # Convert from DocumentSnapshot to DocumentReference
-    if isinstance(doc, firestore.DocumentSnapshot):
-        doc = doc.reference                    
+    doc = db.collection("volunteers").document(volunteer_id)
 
     # If we don't find the event, return
     if doc is None:
-        return Message("No Hackathon Found")
-    
-    volunteer_type = json["type"]
-    timestamp = json["timestamp"]
-    name = json["name"]
-    # We will use timestamp and name to find the volunteer
-
+        return Message("No volunteer for Hackathon Found")
+                    
     # This will help to make sure we don't always have all data in the Google Sheets/Forms and can add it later
     fields_that_should_always_be_present = ["slack_user_id", "pronouns", "linkedinProfile"]
 
-    if volunteer_type == "mentors":
-        logger.info("Updating Mentor")
-        # Get the mentor block
-        mentor_block = doc.get().to_dict()["mentors"]
-        
-        # Find the mentor
-        for mentor in mentor_block:
-            # Check if fields_that_should_always_be_present are present and if not add empty string
-            for field in fields_that_should_always_be_present:
-                if field not in mentor:
-                    mentor[field] = ""
-            
+    # Make sure that fields are present in json
+    for field in fields_that_should_always_be_present:
+        if field not in json:
+            logger.error(f"Missing field {field} in {json}")
+            return Message("Missing field")
+    
+    # Update doc with timestamp and admin_name
+    json["updated_by"] = admin_name
+    json["updated_timestamp"] = datetime.now().isoformat()
 
-            logger.info(f"Comparing {mentor['name']} with {name} and {mentor['timestamp']} with {timestamp}")
-            if mentor["name"] == name and mentor["timestamp"] == timestamp:
-                # For each field in mentor, update with the new value from json
-                for key in mentor.keys():
-                    if key in json:
-                        if key == "timestamp" or key == "name": # Don't want to update these since they are primary keys
-                            continue
-                        mentor[key] = json[key]                        
-                                                
-                mentor["updated_timestamp"] = datetime.now().isoformat()
-                mentor["updated_by"] = admin_name
+    # Update the volunteer record with the new data
+    doc.update(json)
 
-                logger.info(f"Found mentor {mentor}")                
-                break
-        # Update the mentor block with the json for this mentor
-        doc.update({
-            "mentors": mentor_block
-        })
-    elif volunteer_type == "judges":
-        # Get the judge block
-        judge_block = doc.get().to_dict()["judges"]
-        # Find the judge
-        for judge in judge_block:
-            # Check if fields_that_should_always_be_present are present and if not add empty string
-            for field in fields_that_should_always_be_present:
-                if field not in judge:
-                    judge[field] = ""
+    # Clear cache for get_volunteer_by_event
+    get_volunteer_by_event.cache_clear()
 
-            if judge["name"] == name and judge["timestamp"] == timestamp:
-                # For each field in judge, update with the new value from json
-                for key in judge.keys():
-                    if key in json:
-                        if key == "timestamp" or key == "name":
-                            continue
-                        judge[key] = json[key]
-                judge["updated_timestamp"] = datetime.now().isoformat()
-                judge["updated_by"] = admin_name
-
-                logger.info(f"Found judge {judge}")
-                break
-        # Update the judge block with the json for this judge
-        doc.update({
-            "judges": judge_block
-        })
-    elif volunteer_type == "volunteers":
-        # Get the volunteer block
-        volunteer_block = doc.get().to_dict()["volunteers"]
-        # Find the volunteer
-        for volunteer in volunteer_block:
-            # Check if fields_that_should_always_be_present are present and if not add empty string
-            for field in fields_that_should_always_be_present:
-                if field not in volunteer:
-                    volunteer[field] = ""
-
-            if volunteer["name"] == name and volunteer["timestamp"] == timestamp:
-                # For each field in volunteer, update with the new value from json
-                for key in volunteer.keys():
-                    if key in json:
-                        if key == "timestamp" or key == "name":
-                            continue
-                        volunteer[key] = json[key]
-                volunteer["updated_timestamp"] = datetime.now().isoformat()
-                volunteer["updated_by"] = admin_name
-
-                logger.info(f"Found volunteer {volunteer}")
-                break
-        # Update the volunteer block with the json for this volunteer
-        doc.update({
-            "volunteers": volunteer_block
-        })
-
-    # Clear cache
-    get_single_hackathon_event.cache_clear()
-        
     return Message(
         "Updated Hackathon Volunteers"
     )
     
-
-    
-
-
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_hackathon(json):

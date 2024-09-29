@@ -47,7 +47,8 @@ from api.messages.messages_service import (
     get_github_profile,
     save_praise,
     save_feedback,
-    get_user_feedback
+    get_user_feedback,
+    get_volunteer_by_event
 )
 
 logger = logging.getLogger("myapp")
@@ -139,13 +140,6 @@ def update_npo_application_api(application_id):
 def add_hackathon():
     return vars(save_hackathon(request.get_json()))
 
-@bp.route("/hackathon/<event_id>/volunteers", methods=["PATCH"])
-@auth.require_user
-@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-def update_hackathon_volunteers_mentors_judges(event_id):
-    if auth_user and auth_user.user_id:
-        return vars(update_hackathon_volunteers(event_id, request.get_json(), auth_user.user_id))
-
 
 @bp.route("/hackathon/<event_id>/volunteers/bulk", methods=["POST"])
 @auth.require_user
@@ -175,6 +169,39 @@ def list_hackathons():
 @bp.route("/hackathon/<event_id>", methods=["GET"])
 def get_single_hackathon_by_event(event_id):
     return (get_single_hackathon_event(event_id))
+
+@bp.route("/hackathon/<event_id>/mentor", methods=["GET"])
+def get_volunteer_mentor_by_event_api(event_id):
+    return (get_volunteer_by_event(event_id, "mentor"))
+
+@bp.route("/hackathon/<event_id>/judge", methods=["GET"])
+def get_volunteer_judge_by_event_api(event_id):
+    return (get_volunteer_by_event(event_id, "judge"))
+
+@bp.route("/hackathon/<event_id>/volunteer", methods=["GET"])
+def get_volunteer_volunteers_by_event_api(event_id):
+    return (get_volunteer_by_event(event_id, "volunteer"))
+
+# ------------------- PATCH ------------------- #
+@bp.route("/hackathon/<event_id>/mentor", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_mentor_by_event_id(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(update_hackathon_volunteers(event_id, "mentors", request.get_json(), auth_user.user_id))
+
+@bp.route("/hackathon/<event_id>/judge", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_judge_by_event_id(event_id):
+    return vars(update_hackathon_volunteers(event_id, "judges", request.get_json(), auth_user.user_id))
+
+@bp.route("/hackathon/<event_id>/volunteer", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_volunteer_by_event_id(event_id):
+    return vars(update_hackathon_volunteers(event_id, "volunteers", request.get_json(), auth_user.user_id))
+
 
 @bp.route("/hackathon/id/<id>", methods=["GET"])
 def get_single_hackathon_by_id(id):
