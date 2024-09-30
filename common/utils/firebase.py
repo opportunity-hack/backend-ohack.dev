@@ -22,6 +22,9 @@ logger = logging.getLogger("myapp")
 # set log level
 logger.setLevel(logging.DEBUG)
 
+# Declare constants here
+MAX_PRAISES_ABOUT_USER = 50
+MAX_PRAISES = 20
 
 def get_db():
     if safe_get_env_var("ENVIRONMENT") == "test":
@@ -1079,7 +1082,7 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
     if not event_id:
         logger.warning(f"get {volunteer_type}s end (no event_id provided)")
         return {"data": []}
-
+    
     db = get_db()
     
     try:
@@ -1106,3 +1109,33 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
     except Exception as e:
         logger.error(f"Error retrieving {volunteer_type}s: {str(e)}")
         return {"data": [], "error": str(e)}
+
+def get_recent_praises():
+    # Gets 20 most recent praises and sort by timestamp
+    db = get_db()
+    praises = db.collection('praises').order_by("timestamp", direction=firestore.Query.DESCENDING).limit(MAX_PRAISES).stream() 
+    
+    # convert each document to a python dictionary
+    praise_list = []
+    for doc in praises:
+        doc_json = doc.to_dict()
+        doc_json["id"] = doc.id
+        praise_list.append(doc_json)
+
+    # return the praise_list sorted in descending order by timestamp
+    return praise_list
+
+def get_praises_by_user_id(user_id):
+    # Gets 50 most recent praises about user with user_id
+    db = get_db()
+    praises = db.collection('praises').where("praise_receiver", "==", user_id).order_by("timestamp", direction=firestore.Query.DESCENDING).limit(MAX_PRAISES_ABOUT_USER).stream() 
+    
+    # convert each document to a python dictionary
+    praise_list = []
+    for doc in praises:
+        doc_json = doc.to_dict()
+        doc_json["id"] = doc.id
+        praise_list.append(doc_json)
+
+    # return the praise_list sorted in descending order by timestamp
+    return praise_list

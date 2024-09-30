@@ -45,6 +45,8 @@ from api.messages.messages_service import (
     get_npo_applications,
     update_npo_application,
     get_github_profile,
+    get_all_praises,
+    get_praises_about_user,
     save_praise,
     save_feedback,
     get_user_feedback,
@@ -314,6 +316,15 @@ def store_praise():
         #     logger.error(f"Error logging request object: {e}")
         return vars(save_praise(request.get_json()))
 
+@bp.route("/praises", methods=["GET"])
+def get_praises():
+    # return all praise data about user with user_id in route
+    return vars(get_all_praises())
+
+@bp.route("/praise/<user_id>", methods=["GET"])
+def get_praises_about_self(user_id):
+    # return all praise data about user with user_id in route
+    return vars(get_praises_about_user(user_id)) 
 # -------------------- Praises routes end here --------------------------- #
 
 # -------------------- Problem Statement routes to be deleted --------------------------- #
