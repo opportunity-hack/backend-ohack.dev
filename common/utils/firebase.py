@@ -1084,7 +1084,7 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
         return {"data": []}
     
     db = get_db()
-    
+
     try:
         # Use FieldFilter for more explicit and type-safe queries
         query = db.collection("volunteers").where(
