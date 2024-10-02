@@ -1,6 +1,6 @@
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
-from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user,get_volunteer_from_db_by_event
+from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user,get_volunteer_from_db_by_event, get_recent_praises, get_praises_by_user_id
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo
 from api.messages.message import Message
@@ -1218,7 +1218,7 @@ def save_news(json):
 
 def save_praise(json):
     logger.debug(f"Attempting to save the praise with the json object {json}")
-    # Take in Slack message and summarize it using GPT-3.5
+
     # Make sure these fields exist praise_receiver, praise_channel, praise_message
     check_fields = ["praise_receiver", "praise_channel", "praise_message"]
     for field in check_fields:
@@ -1231,10 +1231,34 @@ def save_praise(json):
 
     logger.info("Updated praise successfully")
 
-    #get_news.cache_clear()
-    #logger.info("Cleared cache for get_news")
+    get_praises_about_user.cache_clear()
+    logger.info("Cleared cache for get_praises_by_user_id")
+
+    get_all_praises.cache_clear()
+    logger.info("Cleared cache for get_all_praises")
 
     return Message("Saved praise")
+
+
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+def get_all_praises():
+    
+    # Get the praises about user with user_id
+    results = get_recent_praises()
+
+    logger.info(f"Here are the 20 most recently written praises: {results}")
+    return Message(results)    
+
+@cached(cache=TTLCache(maxsize=100, ttl=600))
+def get_praises_about_user(user_id):
+    
+    # Get the praises about user with user_id
+    results = get_praises_by_user_id(user_id)
+
+    logger.info(f"Here are all praises related to {user_id}: {results}")
+    return Message(results)    
+
+# -------------------- Praises methods end here --------------------------- #
 
 async def save_lead(json):
     token = json["token"]

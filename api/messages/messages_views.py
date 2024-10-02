@@ -45,6 +45,8 @@ from api.messages.messages_service import (
     get_npo_applications,
     update_npo_application,
     get_github_profile,
+    get_all_praises,
+    get_praises_about_user,
     save_praise,
     save_feedback,
     get_user_feedback,
@@ -302,18 +304,27 @@ def store_praise():
     # else return 401
     
     token = request.headers.get("X-Api-Key")
+    sender_id = request.get_json().get("praise_sender")
+    receiver_id = request.get_json().get("praise_receiver")
 
     # Check BACKEND_NEWS_TOKEN
     if token == None or token != os.getenv("BACKEND_PRAISE_TOKEN"):
         return "Unauthorized", 401
+    elif sender_id == receiver_id:
+        return "You cannot write a praise about yourself", 400
     else:
         logger.debug(f"Hre is the request object {request.get_json()}")
-        # try:
-        #     logger.debug(f"Here is the request object: {request.get_json()}")
-        # except Exception as e:
-        #     logger.error(f"Error logging request object: {e}")
         return vars(save_praise(request.get_json()))
 
+@bp.route("/praises", methods=["GET"])
+def get_praises():
+    # return all praise data about user with user_id in route
+    return vars(get_all_praises())
+
+@bp.route("/praise/<user_id>", methods=["GET"])
+def get_praises_about_self(user_id):
+    # return all praise data about user with user_id in route
+    return vars(get_praises_about_user(user_id)) 
 # -------------------- Praises routes end here --------------------------- #
 
 # -------------------- Problem Statement routes to be deleted --------------------------- #
