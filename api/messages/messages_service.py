@@ -1227,6 +1227,7 @@ def save_praise(json):
             return Message("Missing field")
         
     logger.debug(f"Detected required fields, attempting to save praise")
+    json["timestamp"] = datetime.now().isoformat()
     upsert_praise(json)
 
     logger.info("Updated praise successfully")
