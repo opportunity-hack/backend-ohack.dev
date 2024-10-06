@@ -3,6 +3,7 @@ from . import safe_get_env_var
 import datetime, json
 from ratelimiter import RateLimiter
 from slack_sdk import WebClient
+from slack_sdk.models.blocks import SectionBlock
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
 from requests.exceptions import ConnectionError
@@ -167,21 +168,23 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
     if channel_id is None:
         logger.warning("Unable to get channel id from name, might be a user?")
         channel_id = channel
-        
-    # Joining isn't necessary to be able to send messages via chat_postMessage
-    #join_result = client.conversations_join(channel=channel_id)
-    # print(join_result)
-
-    # Post
+    
     logger.info("Sending message...")
     try:
         response = client.chat_postMessage(
             channel=channel_id,
-            text=message,
+            blocks=[
+                SectionBlock(
+                    text={
+                        "type": "mrkdwn",
+                        "text": message
+                    }
+                )
+            ],
             username=username,
-            icon_emoji=icon_emoji)        
+            icon_emoji=icon_emoji
+        )
     except SlackApiError as e:
-        # You will get a SlackApiError if "ok" is False
         logger.error(e.response["error"])
         assert e.response["error"]
 

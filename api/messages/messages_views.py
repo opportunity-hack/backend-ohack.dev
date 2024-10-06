@@ -32,6 +32,7 @@ from api.messages.messages_service import (
     save_hackathon,
     update_hackathon_volunteers,
     get_teams_list,
+    get_team,
     save_team,
     unjoin_team,
     join_team,
@@ -45,10 +46,13 @@ from api.messages.messages_service import (
     get_npo_applications,
     update_npo_application,
     get_github_profile,
+    get_all_praises,
+    get_praises_about_user,
     save_praise,
     save_feedback,
     get_user_feedback,
-    get_volunteer_by_event
+    get_volunteer_by_event,
+    get_github_repos
 )
 
 logger = logging.getLogger("myapp")
@@ -213,12 +217,13 @@ def get_teams():
 
 # Get a single team by id
 @bp.route("/team/<team_id>", methods=["GET"])
-def get_team(team_id):
-    return (get_teams_list(team_id))
+def get_team_api(team_id):
+    return (get_team(team_id))
 
 
-@auth.require_user
+
 @bp.route("/team", methods=["POST"])
+@auth.require_user
 def add_team():
     if auth_user and auth_user.user_id:
         return save_team(auth_user.user_id, request.get_json())
@@ -229,8 +234,7 @@ def add_team():
 
 @bp.route("/team", methods=["DELETE"])
 @auth.require_user
-def remove_user_from_team():
-    
+def remove_user_from_team():    
     if auth_user and auth_user.user_id:        
         return vars(unjoin_team(auth_user.user_id, request.get_json()))
     else:
@@ -302,18 +306,27 @@ def store_praise():
     # else return 401
     
     token = request.headers.get("X-Api-Key")
+    sender_id = request.get_json().get("praise_sender")
+    receiver_id = request.get_json().get("praise_receiver")
 
     # Check BACKEND_NEWS_TOKEN
     if token == None or token != os.getenv("BACKEND_PRAISE_TOKEN"):
         return "Unauthorized", 401
+    elif sender_id == receiver_id:
+        return "You cannot write a praise about yourself", 400
     else:
         logger.debug(f"Hre is the request object {request.get_json()}")
-        # try:
-        #     logger.debug(f"Here is the request object: {request.get_json()}")
-        # except Exception as e:
-        #     logger.error(f"Error logging request object: {e}")
         return vars(save_praise(request.get_json()))
 
+@bp.route("/praises", methods=["GET"])
+def get_praises():
+    # return all praise data about user with user_id in route
+    return vars(get_all_praises())
+
+@bp.route("/praise/<user_id>", methods=["GET"])
+def get_praises_about_self(user_id):
+    # return all praise data about user with user_id in route
+    return vars(get_praises_about_user(user_id)) 
 # -------------------- Praises routes end here --------------------------- #
 
 # -------------------- Problem Statement routes to be deleted --------------------------- #
@@ -374,6 +387,11 @@ def save_profile():
 def get_github_profile_api(username):    
     return get_github_profile(username)
     
+
+@bp.route("/github-repos/<event_id>", methods=["GET"])
+def get_github_repos(event_id):
+    return get_github_repos(event_id)
+
 # Get user profile by user id
 @bp.route("/profile/<id>", methods=["GET"])
 def get_profile_by_id(id):
