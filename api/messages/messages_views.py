@@ -33,6 +33,7 @@ from api.messages.messages_service import (
     update_hackathon_volunteers,
     get_teams_list,
     get_team,
+    get_teams_batch,
     save_team,
     unjoin_team,
     join_team,
@@ -222,6 +223,10 @@ def get_teams():
 @bp.route("/team/<team_id>", methods=["GET"])
 def get_team_api(team_id):
     return (get_team(team_id))
+
+@bp.route("/teams/batch", methods=["POST"])
+def get_batch_teams():
+    return get_teams_batch(request.get_json())
 
 
 

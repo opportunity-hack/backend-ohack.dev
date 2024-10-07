@@ -357,19 +357,27 @@ def get_team(id):
         doc = doc_ref.get()
         if not doc.exists:
             logger.info(f"Team with id={id} not found")
-            return {"team": {}}
+            return {}
         
         team_data = doc_to_json(docid=doc.id, doc=doc)
         logger.info(f"Successfully retrieved team with id={id}")
-        return {"team": team_data}
+        return team_data
     
     except Exception as e:
         logger.error(f"Error retrieving team with id={id}: {str(e)}")
-        return {"team": {}, "error": "An error occurred while retrieving the team"}
+        return {}
     
     finally:
         logger.debug(f"get_team operation completed for id={id}")
-      
+
+def get_teams_batch(json):
+    # Handle json["team_ids"] will have a list of teamids
+
+    if "team_ids" not in json:
+        logger.info(json["team_ids"])
+        # TODO: Return for a batch of team ids to speed up the frontend
+
+
       
 
 @limits(calls=20, period=ONE_MINUTE)
