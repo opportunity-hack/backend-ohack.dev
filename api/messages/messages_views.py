@@ -52,7 +52,10 @@ from api.messages.messages_service import (
     save_feedback,
     get_user_feedback,
     get_volunteer_by_event,
-    get_github_repos
+    get_github_repos,
+    get_user_giveaway,
+    save_giveaway,
+    get_all_giveaways,
 )
 
 logger = logging.getLogger("myapp")
@@ -444,4 +447,10 @@ def get_giveaway():
         return get_user_giveaway(auth_user.user_id)
     else:
         return {"error": "Unauthorized"}, 401
+    
+@bp.route("/giveaway/admin", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_get_all_giveaways():
+    return get_all_giveaways()
     
