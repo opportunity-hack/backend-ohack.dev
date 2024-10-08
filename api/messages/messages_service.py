@@ -9,6 +9,7 @@ import json
 import uuid
 from datetime import datetime, timedelta
 import time
+from functools import wraps
 
 import logging
 import firebase_admin
@@ -67,7 +68,16 @@ def get_admin_message():
 def hash_key(docid, doc=None, depth=0):
     return hashkey(docid)
 
-
+def log_execution_time(func):
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        start_time = time.time()
+        result = func(*args, **kwargs)
+        end_time = time.time()
+        execution_time = end_time - start_time
+        logger.debug(f"{func.__name__} execution time: {execution_time:.4f} seconds")
+        return result
+    return wrapper
 
 # Generically handle a DocumentSnapshot or a DocumentReference
 #@cached(cache=TTLCache(maxsize=1000, ttl=43200), key=hash_key)
@@ -305,6 +315,7 @@ def get_teams_list(id=None):
     logger.debug(f"Teams List Start team_id={id}")
     db = get_db() 
     if id is not None:
+        logger.debug(f"Teams List team_id={id} | Start")
         # Get by id
         doc = db.collection('teams').document(id).get()
         if doc is None:
@@ -312,39 +323,61 @@ def get_teams_list(id=None):
         else:
             #log
             logger.info(f"Teams List team_id={id} | End (with result):{doc_to_json(docid=doc.id, doc=doc)}")
+            logger.debug(f"Teams List team_id={id} | End")
             return doc_to_json(docid=doc.id, doc=doc)
     else:
         # Get all        
+        logger.debug("Teams List | Start")
         docs = db.collection('teams').stream() # steam() gets all records   
         if docs is None:
+            logger.debug("Teams List | End (no results)")
             return {[]}
         else:                
             results = []
             for doc in docs:
                 results.append(doc_to_json(docid=doc.id, doc=doc))
-                                
+            
+            logger.debug(f"Found {len(results)} results {results}")                                
             return { "teams": results }
 
 @limits(calls=2000, period=THIRTY_SECONDS)
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), key=lambda id: id)
+@log_execution_time
 def get_team(id):
-    logger.debug(f"get_team Start team_id={id}")
+    if id is None:
+        logger.warning("get_team called with None id")
+        return {"team": {}}
+
+    logger.debug(f"Fetching team with id={id}")
     
-    if id is not None:
-        # Get by id
-        db = get_db() 
-        doc = db.collection('teams').document(id).get()
-        if doc is None:
-            logger.info("get_team End (no results)")
+    db = get_db()
+    doc_ref = db.collection('teams').document(id)
+    
+    try:
+        doc = doc_ref.get()
+        if not doc.exists:
+            logger.info(f"Team with id={id} not found")
             return {}
-        else:                        
-            logger.info(f"get_team End (with result):{doc.to_dict()}")
-            return doc_to_json(docid=doc.id, doc=doc)
-    else:
-        return {
-            "team": {}
-        }
-      
+        
+        team_data = doc_to_json(docid=doc.id, doc=doc)
+        logger.info(f"Successfully retrieved team with id={id}")
+        return team_data
+    
+    except Exception as e:
+        logger.error(f"Error retrieving team with id={id}: {str(e)}")
+        return {}
+    
+    finally:
+        logger.debug(f"get_team operation completed for id={id}")
+
+def get_teams_batch(json):
+    # Handle json["team_ids"] will have a list of teamids
+
+    if "team_ids" not in json:
+        logger.info(json["team_ids"])
+        # TODO: Return for a batch of team ids to speed up the frontend
+
+
       
 
 @limits(calls=20, period=ONE_MINUTE)
@@ -2074,26 +2107,23 @@ def save_profile_metadata_old(propel_id, json):
     )
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=hash_key)
+@cached(cache=TTLCache(maxsize=100, ttl=600), key=lambda id: id)
 def get_user_by_id_old(id):
-    # Log
     logger.debug(f"Get User By ID: {id}")
-    db = get_db()  # this connects to our Firestore database
-    collection = db.collection('users')
-    doc = collection.document(id)
-    if not doc.get().exists:
+    db = get_db()
+    doc_ref = db.collection('users').document(id)
+    doc = doc_ref.get()
+    
+    if not doc.exists:
+        logger.debug(f"User with ID {id} not found")
         return {}
-    doc_get = doc.get()
-    res = doc_get.to_dict()
-    # Only keep these fields since this is a public api
+    
     fields = ["name", "profile_image", "user_id", "nickname", "github"]
-    # Check if the field is in the response first
-    res = {k: res[k] for k in fields if k in res}
+    res = {k: doc.get(k) for k in fields if doc.get(k)}
     res["id"] = doc.id
 
-
     logger.debug(f"Get User By ID Result: {res}")
-    return res    
+    return res  
 
 
 @limits(calls=50, period=ONE_MINUTE)
