@@ -25,8 +25,7 @@ from api.messages.messages_service import (
     remove_npo,
     get_npo_list,
     get_single_npo,
-    get_single_hackathon_event,
-    bulk_add_volunteers,
+    get_single_hackathon_event,    
     single_add_volunteer,
     get_single_hackathon_id,
     save_hackathon,
@@ -149,19 +148,7 @@ def add_hackathon():
     return vars(save_hackathon(request.get_json()))
 
 
-@bp.route("/hackathon/<event_id>/volunteers/bulk", methods=["POST"])
-@auth.require_user
-@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-def add_bulk_volunteers(event_id):
-    if auth_user and auth_user.user_id:
-        return vars(bulk_add_volunteers(event_id, request.get_json(), auth_user.user_id))
-    
-@bp.route("/hackathon/<event_id>/volunteers", methods=["POST"])
-@auth.require_user
-@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-def add_single_volunteer(event_id):
-    if auth_user and auth_user.user_id:
-        return vars(single_add_volunteer(event_id, request.get_json(), auth_user.user_id))
+
 
 @bp.route("/hackathons", methods=["GET"])
 def list_hackathons():
@@ -172,6 +159,28 @@ def list_hackathons():
         return get_hackathon_list("previous")
     else:
         return get_hackathon_list() #all
+
+
+@bp.route("/hackathon/<event_id>/mentor", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def add_single_mentor(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(single_add_volunteer(event_id, request.get_json(), "mentor", auth_user.user_id))
+    
+@bp.route("/hackathon/<event_id>/judge", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def add_single_judge(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(single_add_volunteer(event_id, request.get_json(), "judge", auth_user.user_id))
+    
+@bp.route("/hackathon/<event_id>/volunteer", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def add_single_volunteer(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(single_add_volunteer(event_id, request.get_json(), "volunteer", auth_user.user_id))
 
 
 @bp.route("/hackathon/<event_id>", methods=["GET"])
