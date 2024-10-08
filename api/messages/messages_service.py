@@ -1073,7 +1073,7 @@ def update_npo(json):
         return Message("NPO not found", status="error")
 
 @limits(calls=100, period=ONE_MINUTE)
-def single_add_volunteer(event_id, json, propel_id):
+def single_add_volunteer(event_id, json, volunteer_type, propel_id):
     db = get_db()
     logger.info("Single Add Volunteer")
     logger.info("JSON: " + str(json))
@@ -1082,10 +1082,16 @@ def single_add_volunteer(event_id, json, propel_id):
     # Since we know this user is an admin, prefix all vars with admin_
     admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
     
-    # Rename json["type"] to volunteer_type
-    if "type" in json:
-        json["volunteer_type"] = json["type"]
-        del json["type"]
+    if volunteer_type not in ["mentor", "volunteer", "judge"]:
+        return Message (
+            "Error: Must be volunteer, mentor, judge"
+        )
+
+    
+    json["volunteer_type"] = volunteer_type
+    json["event_id"] = event_id
+    name = json["name"]
+        
       
     # Add created_by and created_timestamp
     json["created_by"] = admin_name
@@ -1093,130 +1099,28 @@ def single_add_volunteer(event_id, json, propel_id):
 
     fields_that_should_always_be_present = ["name", "timestamp"]
 
+    logger.info(f"Checking to see if person {name} is already in DB for event: {event_id}")
     # We don't want to add the same name for the same event_id, so check that first
-    doc = db.collection('volunteers').where("event_id", "==", event_id).where("name", "==", json["name"]).stream()
+    doc = db.collection('volunteers').where("event_id", "==", event_id).where("name", "==", name).stream()
     # If we don't have a duplicate, then return
     if len(list(doc)) > 0:
+        logger.warning("Volunteer already exists")
         return Message("Volunteer already exists")
     
+    logger.info(f"Checking to see if the event_id '{event_id}' provided exists")
     # Query for event_id column in hackathons to ensure it exists
     doc = db.collection('hackathons').where("event_id", "==", event_id).stream()
     # If we don't find the event, return
     if len(list(doc)) == 0:
+        logger.warning("No hackathon found")
         return Message("No Hackathon Found")
     
+    logger.info(f"Looks good! Adding to volunteers collection JSON: {json}")
     # Add the volunteer
     doc = db.collection('volunteers').add(json)
     
     return Message(
         "Added Hackathon Volunteer"
-    )
-
-@limits(calls=100, period=ONE_MINUTE)
-def bulk_add_volunteers(event_id, json, propel_id):
-    db = get_db()
-    logger.info("Bulk Add Volunteers")
-    logger.info("JSON: " + str(json))
-    send_slack_audit(action="bulk_add_volunteers", message="Adding", payload=json)
-
-    # Since we know this user is an admin, prefix all vars with admin_
-    admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
-
-    # Query for event_id column
-    doc = db.collection('hackathons').where("event_id", "==", event_id).stream()    
-    doc = list(doc)
-    doc = doc[0] if len(doc) > 0 else None    
-
-    # Convert from DocumentSnapshot to DocumentReference
-    if isinstance(doc, firestore.DocumentSnapshot):
-        doc = doc.reference                    
-
-    # If we don't find the event, return
-    if doc is None:
-        return Message("No Hackathon Found")
-    
-    volunteer_type = json["type"]
-    volunteers = json["volunteers"]
-    # We will use timestamp and name to find the volunteer
-
-    if volunteer_type == "mentors":
-        logger.info("Adding Mentors")
-        # Get the mentor block
-        mentor_block = doc.get().to_dict()["mentors"]
-        # Add the new mentors
-        for mentor in volunteers:
-            # Do some sanity checks 
-            if "name" not in mentor:
-                logger.info("Skipping mentor with no name")
-                continue
-            if "timestamp" not in mentor:
-                logger.info("Skipping mentor with no timestamp")
-                continue             
-            if mentor["name"] == "" or mentor["timestamp"] == "":
-                logger.info("Skipping mentor with empty name, timestamp or email")
-                continue
-
-            mentor["created_by"] = admin_name
-            mentor["created_timestamp"] = datetime.now().isoformat()
-            mentor_block.append(mentor)
-        # Update the mentor block with the new mentors
-        doc.update({
-            "mentors": mentor_block
-        })
-    elif volunteer_type == "judges":
-        logger.info("Adding Judges")
-        # Get the judge block
-        judge_block = doc.get().to_dict()["judges"]
-        # Add the new judges
-        for judge in volunteers:
-            # Do some sanity checks
-            if "name" not in judge:
-                logger.info("Skipping judge with no name")
-                continue
-            if "timestamp" not in judge:
-                logger.info("Skipping judge with no timestamp")
-                continue
-            if judge["name"] == "" or judge["timestamp"] == "": 
-                logger.info("Skipping judge with empty name, timestamp")
-                continue
-
-            judge["created_by"] = admin_name
-            judge["created_timestamp"] = datetime.now().isoformat()
-            judge_block.append(judge)
-        # Update the judge block with the new judges
-        doc.update({
-            "judges": judge_block
-        })
-    elif volunteer_type == "volunteers":
-        logger.info("Adding Volunteers")
-        # Get the volunteer block
-        volunteer_block = doc.get().to_dict()["volunteers"]
-        # Add the new volunteers
-        for volunteer in volunteers:
-            # Do some sanity checks
-            if "name" not in volunteer:
-                logger.info("Skipping volunteer with no name")
-                continue
-            if "timestamp" not in volunteer:
-                logger.info("Skipping volunteer with no timestamp")
-                continue
-            if volunteer["name"] == "" or volunteer["timestamp"] == "":
-                logger.info("Skipping volunteer with empty name, timestamp")
-                continue
-
-            volunteer["created_by"] = admin_name
-            volunteer["created_timestamp"] = datetime.now().isoformat()
-            volunteer_block.append(volunteer)
-        # Update the volunteer block with the new volunteers
-        doc.update({
-            "volunteers": volunteer_block
-        })
-
-    # Clear cache
-    get_single_hackathon_event.cache_clear()
-        
-    return Message(
-        "Added Hackathon Volunteers"
     )
 
 
