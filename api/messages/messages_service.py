@@ -1119,6 +1119,8 @@ def single_add_volunteer(event_id, json, volunteer_type, propel_id):
     # Add the volunteer
     doc = db.collection('volunteers').add(json)
     
+    get_volunteer_by_event.cache_clear()
+    
     return Message(
         "Added Hackathon Volunteer"
     )
