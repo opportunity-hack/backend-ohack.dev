@@ -7,6 +7,9 @@ from slack_sdk.models.blocks import SectionBlock
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
 from requests.exceptions import ConnectionError
+from cachetools import TTLCache, cached
+from ratelimit import limits, sleep_and_retry
+
 load_dotenv()
 
 SLACK_URL = safe_get_env_var("SLACK_WEBHOOK")
@@ -188,3 +191,48 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
         logger.error(e.response["error"])
         assert e.response["error"]
 
+
+
+
+# Assuming 50 calls per minute for Slack API
+CALLS = 50
+RATE_LIMIT = 60
+
+@sleep_and_retry
+@limits(calls=CALLS, period=RATE_LIMIT)
+def rate_limited_get_user_info(user_id):
+    client = get_client()
+    try:
+        result = client.users_info(user=user_id)
+        return result["user"]
+    except SlackApiError as e:
+        logger.error(f"Error fetching info for user {user_id}: {e}")
+        return None
+
+def get_user_info(user_ids):
+    """
+    Fetch user information for a list of Slack user IDs.
+    
+    :param user_ids: List of Slack user IDs (e.g., ["U049S78NLCA", "U049S78NLCB"])
+    :return: Dictionary of user information, keyed by user ID
+    """
+    client = get_client()    
+
+    # Fetch user info for all unique slack_ids
+    users_info = {}
+    for user_id in user_ids:
+        user_info = rate_limited_get_user_info(user_id)
+        if user_info:
+            users_info[user_id] = {
+                "id": user_info["id"],
+                "name": user_info["name"],
+                "real_name": user_info.get("real_name", ""),
+                "display_name": user_info["profile"].get("display_name", ""),
+                "email": user_info["profile"].get("email", ""),
+                "is_admin": user_info.get("is_admin", False),
+                "is_owner": user_info.get("is_owner", False),
+                "is_bot": user_info.get("is_bot", False),
+                "updated": user_info.get("updated", 0)
+            }
+
+    return users_info
