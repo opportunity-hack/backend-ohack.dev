@@ -1,5 +1,5 @@
 from common.utils import safe_get_env_var
-from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel
+from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel, get_user_info
 from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user,get_volunteer_from_db_by_event, get_user_by_user_id, get_recent_praises, get_praises_by_user_id
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo, get_all_repos, validate_github_username
@@ -1120,7 +1120,7 @@ def single_add_volunteer(event_id, json, volunteer_type, propel_id):
     doc = db.collection('volunteers').add(json)
     
     get_volunteer_by_event.cache_clear()
-    
+
     return Message(
         "Added Hackathon Volunteer"
     )
@@ -1289,11 +1289,24 @@ def save_praise(json):
 
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
-def get_all_praises():
-    
+def get_all_praises():    
     # Get the praises about user with user_id
     results = get_recent_praises()
 
+    # Get unique list of praise_sender and praise_receiver    
+    slack_ids = set()
+    for r in results:
+        slack_ids.add(r["praise_receiver"])
+        slack_ids.add(r["praise_sender"])
+
+    logger.info(f"SlackIDS: {slack_ids}")    
+    slack_user_info = get_user_info(slack_ids)
+    logger.info(f"Slack User Info; {slack_user_info}")
+
+    for r in results:
+        r['praise_receiver_details'] = slack_user_info[r['praise_receiver']]
+        r['praise_sender_details'] = slack_user_info[r['praise_sender']]
+    
     logger.info(f"Here are the 20 most recently written praises: {results}")
     return Message(results)    
 
@@ -1302,6 +1315,17 @@ def get_praises_about_user(user_id):
     
     # Get the praises about user with user_id
     results = get_praises_by_user_id(user_id)
+
+    slack_ids = set()
+    for r in results:
+        slack_ids.add(r["praise_receiver"])
+        slack_ids.add(r["praise_sender"])
+    logger.info(f"Slack IDs: {slack_ids}")
+    slack_user_info = get_user_info(slack_ids)
+    logger.info(f"Slack User Info: {slack_user_info}")
+    for r in results:
+        r['praise_receiver_details'] = slack_user_info[r['praise_receiver']]
+        r['praise_sender_details'] = slack_user_info[r['praise_sender']]
 
     logger.info(f"Here are all praises related to {user_id}: {results}")
     return Message(results)    
