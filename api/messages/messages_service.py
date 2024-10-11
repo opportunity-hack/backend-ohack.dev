@@ -4,6 +4,8 @@ from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo, get_all_repos, validate_github_username
 from api.messages.message import Message
+from google.cloud.exceptions import NotFound
+
 from services.users_service import get_propel_user_details_by_id, get_slack_user_from_propel_user_id, get_user_from_slack_id, save_user
 import json
 import uuid
@@ -2031,29 +2033,46 @@ def save_profile_metadata_old(propel_id, json):
 
     # Clear cache for get_profile_metadata
     get_profile_metadata_old.cache_clear()
+    get_user_by_id_old.cache_clear()
 
     return Message(
         "Saved Profile Metadata"
     )
 
 
+
 @cached(cache=TTLCache(maxsize=100, ttl=600), key=lambda id: id)
 def get_user_by_id_old(id):
-    logger.debug(f"Get User By ID: {id}")
+    logger.debug(f"Attempting to get user by ID: {id}")
     db = get_db()
     doc_ref = db.collection('users').document(id)
-    doc = doc_ref.get()
-    
-    if not doc.exists:
-        logger.debug(f"User with ID {id} not found")
-        return {}
-    
-    fields = ["name", "profile_image", "user_id", "nickname", "github"]
-    res = {k: doc.get(k) for k in fields if doc.get(k)}
-    res["id"] = doc.id
 
-    logger.debug(f"Get User By ID Result: {res}")
-    return res  
+    try:
+        doc = doc_ref.get()
+        if not doc.exists:
+            logger.warning(f"User with ID {id} not found")
+            return {}
+
+        fields = ["name", "profile_image", "user_id", "nickname", "github"]
+        res = {}
+        for field in fields:
+            try:
+                value = doc.get(field)
+                if value is not None:
+                    res[field] = value
+            except KeyError:
+                logger.info(f"Field '{field}' not found for user {id}")
+
+        res["id"] = doc.id
+        logger.debug(f"Successfully retrieved user data: {res}")
+        return res
+
+    except NotFound:
+        logger.error(f"Document with ID {id} not found in 'users' collection")
+        return {}
+    except Exception as e:
+        logger.error(f"Error retrieving user data for ID {id}: {str(e)}")
+        return {}
 
 
 @limits(calls=50, period=ONE_MINUTE)
