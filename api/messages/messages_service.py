@@ -2033,6 +2033,7 @@ def save_profile_metadata_old(propel_id, json):
 
     # Clear cache for get_profile_metadata
     get_profile_metadata_old.cache_clear()
+    get_user_by_id_old.cache_clear()
 
     return Message(
         "Saved Profile Metadata"
