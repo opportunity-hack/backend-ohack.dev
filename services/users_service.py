@@ -334,15 +334,31 @@ def get_volunteering_time(propel_id, start_date, end_date):
         return
 
     # Filter the volunteering data
-    volunteering = []
+    volunteeringActiveTime = []
     for v in user.volunteering:
         if "finalHours" in v:
             if start_date is not None and end_date is not None:
                 if v["timestamp"] >= start_date and v["timestamp"] <= end_date:
-                    volunteering.append(v)
+                    volunteeringActiveTime.append(v)
             else:
-                volunteering.append(v)
+                volunteeringActiveTime.append(v)
+
+    volunteeringCommittmentTime = []
+    for v in user.volunteering:
+        if "commitmentHours" in v:
+            if start_date is not None and end_date is not None:
+                if v["timestamp"] >= start_date and v["timestamp"] <= end_date:
+                    volunteeringCommittmentTime.append(v)
+            else:
+                volunteeringCommittmentTime.append(v)
     
-    total = sum([v["finalHours"] for v in volunteering])    
+    totalActiveHours = sum([v["finalHours"] for v in volunteeringActiveTime])    
+    totalCommitmentHours = sum([v["commitmentHours"] for v in volunteeringCommittmentTime]) 
+
+    # Merge volunteeringActiveTime and volunteeringCommittmentTime
+    # This is a bit of a hack but it is easier to do it this way than to try to do it in the frontend
+    allVolunteering = volunteeringActiveTime + volunteeringCommittmentTime
+
+    logger.debug(f"allVolunteering: {allVolunteering}  || volunteeringActiveTime: {volunteeringActiveTime} volunteeringCommittmentTime: {volunteeringCommittmentTime} Total Active Hours: {totalActiveHours} Total Commitment Hours: {totalCommitmentHours}")   
     
-    return volunteering, total
+    return allVolunteering, totalActiveHours, totalCommitmentHours

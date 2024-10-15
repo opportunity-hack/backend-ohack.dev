@@ -1812,7 +1812,7 @@ def get_problem_statement_list_old():
     logger.debug(results)        
     return { "problem_statements": results }
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=10))
 @limits(calls=100, period=ONE_MINUTE)
 def get_github_profile(github_username):
     logger.debug(f"Getting Github Profile for {github_username}")
