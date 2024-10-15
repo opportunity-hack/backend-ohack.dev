@@ -59,14 +59,15 @@ def save_volunteering_time():
 @auth.require_user
 def get_volunteering_time():        
     # Get url params
-    start_date = request.args.get('start_date')
-    end_date = request.args.get('end_date')
+    start_date = request.args.get('startDate')
+    end_date = request.args.get('endDate')
     
     if auth_user and auth_user.user_id:
-        volunteering, total = users_service.get_volunteering_time(auth_user.user_id, start_date, end_date)
+        allVolunteering, totalActiveHours, totalCommitmentHours = users_service.get_volunteering_time(auth_user.user_id, start_date, end_date)
         return {
-            "totalHours": total,
-            "volunteering": volunteering
+            "totalActiveHours": totalActiveHours,
+            "totalCommitmentHours": totalCommitmentHours,
+            "allVolunteering": allVolunteering            
         }
     else:
         return None
