@@ -1173,7 +1173,28 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
     return Message(
         "Updated Hackathon Volunteers"
     )
-    
+
+def create_hackathon(json):
+    db = get_db()  # this connects to our Firestore database
+    logger.debug("Hackathon Create")
+    send_slack_audit(action="create_hackathon", message="Creating", payload=json)
+
+    # Save payload for potential hackathon in the database under the hackathon_requests collection
+    doc_id = uuid.uuid1().hex
+    collection = db.collection('hackathon_requests')
+    insert_res = collection.document(doc_id).set(json)
+
+    if "contactEmail" in json and "contactName" in json:
+        send_welcome_email(json["contactName"], json["contactEmail"])
+
+    send_slack(
+        message=":rocket: New Hackathon Request :rocket: with json: " + str(json), channel="log-hackathon-requests", icon_emoji=":rocket:")        
+    logger.debug(f"Insert Result: {insert_res}")
+
+    return Message(
+        "Created Hackathon"
+    )
+
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_hackathon(json):
@@ -1583,6 +1604,7 @@ def send_welcome_email(name, email):
     params = {
         "from": "Opportunity Hack <welcome@apply.ohack.dev>",
         "to": f"{name} <{email}>",
+        "bcc": "greg@ohack.org",
         "subject": subject,
         "html": html_content,
     }

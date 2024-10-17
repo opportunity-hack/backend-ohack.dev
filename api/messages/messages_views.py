@@ -29,6 +29,7 @@ from api.messages.messages_service import (
     single_add_volunteer,
     get_single_hackathon_id,
     save_hackathon,
+    create_hackathon,
     update_hackathon_volunteers,
     get_teams_list,
     get_team,
@@ -467,4 +468,9 @@ def get_giveaway():
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_get_all_giveaways():
     return get_all_giveaways()
+
+
+@bp.route("/create-hackathon", methods=["POST"])
+def submit_create_hackathon():
+    return vars(create_hackathon(request.get_json()))
     
