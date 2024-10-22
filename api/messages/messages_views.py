@@ -144,11 +144,17 @@ def update_npo_application_api(application_id):
 
 @bp.route("/hackathon", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def add_hackathon():
-    return vars(save_hackathon(request.get_json()))
+    if auth_user and auth_user.user_id:
+        return vars(save_hackathon(request.get_json(), auth_user.user_id))
 
-
+@bp.route("/hackathon", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_hackathon():
+    if auth_user and auth_user.user_id:
+        return vars(save_hackathon(request.get_json(), auth_user.user_id))
 
 
 @bp.route("/hackathons", methods=["GET"])
