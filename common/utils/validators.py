@@ -1,6 +1,7 @@
 import re
 from urllib.parse import urlparse
 import logging
+from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,28 @@ def sanitize_string(input_string, max_length=None):
     return sanitized
 
 # You can add more validator functions as needed
+
+def validate_hackathon_data(data):
+    required_fields = ["title", "description", "location", "start_date", "end_date", "type", "image_url", "event_id"]
+    for field in required_fields:
+        if field not in data or not data[field]:
+            raise ValueError(f"Missing required field: {field}")
+
+    # Validate dates
+    try:
+        start_date = datetime.fromisoformat(data["start_date"])
+        end_date = datetime.fromisoformat(data["end_date"])
+        if end_date <= start_date:
+            raise ValueError("End date must be after start date")
+    except ValueError as e:
+        raise ValueError(f"Invalid date format: {str(e)}")
+
+    # Validate constraints
+    constraints = data.get("constraints", {})
+    if not all(isinstance(constraints.get(k), int) for k in ["max_people_per_team", "max_teams_per_problem", "min_people_per_team"]):
+        raise ValueError("Constraints must be integers")
+
+    # Add more specific validations as needed
 
 if __name__ == "__main__":
     # Simple tests

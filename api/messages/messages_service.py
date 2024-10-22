@@ -19,9 +19,8 @@ from firebase_admin.firestore import DocumentReference, DocumentSnapshot
 from firebase_admin import credentials, firestore
 import requests
 
-from common.utils.validators import validate_email, validate_url
+from common.utils.validators import validate_email, validate_url, validate_hackathon_data
 from common.exceptions import InvalidInputError
-
 
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
@@ -1196,60 +1195,104 @@ def create_hackathon(json):
     )
 
 
+
+
+
 @limits(calls=50, period=ONE_MINUTE)
-def save_hackathon(json):
-    db = get_db()  # this connects to our Firestore database
-    logger.debug("Hackathon Save")
-    send_slack_audit(action="save_hackathon", message="Saving", payload=json)
-    # TODO: In this current form, you will overwrite any information that matches the same NPO name
+def save_hackathon(json_data, propel_id):
+    db = get_db()
+    logger.info("Hackathon Save/Update initiated")
+    logger.debug(json_data)
+    send_slack_audit(action="save_hackathon", message="Saving/Updating", payload=json_data)
 
-    doc_id = uuid.uuid1().hex
+    try:
+        # Validate input data
+        validate_hackathon_data(json_data)
 
-    devpost_url = json["devpost_url"]
-    location = json["location"]
-    
-    start_date = json["start_date"]
-    end_date = json["end_date"]
-    event_type = json["event_type"]
-    image_url = json["image_url"]
-    
-    temp_nonprofits = json["nonprofits"]
-    temp_teams = json["teams"]
+        # Check if this is an update or a new hackathon
+        doc_id = json_data.get("id") or uuid.uuid1().hex
+        is_update = "id" in json_data
 
-    # We need to convert this from just an ID to a full object
-    # Ref: https://stackoverflow.com/a/59394211
-    nonprofits = []
-    for ps in temp_nonprofits:
-        nonprofits.append(db.collection(
-            "nonprofits").document(ps))
+        # Prepare data for Firestore
+        hackathon_data = {
+            "title": json_data["title"],
+            "description": json_data["description"],
+            "location": json_data["location"],
+            "start_date": json_data["start_date"],
+            "end_date": json_data["end_date"],
+            "type": json_data["type"],
+            "image_url": json_data["image_url"],
+            "event_id": json_data["event_id"],
+            "links": json_data.get("links", []),
+            "countdowns": json_data.get("countdowns", []),
+            "constraints": json_data.get("constraints", {
+                "max_people_per_team": 5,
+                "max_teams_per_problem": 10,
+                "min_people_per_team": 2,
+            }),
+            "donation_current": json_data.get("donation_current", {
+                "food": "0",
+                "prize": "0",
+                "swag": "0",
+                "thank_you": "",
+            }),
+            "donation_goals": json_data.get("donation_goals", {
+                "food": "0",
+                "prize": "0",
+                "swag": "0",
+            }),
+            "last_updated": firestore.SERVER_TIMESTAMP,
+            "last_updated_by": propel_id,
+        }
 
-    teams = []
-    for ps in temp_teams:
-        teams.append(db.collection(
-            "teams").document(ps))
+        # Handle nonprofits and teams
+        if "nonprofits" in json_data:
+            hackathon_data["nonprofits"] = [db.collection("nonprofits").document(npo) for npo in json_data["nonprofits"]]
+        if "teams" in json_data:
+            hackathon_data["teams"] = [db.collection("teams").document(team) for team in json_data["teams"]]
+
+        # Use a transaction for atomic updates
+        @firestore.transactional
+        def update_hackathon(transaction):
+            hackathon_ref = db.collection('hackathons').document(doc_id)
+            if is_update:
+                # For updates, we need to merge with existing data
+                transaction.set(hackathon_ref, hackathon_data, merge=True)
+            else:
+                # For new hackathons, we can just set the data
+                hackathon_data["created_at"] = firestore.SERVER_TIMESTAMP
+                hackathon_data["created_by"] = propel_id
+                transaction.set(hackathon_ref, hackathon_data)
+
+        # Run the transaction
+        transaction = db.transaction()
+        update_hackathon(transaction)
+
+        # Clear cache for get_single_hackathon_event
+        get_single_hackathon_event.cache_clear()
+
+        # Clear cache for get_hackathon_list
+        doc_to_json.cache_clear()
 
 
-    collection = db.collection('hackathons')
-
-    insert_res = collection.document(doc_id).set({
-        "links":{
-            "name":"DevPost",
-            "link":"devpost_url"
-        },        
-        "location": location,
-        "start_date": start_date,
-        "end_date": end_date,                    
-        "type": event_type,
-        "image_url": image_url,
-        "nonprofits": nonprofits,
-        "teams": teams
-    })
-
-    logger.debug(f"Insert Result: {insert_res}")
-
-    return Message(
+        logger.info(f"Hackathon {'updated' if is_update else 'created'} successfully. ID: {doc_id}")
+        return Message(
         "Saved Hackathon"
     )
+
+        return {
+            "message": f"Hackathon {'updated' if is_update else 'saved'} successfully",
+            "id": doc_id
+        }
+
+    except ValueError as ve:
+        logger.error(f"Validation error: {str(ve)}")
+        return {"error": str(ve)}, 400
+    except Exception as e:
+        logger.error(f"Error saving/updating hackathon: {str(e)}")
+        return {"error": "An unexpected error occurred"}, 500
+    
+    
 
 
 # Ref: https://stackoverflow.com/questions/59138326/how-to-set-google-firebase-credentials-not-with-json-file-but-with-python-dict
