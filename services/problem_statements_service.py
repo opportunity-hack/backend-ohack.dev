@@ -149,7 +149,7 @@ def save_user_helping_status(user: User, d):
 
     return problem_statement
 
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=200, period=ONE_MINUTE)
 def get_problem_statements():
     return fetch_problem_statements()
 
