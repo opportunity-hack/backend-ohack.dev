@@ -4,6 +4,7 @@ from services import users_service
 from services import problem_statements_service as service
 from common.utils import safe_get_env_var
 from common.auth import auth, auth_user
+import logging
 
 from flask import (
     Blueprint,
@@ -11,15 +12,24 @@ from flask import (
     g
 )
 
+logger = logging.getLogger("myapp")
+logger.setLevel(logging.DEBUG)
+
+
 bp_name = 'api-problem-statements'
 bp_url_prefix = '/api/problem-statements' #TODO: Breaking API change w/ frontend
 bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
 
 # Problem Statement (also called Project) Related Endpoints
 @bp.route("", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def add_problem_statement():
+
+    logger.info("add_problem_statement")
     res: ProblemStatement | None = service.save_problem_statement(request.get_json())
     if res is not None:
         return res.serialize()
@@ -33,7 +43,10 @@ def get_problem_statments():
     for p in temp:
         result.append(p.serialize())
 
-    return result
+    print(f"get_problem_statments {result}")
+    return {
+        "problem_statements": result
+    }
 
 @bp.route("/<id>", methods=["GET"])
 def get_single_problem(id):

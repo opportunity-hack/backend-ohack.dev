@@ -64,7 +64,10 @@ class ProblemStatement:
                 all_helping = []
 
                 for h in self.helping:
-                    all_helping.append(h.serialize())
+                    if isinstance(h, dict):
+                        all_helping.append(h)
+                    else:
+                        all_helping.append(h.serialize())
 
                 d['helping'] = all_helping
 
@@ -82,7 +85,10 @@ class ProblemStatement:
                 all_references = []
 
                 for r in self.references:
-                    all_references.append(r.serialize())
+                    if isinstance(r, dict):
+                        all_references.append(r)
+                    else:
+                        all_references.append(r.serialize())
 
                 d['references'] = all_references
 
@@ -94,29 +100,42 @@ class ProblemStatement:
 
         return d
     
+    def __str__(self):
+        # Return all the properties of the object
+        props = dir(self)
+        s = ''
+        for m in props:
+            if not m.startswith('__'):
+                p = getattr(self, m)
+                if not callable(p):
+                    s += f'{m}={p}, '
+
+        return s
+                    
+    
 class Helping:
-    user_db_id = None
-    problem_statement_id = None
-    mentor_or_hacker = None
-    timestamp = None
-    user: User = None
+    user_id = None
+    slack_user = None
+    timestamp = None    
+    type = None
+    # user: User = None # We don't want to serialize this because it could be expensive
 
     @classmethod
     def deserialize(cls, d):
         h = Helping()
-        h.user_db_id = d['user_db_id']
-        h.problem_statement_id = d['problem_statement_id']
-        h.mentor_or_hacker = d['mentor_or_hacker']
-        h.timestamp = d['timestamp']
+        h.user_id = d['user']
+        h.slack_user = d['slack_user']        
+        h.type = d['type']
+        h.timestamp = d['timestamp']        
         return h
     
     def serialize(self):
         d = {}
         props = dir(self)     
         for m in props:
-            if m == 'user':
-                d['user'] = self.user.serialize()
-            elif not m.startswith('__'): # No magic please
+            # if m == 'user':
+            #     d['user'] = self.user.serialize()
+            if not m.startswith('__'): # No magic please
                 p = getattr(self, m)
                 if not callable(p):
                     d[m] = p

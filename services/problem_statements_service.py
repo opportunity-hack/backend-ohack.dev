@@ -13,20 +13,21 @@ import uuid
 from services import users_service
 from common.log import get_log_level
 
-logger = logging.getLogger("ohack")
-logger.setLevel(get_log_level())
+logger = logging.getLogger("myapp")
+logger.setLevel(logging.DEBUG)
 
 #TODO consts file?
 ONE_MINUTE = 1*60
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_problem_statement(d):
-    logger.debug("Problem Statement Save")
-
     p = ProblemStatement() # Don't use ProblemStatement.deserialize here. We don't have an id yet.
     p.update(d)
 
-    p = insert_problem_statement(p)
+    if p.id is None:
+        p = insert_problem_statement(p)
+    else:
+        p = update_problem_statement(p)
 
     send_slack_audit(action="save_problem_statement",
                      message="Saving", payload=d)
@@ -148,7 +149,7 @@ def save_user_helping_status(user: User, d):
 
     return problem_statement
 
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=200, period=ONE_MINUTE)
 def get_problem_statements():
     return fetch_problem_statements()
 

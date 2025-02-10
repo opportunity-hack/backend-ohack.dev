@@ -15,8 +15,8 @@ import uuid
 import logging
 from common.log import get_log_level
 
-logger = logging.getLogger("ohack")
-logger.setLevel(get_log_level())
+logger = logging.getLogger("myapp")
+logger.setLevel(logging.DEBUG)
 
 mockfirestore = None
 
@@ -294,7 +294,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         db = self.get_db()
 
         # TODO: In this current form, you will overwrite any information that matches the same NPO name
-        
+        logger.info(f"Inserting problem statement: {problem_statement}")
+        print(f"Inserting problem statement: {problem_statement}")
         problem_statement.id = uuid.uuid1().hex
             
         collection = db.collection('problem_statements')
@@ -314,20 +315,27 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     
     def update_problem_statement(self, problem_statement: ProblemStatement):
         db = self.get_db()
-
-        # TODO: In this current form, you will overwrite any information that matches the same NPO name
+        print(f"Updating problem statement: {problem_statement}")
             
         collection = db.collection('problem_statements')
+        
+        # Only include fields that exist in the problem_statement
+        update_data = {}
+        if hasattr(problem_statement, 'description'):
+            update_data['description'] = problem_statement.description
+        if hasattr(problem_statement, 'first_thought_of'):
+            update_data['first_thought_of'] = problem_statement.first_thought_of
+        if hasattr(problem_statement, 'github'):
+            update_data['github'] = problem_statement.github
+        if hasattr(problem_statement, 'status'):
+            update_data['status'] = problem_statement.status
+        if hasattr(problem_statement, 'title'):
+            update_data['title'] = problem_statement.title
 
-        update_res = collection.document(problem_statement.id).set({
-            "description": problem_statement.description if 'description' in problem_statement else None,
-            "first_thought_of": problem_statement.first_thought_of if 'first_thought_of' in problem_statement else None,
-            "github": problem_statement.github if 'github' in problem_statement else None,
-            # "references": TODO: What is this
-            "status": problem_statement.status if 'status' in problem_statement else None        
-        })
+        # Use update() instead of set() to only modify specified fields
+        update_res = collection.document(problem_statement.id).update(update_data)
 
-        logger.debug(f"Insert Result: {update_res}")
+        logger.debug(f"Update Result: {update_res}")
 
         return problem_statement if update_res is not None else None
     
