@@ -23,6 +23,7 @@ class User:
 
     @classmethod
     def deserialize(cls, d):
+        print(f"User.deserialize {d}")
         u = User()
         u.id = d['id']
         u.email_address = d['email_address']
@@ -107,4 +108,11 @@ class User:
     
     def __str__(self):
         # Print all properties
-        return str(vars(self))
+        props = dir(self)
+        s = ''
+        for m in props:
+            if not m.startswith('__'):
+                p = getattr(self, m)
+                if not callable(p):
+                    s += f'{m}={p}, '
+        return s
