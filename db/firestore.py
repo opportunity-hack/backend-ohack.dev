@@ -38,9 +38,19 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
 def convert_to_entity(doc: firestore.firestore.DocumentSnapshot, cls):
-    d = doc.to_dict()
+    d = doc.to_dict() or {}
     d['id'] = doc.id
+    if 'events' in d:
+        event_refs = d['events']
+        d['events'] = [convert_document_reference_to_entity(ref, Hackathon) for ref in event_refs]        
     return cls.deserialize(d)
+
+def convert_document_reference_to_entity(doc: firestore.firestore.DocumentReference, cls):
+    d = doc.get().to_dict()
+    if d is not None:
+        d['id'] = doc.id
+        return cls.deserialize(d)
+    return None
 
 class FirestoreDatabaseInterface(DatabaseInterface):
     def get_db(self):
@@ -260,17 +270,13 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     # ----------------------- Problem Statements --------------------------------------------
     
     def fetch_problem_statements(self):
-        results = []
         db = self.get_db()
-        docs = db.collection('problem_statements').stream()  # steam() gets all records
-        if docs is None:
-            pass
-        else:
-            for doc in docs:
-                # doc is an instance of google.cloud.firestore_v1.base_document.DocumentSnapshot
-                results.append(convert_to_entity(doc, ProblemStatement))
-     
-        return results
+        try:
+            docs = db.collection('problem_statements').stream()
+            return [convert_to_entity(doc, ProblemStatement) for doc in docs or []]
+        except Exception as e:
+            logger.error(f"Error fetching problem statements: {e}")
+            return []
 
     def fetch_problem_statement(self, id):
         logger.debug(f'fetch_problem_statement :{id}')
@@ -279,6 +285,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         try:
             raw = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
             res = convert_to_entity(raw, ProblemStatement) if raw is not None and raw.exists else None
+            print(f"res {res}")
+            
+
         except KeyError as e:
             # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
             logger.debug(f'fetch_problem_statement_by_id error: {e}')
@@ -331,6 +340,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             update_data['status'] = problem_statement.status
         if hasattr(problem_statement, 'title'):
             update_data['title'] = problem_statement.title
+        if hasattr(problem_statement, 'references'):
+            update_data['references'] = problem_statement.references
 
         # Use update() instead of set() to only modify specified fields
         update_res = collection.document(problem_statement.id).update(update_data)

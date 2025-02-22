@@ -3,36 +3,97 @@ from ratelimit import limits
 from common.utils.slack import invite_user_to_channel, send_slack, send_slack_audit
 from model.problem_statement import ProblemStatement
 from model.user import User
-from db.db import delete_helping, fetch_hackathon, fetch_problem_statements, insert_helping, delete_problem_statement, fetch_problem_statement, insert_problem_statement, update_problem_statement, insert_problem_statement_hackathon, update_problem_statement_hackathons
+from db.db import (delete_helping, fetch_hackathon, fetch_problem_statements,
+                  insert_helping, delete_problem_statement, fetch_problem_statement,
+                  insert_problem_statement, update_problem_statement,
+                  insert_problem_statement_hackathon, update_problem_statement_hackathons)
 import logging
-import pytz
-# TODO: Do we need caching on problem statements
-# from cachetools import cached, LRUCache, TTLCache
+from cachetools import cached, TTLCache
 from cachetools.keys import hashkey
 import uuid
 from services import users_service
 from common.log import get_log_level
+from common.exceptions import InvalidInputError
 
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.DEBUG)
 
-#TODO consts file?
-ONE_MINUTE = 1*60
+ONE_MINUTE = 60
+CACHE_TTL = 600  # 10 minutes
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_problem_statement(d):
-    p = ProblemStatement() # Don't use ProblemStatement.deserialize here. We don't have an id yet.
-    p.update(d)
+    """
+    Create or update a problem statement.
+    Raises InvalidInputError if validation fails.
+    """
+    try:
+        validate_problem_statement(d)
+        
+        p = ProblemStatement()
+        p.update(d)
 
-    if p.id is None:
-        p = insert_problem_statement(p)
-    else:
-        p = update_problem_statement(p)
+        if p.id is None:
+            p = insert_problem_statement(p)
+        else:
+            p = update_problem_statement(p)
 
-    send_slack_audit(action="save_problem_statement",
-                     message="Saving", payload=d)
+        # Clear relevant caches
+        get_problem_statement.cache_clear()
+        get_problem_statements.cache_clear()
 
-    return p
+        send_slack_audit(action="save_problem_statement",
+                        message="Saving", payload=d)
+
+        return p
+
+    except Exception as e:
+        logger.error(f"Error saving problem statement: {str(e)}")
+        raise
+
+def validate_problem_statement(data):
+    """Validate problem statement data"""
+    required_fields = ['title', 'description']
+    
+    for field in required_fields:
+        if field not in data or not data[field].strip():
+            raise InvalidInputError(f"Missing or empty required field: {field}")
+
+    # Add any additional validation logic here
+    return True
+
+@cached(cache=TTLCache(maxsize=100, ttl=CACHE_TTL))
+def get_problem_statement(id):
+    """Get a single problem statement by ID"""
+    logger.debug(f"get_problem_statement start id={id}")    
+    
+    problem_statement = fetch_problem_statement(id)
+    
+    if problem_statement is None:
+        logger.warning("get_problem_statement end (no results)")
+    else:                                
+        logger.info(f"get_problem_statement end (with result):{problem_statement}")
+        
+    return problem_statement
+
+def remove_problem_statement(id):
+    """Delete a problem statement"""
+    try:
+        result = delete_problem_statement(id)
+        
+        # Clear caches
+        get_problem_statement.cache_clear()
+        get_problem_statements.cache_clear()
+        
+        return result
+    except Exception as e:
+        logger.error(f"Error deleting problem statement: {str(e)}")
+        raise
+
+@cached(cache=TTLCache(maxsize=1, ttl=CACHE_TTL))
+def get_problem_statements():
+    """Get all problem statements"""
+    return fetch_problem_statements()
 
 @limits(calls=50, period=ONE_MINUTE)
 def update_problem_statement_fields(d):
@@ -48,23 +109,6 @@ def update_problem_statement_fields(d):
     else:
         return None
     
-# TODO: Do we need caching here?
-# @cached(cache=TTLCache(maxsize=100, ttl=600))
-def get_problem_statement(id):
-    logger.debug(f"get_problem_statement_by_id start project_id={id}")    
-    
-    problem_statement: ProblemStatement | None = fetch_problem_statement(id)
-    
-    if problem_statement is None:
-        logger.warning("get_problem_statement_by_id end (no results)")
-    else:                                
-        logger.info(f"get_problem_statement_by_id end (with result):{problem_statement}")
-        
-    return problem_statement
-
-def remove_problem_statement(id):
-    return delete_problem_statement(id)
-
 @limits(calls=100, period=ONE_MINUTE)
 def save_helping_status(propel_user_id, d):
     logger.info(f"save_helping_status {propel_user_id} // {d}")
@@ -148,10 +192,6 @@ def save_user_helping_status(user: User, d):
         problem_statement = delete_helping(problem_statement_id, user)
 
     return problem_statement
-
-@limits(calls=200, period=ONE_MINUTE)
-def get_problem_statements():
-    return fetch_problem_statements()
 
 # TODO: Look at reshaping JSON payload to be more natural. Do we actually need the event title?
 @limits(calls=100, period=ONE_MINUTE)

@@ -4,12 +4,14 @@ from services import users_service
 from services import problem_statements_service as service
 from common.utils import safe_get_env_var
 from common.auth import auth, auth_user
+from common.exceptions import InvalidInputError
 import logging
 
 from flask import (
     Blueprint,
     request,
-    g
+    g,
+    jsonify
 )
 
 logger = logging.getLogger("myapp")
@@ -28,35 +30,45 @@ def getOrgId(req):
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def add_problem_statement():
-
-    logger.info("add_problem_statement")
-    res: ProblemStatement | None = service.save_problem_statement(request.get_json())
-    if res is not None:
-        return res.serialize()
-    else:
-        return None
+    try:
+        result = service.save_problem_statement(request.get_json())
+        return jsonify(result.serialize()), 201
+    except InvalidInputError as e:
+        return jsonify({"error": str(e)}), 400
+    except Exception as e:
+        logger.error(f"Error in add_problem_statement: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
 @bp.route("", methods=["GET"])
-def get_problem_statments():    
-    result = []
-    temp = service.get_problem_statements()
-    for p in temp:
-        result.append(p.serialize())
-
-    print(f"get_problem_statments {result}")
-    return {
-        "problem_statements": result
-    }
+def get_problem_statements():    
+    try:
+        results = service.get_problem_statements()
+        return jsonify({
+            "problem_statements": [p.serialize() for p in results]
+        })
+    except Exception as e:
+        logger.error(f"Error in get_problem_statements: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
 
 @bp.route("/<id>", methods=["GET"])
 def get_single_problem(id):
-    res: ProblemStatement | None = service.get_problem_statment_by_id(id)
-    if res is not None:
-        return res.serialize()
-    else:
-        #TODO: proper 404 handling: https://flask.palletsprojects.com/en/2.1.x/errorhandling/#custom-error-pages
-        return None
-
+    try:
+        result = service.get_problem_statement(id)
+        if result is None:
+            return jsonify({"error": "Problem statement not found"}), 404
+            
+        # Properly serialize the problem statement and its related objects
+        serialized = result.serialize()
+        
+        # Handle linked hackathons if they exist, filtering out None values
+        if hasattr(result, 'events') and result.events:
+            serialized['events'] = [event.serialize() for event in result.events if event is not None]
+            
+        return jsonify(serialized)
+    except Exception as e:
+        logger.error(f"Error in get_single_problem: {str(e)}")
+        logger.debug(f"Problem statement data: {result}")  # Add debug logging
+        return jsonify({"error": "Internal server error"}), 500
 
 @auth.require_user
 @auth.require_org_member_with_permission("admin_permissions")
@@ -71,4 +83,4 @@ def update_problem_statement_events_link():
         return ps
     else:
         #TODO: proper 404 handling: https://flask.palletsprojects.com/en/2.1.x/errorhandling/#custom-error-pages
-        return None 
+        return None
