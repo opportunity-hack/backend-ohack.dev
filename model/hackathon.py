@@ -35,8 +35,7 @@ class Hackathon:
     
     def serialize(self):
         d = {}
-        props = dir(self)
-        print(f'props {props}') 
+        props = dir(self)        
         for m in props:
             if m == 'donation_goals':
                 p = getattr(self, m)

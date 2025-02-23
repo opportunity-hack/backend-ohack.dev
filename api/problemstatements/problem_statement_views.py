@@ -37,6 +37,8 @@ def add_problem_statement():
         return jsonify({"error": str(e)}), 400
     except Exception as e:
         logger.error(f"Error in add_problem_statement: {str(e)}")
+        # Log stack trace for debugging
+        logger.debug(e, exc_info=True)
         return jsonify({"error": "Internal server error"}), 500
 
 @bp.route("", methods=["GET"])

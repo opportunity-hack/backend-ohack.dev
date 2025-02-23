@@ -66,7 +66,14 @@ class ProblemStatement:
         
         # Handle events - filter out None values and serialize remaining events
         if hasattr(self, 'events') and self.events:
-            d['events'] = [event.serialize() for event in self.events if event is not None]
+            d['events'] = []
+            for event in self.events:
+                if event is not None:
+                    if isinstance(event, dict):
+                        print(f"Event is already a dict: {event}")
+                        d['events'].append(event)
+                    else:
+                        d['events'].append(event.serialize())
         else:
             d['events'] = []
 

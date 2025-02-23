@@ -276,6 +276,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             return [convert_to_entity(doc, ProblemStatement) for doc in docs or []]
         except Exception as e:
             logger.error(f"Error fetching problem statements: {e}")
+            # Print full stack trace
+            logger.error(e, exc_info=True)
+            
             return []
 
     def fetch_problem_statement(self, id):
