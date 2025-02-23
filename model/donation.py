@@ -9,9 +9,9 @@ class DonationGoals:
         g = DonationGoals()
         g.id = d['id'] if 'id' in d else None # bit of a weird one as donation stuff is just part of an aggregate structure which is a hackathon
                                                 # therefore, donaion data coming from firebase won't actually have an id
-        g.food = d['food']
-        g.swag = d['swag']
-        g.prize = d['prize']
+        g.food = d['food'] if 'food' in d else 0
+        g.swag = d['swag'] if 'swag' in d else 0
+        g.prize = d['prize'] if 'prize' in d else 0
         return g
 
     def serialize(self):
@@ -38,10 +38,10 @@ class CurrentDonations:
         c = CurrentDonations()
         c.id = d['id'] if 'id' in d else None # bit of a weird one as donation stuff is just part of an aggregate structure which is a hackathon
                                                 # therefore, donaion data coming from firebase won't actually have an id
-        c.food = d['food']
-        c.swag = d['swag']
-        c.prize = d['prize']
-        c.thank_you = d['thank_you']
+        c.food = d['food'] if 'food' in d else 0
+        c.swag = d['swag'] if 'swag' in d else 0
+        c.prize = d['prize'] if 'prize' in d else 0
+        c.thank_you = d['thank_you'] if 'thank_you' in d else ''
         return c
 
     def serialize(self):
