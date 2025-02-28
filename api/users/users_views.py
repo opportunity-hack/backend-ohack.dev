@@ -13,6 +13,10 @@ bp_name = 'api-users'
 bp_url_prefix = '/api/users' #TODO: Breaking API change w/ frontend
 bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
 
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
+
 
 # Used to provide profile details - user must be logged in
 @bp.route("/profile", methods=["GET"])
@@ -73,4 +77,20 @@ def get_volunteering_time():
         return None
     
     
+@bp.route("/admin/volunteering", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_all_volunteering_time():        
+    # Get url params
+    start_date = request.args.get('startDate')
+    end_date = request.args.get('endDate')
     
+    if auth_user and auth_user.user_id:
+        allVolunteering, totalActiveHours, totalCommitmentHours = users_service.get_all_volunteering_time(start_date, end_date)
+        return {
+            "totalActiveHours": totalActiveHours,
+            "totalCommitmentHours": totalCommitmentHours,
+            "volunteerSessions": allVolunteering            
+        }
+    else:
+        return None
