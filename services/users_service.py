@@ -10,6 +10,9 @@ import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
 from common.log import get_log_level
+import uuid
+
+
 
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.INFO)
@@ -320,7 +323,6 @@ def save_volunteering_time(propel_id, json):
 
     return user
 
-
 def get_volunteering_time(propel_id, start_date, end_date):
     logger.info(f"Get Volunteering Time for {propel_id} {start_date} {end_date}")
     slack_user = get_slack_user_from_propel_user_id(propel_id)
@@ -362,3 +364,61 @@ def get_volunteering_time(propel_id, start_date, end_date):
     logger.debug(f"allVolunteering: {allVolunteering}  || volunteeringActiveTime: {volunteeringActiveTime} volunteeringCommittmentTime: {volunteeringCommittmentTime} Total Active Hours: {totalActiveHours} Total Commitment Hours: {totalCommitmentHours}")   
     
     return allVolunteering, totalActiveHours, totalCommitmentHours
+
+def get_all_volunteering_time(start_date=None, end_date=None):
+    logger.info(f"Get All Volunteering Time for start: {start_date} end: {end_date}")
+
+    # Get all users
+    users = fetch_users()
+
+    all_volunteering = []
+    total_active_hours = 0
+    total_commitment_hours = 0
+
+    for user in users:
+        # Filter the volunteering data
+        for v in user.volunteering:
+            # Create a copy of the volunteering record to add user information
+            session_copy = v.copy() if isinstance(v, dict) else dict(v)
+            
+            # Add user information to each volunteering record
+            session_copy["userName"] = user.name if hasattr(user, 'name') else "Unknown User"
+            session_copy["userId"] = user.id 
+            session_copy["email"] = user.email_address if hasattr(user, 'email_address') else "N/A"
+            
+            # Track hours based on session type
+            if "finalHours" in session_copy:
+                if start_date is not None and end_date is not None:
+                    if session_copy["timestamp"] >= start_date and session_copy["timestamp"] <= end_date:
+                        total_active_hours += float(session_copy["finalHours"])
+                        all_volunteering.append(session_copy)
+                else:
+                    total_active_hours += float(session_copy["finalHours"])
+                    all_volunteering.append(session_copy)
+            
+            elif "commitmentHours" in session_copy:
+                if start_date is not None and end_date is not None:
+                    if session_copy["timestamp"] >= start_date and session_copy["timestamp"] <= end_date:
+                        total_commitment_hours += float(session_copy["commitmentHours"])
+                        all_volunteering.append(session_copy)
+                else:
+                    total_commitment_hours += float(session_copy["commitmentHours"])
+                    all_volunteering.append(session_copy)
+
+    # Process the results to ensure consistent structure
+    processed_volunteering = []
+    for session in all_volunteering:
+        # Make sure the session has all required fields with proper types
+        processed_session = {
+            **session,
+            "timestamp": session.get("timestamp", datetime.now().isoformat()),
+            "commitmentHours": float(session.get("commitmentHours", 0)),
+            "finalHours": float(session.get("finalHours", 0)),
+            "userName": session.get("userName", "Unknown User"),
+            "userId": session.get("userId", f"unknown-{uuid.uuid4()}"),
+            "email": session.get("email", "N/A"),
+            "reason": session.get("reason", "")
+        }
+        processed_volunteering.append(processed_session)
+    
+    return processed_volunteering, total_active_hours, total_commitment_hours
