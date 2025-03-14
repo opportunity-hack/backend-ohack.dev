@@ -10,6 +10,7 @@ from services.users_service import get_propel_user_details_by_id, get_slack_user
 import json
 import uuid
 from datetime import datetime, timedelta
+import pytz
 import time
 from functools import wraps
 
@@ -1373,7 +1374,7 @@ def save_praise(json):
             return Message("Missing field")
         
     logger.debug(f"Detected required fields, attempting to save praise")
-    json["timestamp"] = datetime.now().isoformat()
+    json["timestamp"] = datetime.now(pytz.utc).astimezone().isoformat()
     upsert_praise(json)
 
     logger.info("Updated praise successfully")
