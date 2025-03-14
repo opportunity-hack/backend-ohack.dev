@@ -10,6 +10,7 @@ from services.users_service import get_propel_user_details_by_id, get_slack_user
 import json
 import uuid
 from datetime import datetime, timedelta
+import pytz
 import time
 from functools import wraps
 
@@ -292,7 +293,7 @@ def get_hackathon_list(is_current_only=None):
         target_date_str = target_date.strftime("%Y-%m-%d")
         logger.debug(f"Querying previous events ({target_date_str} <= end_date <= {today_str})")
         query = query.where("end_date", ">=", target_date_str).where("end_date", "<=", today_str)
-        query = query.order_by("end_date", direction=firestore.Query.DESCENDING).limit(20)
+        query = query.order_by("end_date", direction=firestore.Query.DESCENDING).limit(50)
     
     else:
         query = query.order_by("start_date")
@@ -1373,7 +1374,7 @@ def save_praise(json):
             return Message("Missing field")
         
     logger.debug(f"Detected required fields, attempting to save praise")
-    json["timestamp"] = datetime.now().isoformat()
+    json["timestamp"] = datetime.now(pytz.utc).astimezone().isoformat()
     upsert_praise(json)
 
     logger.info("Updated praise successfully")

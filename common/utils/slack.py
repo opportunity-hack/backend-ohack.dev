@@ -228,7 +228,6 @@ def get_user_info(user_ids):
                 "name": user_info["name"],
                 "real_name": user_info.get("real_name", ""),
                 "display_name": user_info["profile"].get("display_name", ""),
-                "email": user_info["profile"].get("email", ""),
                 "is_admin": user_info.get("is_admin", False),
                 "is_owner": user_info.get("is_owner", False),
                 "is_bot": user_info.get("is_bot", False),
