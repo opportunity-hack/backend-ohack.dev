@@ -34,7 +34,6 @@ import resend
 import random
 
 
-
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.DEBUG)
 
@@ -164,9 +163,24 @@ def doc_to_json_recursive(doc=None):
     return d_json
 
 
+# Global variable to store singleton instance
+_db_client = None
+
 def get_db():
-    #mock_db = MockFirestore()
-    return firestore.client()
+    """
+    Returns a singleton instance of the Firestore client.
+    This prevents creating too many connections.
+    """
+    global _db_client
+    
+    if _db_client is None:
+        if safe_get_env_var("ENVIRONMENT") == "test":
+            from mockfirestore import MockFirestore
+            _db_client = MockFirestore()
+        else:
+            _db_client = firestore.client()
+            
+    return _db_client
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)
@@ -248,67 +262,86 @@ def get_single_npo(npo_id):
     return {}
 
 
+@cached(cache=TTLCache(maxsize=100, ttl=3600), key=lambda is_current_only: str(is_current_only))
 @limits(calls=200, period=ONE_MINUTE)
+@log_execution_time
 def get_hackathon_list(is_current_only=None):
-    logger.debug("Hackathon List Start")
+    """
+    Retrieve a list of hackathons based on specified criteria.
+    
+    Args:
+        is_current_only: Filter type - 'current', 'previous', or None for all hackathons
+        
+    Returns:
+        Dictionary containing list of hackathons with document references resolved
+    """
+    logger.debug(f"Hackathon List - Getting {is_current_only or 'all'} hackathons")
     db = get_db()
     
-    if is_current_only == "current":                
-        today = datetime.now()        
-        today_str = today.strftime("%Y-%m-%d")
-        logger.debug(
-            f"Looking for any event that finishes after today {today_str} for most current events only.")
-        docs = db.collection('hackathons').where("end_date", ">=", today_str).order_by("end_date", direction=firestore.Query.DESCENDING).stream()  # steam() gets all records
-    elif is_current_only == "previous": 
-        today = datetime.now()
-        today_str = today.strftime("%Y-%m-%d")
-
-        N_DAYS_LOOK_BACKWARD = 12*30*3 # 3 years
-        target_date = datetime.now() + timedelta(days=-N_DAYS_LOOK_BACKWARD)
+    # Prepare query based on filter type
+    query = db.collection('hackathons')
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    
+    if is_current_only == "current":
+        logger.debug(f"Querying current events (end_date >= {today_str})")
+        query = query.where("end_date", ">=", today_str).order_by("end_date", direction=firestore.Query.DESCENDING)
+    
+    elif is_current_only == "previous":
+        # Look back 3 years for previous events
+        target_date = datetime.now() + timedelta(days=-3*365)
         target_date_str = target_date.strftime("%Y-%m-%d")
-        logger.debug(
-            f"Looking for any event that finishes before today {target_date_str} for previous events only.")
-        docs = db.collection('hackathons').where("end_date", ">=", target_date_str).where("end_date", "<=", today_str).order_by("end_date", direction=firestore.Query.DESCENDING).limit(3).stream()  # steam() gets all records       
-    else:
-        docs = db.collection('hackathons').order_by("start_date").stream()  # steam() gets all records
+        logger.debug(f"Querying previous events ({target_date_str} <= end_date <= {today_str})")
+        query = query.where("end_date", ">=", target_date_str).where("end_date", "<=", today_str)
+        query = query.order_by("end_date", direction=firestore.Query.DESCENDING).limit(20)
     
-    
-    if docs is None:
-        logger.debug("Found no results, returning empty list")
-        return {[]}
     else:
-        logger.debug("Found results, processing...")
-        results = []
-        for doc in docs:
-            logger.debug(f"Processing doc {doc.id}")
-            d = doc_to_json(doc.id, doc)            
-            # If any value from the keys is a DocumentReference or DocumentSnapshot, call doc_to_json
-            for key in d.keys():
-                logger.debug(f"Checking key {key}")
-                #print type of key
-                logger.debug(f"Type of key {type(d[key])}")
-                
-                # If type is list, iterate through list and call doc_to_json
-                if isinstance(d[key], list):
-                    logger.debug(f"Found list for key {key}...")
-                    # Process all items in list and convert with doc_to_json if they are DocumentReference or DocumentSnapshot
-                    for i in range(len(d[key])):
-                        logger.debug(f"Processing list item {i}: {d[key][i]}")
-                        d[key][i] = doc_to_json_recursive(d[key][i])
-                                                                        
-                # If type is DocumentReference or DocumentSnapshot, call doc_to_json
-                elif isinstance(d[key], DocumentReference) or isinstance(d[key], DocumentSnapshot):
-                    logger.debug(f"Found DocumentReference or DocumentSnapshot for key {key}...")
-                    d[key] = doc_to_json_recursive(d[key])
-                    
-                              
-            results.append(d)     
+        query = query.order_by("start_date")
+    
+    # Execute query
+    try:
+        docs = query.stream()
+        results = _process_hackathon_docs(docs)
+        logger.debug(f"Retrieved {len(results)} hackathon results")
+        return {"hackathons": results}
+    except Exception as e:
+        logger.error(f"Error retrieving hackathons: {str(e)}")
+        return {"hackathons": [], "error": str(e)}
 
-    num_results = len(results)
-    logger.debug(f"Found {num_results} results")
-    logger.debug(f"Results: {results}")
-    logger.debug(f"Hackathon List End")
-    return {"hackathons": results}
+
+def _process_hackathon_docs(docs):
+    """
+    Process hackathon documents and resolve references.
+    
+    This helper function processes document references and nested objects
+    more efficiently without excessive logging.
+    
+    Args:
+        docs: Firestore document stream
+        
+    Returns:
+        List of processed hackathon documents with references resolved
+    """
+    if not docs:
+        return []
+    
+    results = []
+    for doc in docs:
+        try:
+            d = doc_to_json(doc.id, doc)
+            
+            # Process lists of references more efficiently
+            for key, value in d.items():
+                if isinstance(value, list):
+                    d[key] = [doc_to_json_recursive(item) for item in value]
+                elif isinstance(value, (DocumentReference, DocumentSnapshot)):
+                    d[key] = doc_to_json_recursive(value)
+            
+            results.append(d)
+        except Exception as e:
+            logger.error(f"Error processing hackathon doc {doc.id}: {str(e)}")
+            # Continue processing other docs instead of failing completely
+            
+    return results
 
 
 @limits(calls=2000, period=THIRTY_SECONDS)

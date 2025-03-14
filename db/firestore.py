@@ -52,12 +52,24 @@ def convert_document_reference_to_entity(doc: firestore.firestore.DocumentRefere
         return cls.deserialize(d)
     return None
 
+# Add a singleton client
+_firestore_client = None
+
 class FirestoreDatabaseInterface(DatabaseInterface):
     def get_db(self):
-        if safe_get_env_var("ENVIRONMENT") == "test":
-            return mockfirestore
+        """
+        Returns a singleton instance of the Firestore client.
+        This prevents creating too many connections.
+        """
+        global _firestore_client
         
-        return firestore.client()
+        if _firestore_client is None:
+            if safe_get_env_var("ENVIRONMENT") == "test":
+                _firestore_client = mockfirestore
+            else:
+                _firestore_client = firestore.client()
+                
+        return _firestore_client
     
     def get_default_badge(self):
         db = self.get_db()
