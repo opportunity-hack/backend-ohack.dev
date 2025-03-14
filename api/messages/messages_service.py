@@ -34,7 +34,6 @@ import resend
 import random
 
 
-
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.DEBUG)
 
@@ -164,9 +163,24 @@ def doc_to_json_recursive(doc=None):
     return d_json
 
 
+# Global variable to store singleton instance
+_db_client = None
+
 def get_db():
-    #mock_db = MockFirestore()
-    return firestore.client()
+    """
+    Returns a singleton instance of the Firestore client.
+    This prevents creating too many connections.
+    """
+    global _db_client
+    
+    if _db_client is None:
+        if safe_get_env_var("ENVIRONMENT") == "test":
+            from mockfirestore import MockFirestore
+            _db_client = MockFirestore()
+        else:
+            _db_client = firestore.client()
+            
+    return _db_client
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)

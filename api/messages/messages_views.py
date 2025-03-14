@@ -165,7 +165,7 @@ def list_hackathons():
     if arg != None and arg.lower() == "previous":
         return get_hackathon_list("previous")
     else:
-        return get_hackathon_list() #all
+        return get_hackathon_list("all") #all
 
 
 @bp.route("/hackathon/<event_id>/mentor", methods=["POST"])
