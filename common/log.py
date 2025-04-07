@@ -11,3 +11,8 @@ if 'GLOBAL_LOG_LEVEL' in os.environ:
 
 def get_log_level():
     return log_level
+
+def get_logger(name):
+    logger = logging.getLogger(name)
+    logger.setLevel(get_log_level())
+    return logger

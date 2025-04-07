@@ -324,14 +324,23 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             
         collection = db.collection('problem_statements')
 
-        insert_res = collection.document(problem_statement.id).set({
-            "title": problem_statement.title,
-            "description": problem_statement.description if 'description' in problem_statement else None,
-            "first_thought_of": problem_statement.first_thought_of if 'first_thought_of' in problem_statement else None,
-            "github": problem_statement.github if 'github' in problem_statement else None,
-            # "references": TODO: What is this
-            "status": problem_statement.status if 'status' in problem_statement else None        
-        })
+        insert_data = {
+            "title": problem_statement.title
+        }
+        
+        # Only include fields that exist in the problem_statement
+        if hasattr(problem_statement, 'description'):
+            insert_data['description'] = problem_statement.description
+        if hasattr(problem_statement, 'first_thought_of'):
+            insert_data['first_thought_of'] = problem_statement.first_thought_of
+        if hasattr(problem_statement, 'github'):
+            insert_data['github'] = problem_statement.github
+        if hasattr(problem_statement, 'status'):
+            insert_data['status'] = problem_statement.status
+        if hasattr(problem_statement, 'references'):
+            insert_data['references'] = problem_statement.references
+
+        insert_res = collection.document(problem_statement.id).set(insert_data)
 
         logger.debug(f"Insert Result: {insert_res}")
 

@@ -189,6 +189,22 @@ def add_single_volunteer(event_id):
     if auth_user and auth_user.user_id:
         return vars(single_add_volunteer(event_id, request.get_json(), "volunteer", auth_user.user_id))
 
+@bp.route("/hackathon/<event_id>/sponsor", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def add_single_sponsor(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(single_add_volunteer(event_id, request.get_json(), "sponsor", auth_user.user_id))
+
+@bp.route("/hackathon/<event_id>/hacker", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def add_single_hacker(event_id):
+    if auth_user and auth_user.user_id:
+        return vars(single_add_volunteer(event_id, request.get_json(), "hacker", auth_user.user_id))
+
+
+
 
 @bp.route("/hackathon/<event_id>", methods=["GET"])
 def get_single_hackathon_by_event(event_id):
@@ -205,6 +221,14 @@ def get_volunteer_judge_by_event_api(event_id):
 @bp.route("/hackathon/<event_id>/volunteer", methods=["GET"])
 def get_volunteer_volunteers_by_event_api(event_id):
     return (get_volunteer_by_event(event_id, "volunteer"))
+
+@bp.route("/hackathon/<event_id>/hacker", methods=["GET"])
+def get_volunteer_hacker_by_event_api(event_id):
+    return (get_volunteer_by_event(event_id, "hacker"))
+
+@bp.route("/hackathon/<event_id>/sponsor", methods=["GET"])
+def get_volunteer_sponsor_by_event_api(event_id):
+    return (get_volunteer_by_event(event_id, "sponsor"))
 
 # ------------------- PATCH ------------------- #
 @bp.route("/hackathon/<event_id>/mentor", methods=["PATCH"])
@@ -226,6 +250,18 @@ def update_judge_by_event_id(event_id):
 def update_volunteer_by_event_id(event_id):
     return vars(update_hackathon_volunteers(event_id, "volunteers", request.get_json(), auth_user.user_id))
 
+
+@bp.route("/hackathon/<event_id>/sponsor", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_sponsor_by_event_id(event_id):
+    return vars(update_hackathon_volunteers(event_id, "sponsors", request.get_json(), auth_user.user_id))
+
+@bp.route("/hackathon/<event_id>/hacker", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_hacker_by_event_id(event_id):
+    return vars(update_hackathon_volunteers(event_id, "hackers", request.get_json(), auth_user.user_id))
 
 @bp.route("/hackathon/id/<id>", methods=["GET"])
 def get_single_hackathon_by_id(id):

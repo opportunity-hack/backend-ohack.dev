@@ -35,7 +35,7 @@ import resend
 import random
 
 
-logger = logging.getLogger("myapp")
+logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
 
@@ -83,10 +83,7 @@ def log_execution_time(func):
 # Generically handle a DocumentSnapshot or a DocumentReference
 #@cached(cache=TTLCache(maxsize=1000, ttl=43200), key=hash_key)
 @cached(cache=LRUCache(maxsize=640*1024), key=hash_key)
-def doc_to_json(docid=None, doc=None, depth=0):
-    # Log
-    logger.debug(f"doc_to_json start docid={docid} doc={doc}")
-        
+def doc_to_json(docid=None, doc=None, depth=0):            
     if not docid:
         logger.debug("docid is NoneType")
         return
@@ -113,17 +110,17 @@ def doc_to_json(docid=None, doc=None, depth=0):
     # If any values in d_json is a list, add only the document id to the list for DocumentReference or DocumentSnapshot
     for key, value in d_json.items():
         if isinstance(value, list):
-            logger.debug(f"doc_to_json - key={key} value={value}")
+            #logger.debug(f"doc_to_json - key={key} value={value}")
             for i, v in enumerate(value):
                 logger.debug(f"doc_to_json - i={i} v={v}")
                 if isinstance(v, firestore.DocumentReference):
-                    logger.debug(f"doc_to_json - v is DocumentReference")
+                    #logger.debug(f"doc_to_json - v is DocumentReference")
                     value[i] = v.id
                 elif isinstance(v, firestore.DocumentSnapshot):
-                    logger.debug(f"doc_to_json - v is DocumentSnapshot")
+                    #logger.debug(f"doc_to_json - v is DocumentSnapshot")
                     value[i] = v.id
                 else:
-                    logger.debug(f"doc_to_json - v is not DocumentReference or DocumentSnapshot")
+                    #logger.debug(f"doc_to_json - v is not DocumentReference or DocumentSnapshot")
                     value[i] = v
             d_json[key] = value
     

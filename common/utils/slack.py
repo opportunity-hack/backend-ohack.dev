@@ -108,7 +108,22 @@ def get_client():
     client = WebClient(token=token)
     return client
 
-
+def get_slack_user_by_email(email):
+    """
+    Get Slack user by email address.
+    
+    :param email: Email address of the user
+    :return: User information if found, None otherwise
+    """
+    client = get_client()
+    try:
+        result = client.users_lookupByEmail(email=email)
+        return result["user"]
+    except SlackApiError as e:
+        logger.error(f"Error fetching user by email {email}: {e}")
+        return None
+    
+    
 def get_channel_id_from_channel_name(channel_name):
     # Get channel name
     client = get_client()

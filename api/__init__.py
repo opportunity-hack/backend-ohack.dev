@@ -70,6 +70,7 @@ from api.certificates import certificate_views
 from api.users import users_views
 from api.hearts import hearts_views
 from api.problemstatements import problem_statement_views
+from api.volunteers import volunteers_views
 
 from common.utils import safe_get_env_var
 import os
@@ -173,5 +174,6 @@ def create_app():
     app.register_blueprint(users_views.bp)
     app.register_blueprint(hearts_views.bp)
     app.register_blueprint(problem_statement_views.bp)
+    app.register_blueprint(volunteers_views.bp)
 
     return app
