@@ -56,6 +56,7 @@ def _error_response(message: str, status_code: int = 400) -> Tuple[Dict[str, Any
 # Generic route handlers
 def handle_submit(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, Any], int]:
     """Generic handler for volunteer application submission."""
+    logger.info(f"Submitting {volunteer_type} application for event {event_id}")
     try:
         volunteer_data = _process_request()
         
@@ -107,6 +108,8 @@ def handle_submit(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, A
 
 def handle_get(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, Any], int]:
     """Generic handler for retrieving volunteer application."""
+    logger.info(f"Getting {volunteer_type} application for event {event_id}")
+
     try:
         volunteer = get_volunteer_by_user_id(user.user_id, event_id, volunteer_type)
         
@@ -343,3 +346,45 @@ def admin_update_selection(user, org, volunteer_id):
     except Exception as e:
         logger.error(f"Error updating volunteer selection: {str(e)}")
         return _error_response(f"Failed to update selection status: {str(e)}")
+    
+# Generic hacker routes
+@bp.route('/hacker/application/<event_id>/submit', methods=['POST'])
+@auth.optional_user
+def submit_hacker_application(event_id):
+    """Submit a hacker application for a specific event."""
+    user = auth_user
+    
+    if not event_id:
+        return _error_response("Event ID is required", 400)
+    
+    return handle_submit(user, event_id, 'hacker')
+
+@bp.route('/hacker/application/<event_id>/update', methods=['POST'])
+@auth.optional_user
+def update_hacker_application(event_id):
+    """Update a hacker application for a specific event."""
+    user = auth_user
+    
+    if not event_id:
+        return _error_response("Event ID is required", 400)
+    
+    return handle_submit(user, event_id, 'hacker')
+
+@bp.route('/hacker/application/<event_id>', methods=['GET'])
+@auth.optional_user
+def get_hacker_application(event_id):
+    """Get a hacker application for a specific event."""
+    user = auth_user
+    user_id = request.args.get('userId')
+    
+    if not user and not user_id:
+        return _error_response("Authentication or userId required", 401)
+    
+    try:
+        # Use query param userId if provided, otherwise use authenticated user
+        effective_user = type('User', (), {'user_id': user_id}) if user_id else user
+        return handle_get(effective_user, event_id, 'hacker')
+    except Exception as e:
+        logger.error(f"Error retrieving hacker application: {str(e)}")
+        return _error_response(f"Failed to retrieve application: {str(e)}")
+    

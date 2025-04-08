@@ -12,11 +12,10 @@ from cachetools import cached, TTLCache
 from cachetools.keys import hashkey
 import uuid
 from services import users_service
-from common.log import get_log_level
+from common.log import get_logger
 from common.exceptions import InvalidInputError
 
-logger = logging.getLogger("myapp")
-logger.setLevel(logging.DEBUG)
+logger = get_logger(__name__)
 
 ONE_MINUTE = 60
 CACHE_TTL = 600  # 10 minutes
