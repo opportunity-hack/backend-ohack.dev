@@ -9,6 +9,8 @@ from ratelimiter import RateLimiter
 from db.db import get_db
 from common.utils.slack import get_slack_user_by_email
 from common.log import get_logger
+import os
+import requests
 
 logger = get_logger(__name__)
 
@@ -100,12 +102,43 @@ def get_volunteers_by_event(
     volunteers = list(query.limit(limit).offset(offset).stream())
     return [vol.to_dict() for vol in volunteers]
 
+# reCAPTCHA verification function
+def verify_recaptcha(token: str) -> bool:
+    """
+    Verify a reCAPTCHA token with Google's API.
+    
+    Args:
+        token: The reCAPTCHA token to verify
+        
+    Returns:
+        True if verification succeeded, False otherwise
+    """
+    recaptcha_key = os.environ.get('GOOGLE_CAPTCHA_SECRET_KEY')
+    if not recaptcha_key:
+        logger.warning("No GOOGLE_CAPTCHA_SECRET_KEY set, skipping verification")
+        return True
+        
+    url = "https://www.google.com/recaptcha/api/siteverify"
+    data = {
+        "secret": recaptcha_key,
+        "response": token
+    }
+    
+    try:
+        response = requests.post(url, data=data)
+        result = response.json()
+        return result.get("success", False)
+    except Exception as e:
+        logger.exception(f"Error verifying recaptcha: {e}")
+        return False
+
 def create_or_update_volunteer(
     user_id: str,
     event_id: str,
     email: str,
     volunteer_data: Dict[str, Any],
-    created_by: Optional[str] = None
+    created_by: Optional[str] = None,
+    recaptcha_token: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Create or update a volunteer record.
@@ -115,10 +148,17 @@ def create_or_update_volunteer(
         event_id: The event ID
         volunteer_data: The full volunteer data
         created_by: User who created the record (optional)
+        recaptcha_token: Google reCAPTCHA token for verification when user is not authenticated
         
     Returns:
         The created or updated volunteer record
     """
+    # If no user_id and recaptcha_token is provided, verify recaptcha
+    if not user_id and recaptcha_token:
+        if not verify_recaptcha(recaptcha_token):
+            logger.warning(f"reCAPTCHA verification failed for email: {email}")
+            return {"error": "reCAPTCHA verification failed"}
+    
     db = get_db()
     volunteer_type = volunteer_data.get('volunteer_type')
     

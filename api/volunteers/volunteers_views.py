@@ -91,13 +91,17 @@ def handle_submit(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, A
         # Set event_id
         volunteer_data['event_id'] = event_id
         
+        # Get recaptcha token if it exists
+        recaptcha_token = volunteer_data.pop('recaptchaToken', None)
+        
         # Create or update volunteer record
         result = create_or_update_volunteer(
             user_id=user_id,
             email=email,
             event_id=event_id,
             volunteer_data=volunteer_data,
-            created_by=user_id
+            created_by=user_id,
+            recaptcha_token=recaptcha_token
         )
         
         return _success_response(result, "Application submitted successfully")
