@@ -410,7 +410,40 @@ def get_teams_batch(json):
         # TODO: Return for a batch of team ids to speed up the frontend
 
 
-      
+@limits(calls=40, period=ONE_MINUTE)
+def get_npo_by_hackathon_id(id):
+    logger.debug(f"get_npo_by_hackathon_id start id={id}")    
+    db = get_db()      
+    doc = db.collection('hackathons').document(id)    
+    
+    if doc is None:
+        logger.warning("get_npo_by_hackathon_id end (no results)")
+        return {}
+    else:                        
+        result = doc_to_json(docid=doc.id, doc=doc)
+        if "nonprofits" in result:
+            nonprofits = []
+            for npo in result["nonprofits"]:
+                # Handle case where npo is a document reference (has 'id' attribute)
+                if hasattr(npo, 'id'):
+                    nonprofits.append(doc_to_json(doc=npo, docid=npo.id))
+                # Handle case where npo is a string (document ID)
+                elif isinstance(npo, str):
+                    npo_doc = db.collection('nonprofits').document(npo).get()
+                    if npo_doc.exists:
+                        nonprofits.append(doc_to_json(doc=npo_doc, docid=npo))
+                    else:
+                        logger.warning(f"Nonprofit with ID {npo} not found")
+                else:
+                    logger.warning(f"Unexpected nonprofit type: {type(npo)}")
+            result["nonprofits"] = nonprofits
+        else:
+            result["nonprofits"] = []
+        
+        logger.info(f"get_npo_by_hackathon_id end (with result):{result}")
+        return result
+    return {}    
+
 
 @limits(calls=20, period=ONE_MINUTE)
 def get_npo_list(word_length=30):

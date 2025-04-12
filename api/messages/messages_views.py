@@ -25,6 +25,7 @@ from api.messages.messages_service import (
     remove_npo,
     get_npo_list,
     get_single_npo,
+    get_npo_by_hackathon_id,
     get_single_hackathon_event,    
     single_add_volunteer,
     get_single_hackathon_id,
@@ -116,6 +117,11 @@ def delete_npo():
 def get_npos():
     return (get_npo_list())
 
+# Get nonprofits by hackathon
+@bp.route("/npos/hackathon/<id>", methods=["GET"])
+def get_npos_by_hackathon_id(id):
+    print(f"id: {id}")
+    return (get_npo_by_hackathon_id(id=id))
 
 @bp.route("/npo/<npo_id>", methods=["GET"])
 def get_npo(npo_id):
@@ -281,10 +287,11 @@ def get_batch_teams():
     return get_teams_batch(request.get_json())
 
 
-
 @bp.route("/team", methods=["POST"])
 @auth.require_user
 def add_team():
+    # This route is kept for backward compatibility
+    # New teams should use the /api/team/queue endpoint
     if auth_user and auth_user.user_id:
         return save_team(auth_user.user_id, request.get_json())
     else:
