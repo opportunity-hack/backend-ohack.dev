@@ -84,4 +84,9 @@ class ExternalServiceError(OHackBaseException):
         message = f"{service_name} service error: {message}"
         super().__init__(message)
 
+class InvalidUsageError(OHackBaseException):
+    """Exception raised for invalid usage of the API."""
+    def __init__(self, message="Invalid usage of the API"):
+        super().__init__(message)
+
 # You can add more custom exceptions as needed for your application

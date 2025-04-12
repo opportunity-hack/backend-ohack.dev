@@ -20,6 +20,9 @@ else:
     db = FirestoreDatabaseInterface()
 
 #Users
+def get_db():
+    return db.get_db()
+
 
 def fetch_user_by_user_id(user_id):
     u = db.fetch_user_by_user_id(user_id)
