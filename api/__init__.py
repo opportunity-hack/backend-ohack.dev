@@ -74,6 +74,7 @@ from api.volunteers import volunteers_views
 from api.validate import validate_views
 from api.teams import teams_views
 from api.contact import contact_views
+from api.leaderboard import leaderboard_views
 
 from common.utils import safe_get_env_var
 import os
@@ -181,5 +182,6 @@ def create_app():
     app.register_blueprint(validate_views.bp)
     app.register_blueprint(teams_views.bp)
     app.register_blueprint(contact_views.bp)
+    app.register_blueprint(leaderboard_views.bp)
 
     return app

@@ -177,3 +177,5 @@ def get_all_repos(hackathon_event_id):
             "created_at": repo.created_at,
             "updated_at": repo.updated_at            
         })
+    
+    return repo_list
