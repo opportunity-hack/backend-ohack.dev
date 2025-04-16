@@ -26,7 +26,7 @@ def _get_current_timestamp() -> str:
     az_timezone = pytz.timezone('US/Arizona')
     return datetime.now(az_timezone).isoformat()
 
-@ttl_cache(maxsize=100, ttl=600)
+@ttl_cache(maxsize=100, ttl=10)
 def get_volunteer_by_user_id(user_id: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
     """Get volunteer by user ID, event ID, and volunteer type."""
     db = get_db()
@@ -39,7 +39,7 @@ def get_volunteer_by_user_id(user_id: str, event_id: str, volunteer_type: str) -
         return volunteer.to_dict()
     return None
 
-@ttl_cache(maxsize=100, ttl=600)
+@ttl_cache(maxsize=100, ttl=10)
 def get_volunteer_by_email(email: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
     """Get volunteer by email, event ID, and volunteer type."""
     db = get_db()
