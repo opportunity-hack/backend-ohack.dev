@@ -180,6 +180,52 @@ def get_db():
             
     return _db_client
 
+
+def add_nonprofit_to_hackathon(json):
+    hackathonId = json["hackathonId"]
+    nonprofitId = json["nonprofitId"]
+
+    logger.info(f"Add Nonprofit to Hackathon Start hackathonId={hackathonId} nonprofitId={nonprofitId}")
+
+    db = get_db()
+    # Get the hackathon document
+    hackathon_doc = db.collection('hackathons').document(hackathonId)
+    # Get the nonprofit document
+    nonprofit_doc = db.collection('nonprofits').document(nonprofitId)
+    # Check if the hackathon document exists
+    if not hackathon_doc:
+        logger.warning(f"Add Nonprofit to Hackathon End (no results)")
+        return {
+            "message": "Hackathon not found"
+        }
+    # Check if the nonprofit document exists
+    if not nonprofit_doc:
+        logger.warning(f"Add Nonprofit to Hackathon End (no results)")
+        return {
+            "message": "Nonprofit not found"
+        }
+    # Get the hackathon document data
+    hackathon_data = hackathon_doc.get().to_dict()
+    # Add the nonprofit document reference to the hackathon document
+    if "nonprofits" not in hackathon_data:
+        hackathon_data["nonprofits"] = []
+    # Check if the nonprofit is already in the hackathon document
+    if nonprofit_doc in hackathon_data["nonprofits"]:
+        logger.warning(f"Add Nonprofit to Hackathon End (no results)")
+        return {
+            "message": "Nonprofit already in hackathon"
+        }
+    # Add the nonprofit document reference to the hackathon document
+    hackathon_data["nonprofits"].append(nonprofit_doc)
+    # Update the hackathon document
+    hackathon_doc.set(hackathon_data, merge=True)
+
+
+    return {
+        "message": "Nonprofit added to hackathon"
+    }
+
+
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
@@ -421,10 +467,6 @@ def get_npo_by_hackathon_id(id):
         return {}
     else:                        
         result = doc_to_json(docid=doc.id, doc=doc)
-        if "nonprofits" in result:
-            result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]   
-        else:
-            result["nonprofits"] = []
         
         logger.info(f"get_npo_by_hackathon_id end (with result):{result}")
         return result
