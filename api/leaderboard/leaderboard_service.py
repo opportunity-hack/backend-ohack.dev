@@ -29,14 +29,8 @@ def get_github_organizations(event_id: str) -> Dict[str, Any]:
         # Get the github_org from the hackathon document
         org_name = hackathon.get("github_org")
         if not org_name:
-            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)
-            
-            # Fallback for backward compatibility
-            if event_id == "2024_fall":
-                org_name = "2024-Arizona-Opportunity-Hack"
-                logger.warning("Using fallback GitHub organization for event ID: %s", event_id)
-            else:
-                return {"github_organizations": []}
+            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)    
+            return {"github_organizations": []}
         
         return {
             "github_organizations": [
@@ -102,14 +96,8 @@ def get_github_contributors(event_id: str) -> Dict[str, Any]:
         # Get the github_org from the hackathon document
         org_name = hackathon.get("github_org")
         if not org_name:
-            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)
-            
-            # Fallback for backward compatibility
-            if event_id == "2024_fall":
-                org_name = "2024-Arizona-Opportunity-Hack"
-                logger.warning("Using fallback GitHub organization for event ID: %s", event_id)
-            else:
-                return {"github_contributors": []}
+            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)            
+            return {"github_contributors": []}
         
         db = get_db()
         
@@ -158,14 +146,8 @@ def get_github_achievements(event_id: str) -> List[Dict]:
         # Get the github_org from the hackathon document
         org_name = hackathon.get("github_org")
         if not org_name:
-            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)
-            
-            # Fallback for backward compatibility
-            if event_id == "2024_fall":
-                org_name = "2024-Arizona-Opportunity-Hack"
-                logger.warning("Using fallback GitHub organization for event ID: %s", event_id)
-            else:
-                return []
+            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)                    
+            return []
         
         db = get_db()
 
@@ -487,8 +469,8 @@ def get_leaderboard_analytics(event_id: str, contributors: List[Dict], achieveme
         Dictionary containing leaderboard analytics
     """
     # Default values in case we can't find the data
-    event_name = "Arizona Opportunity Hackathon 2024"
-    github_org = "2024-Arizona-Opportunity-Hack"
+    event_name = None
+    github_org = None
     
     try:
         # Get the hackathon document
