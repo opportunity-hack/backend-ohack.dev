@@ -7,10 +7,11 @@ from cachetools import TTLCache
 from cachetools.func import ttl_cache
 from ratelimiter import RateLimiter
 from db.db import get_db
-from common.utils.slack import get_slack_user_by_email
+from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger
 import os
 import requests
+import resend
 
 logger = get_logger(__name__)
 
@@ -132,6 +133,137 @@ def verify_recaptcha(token: str) -> bool:
         logger.exception(f"Error verifying recaptcha: {e}")
         return False
 
+def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str) -> bool:
+    """
+    Send a confirmation email to the volunteer who submitted the form.
+    
+    Args:
+        first_name: First name of the volunteer
+        last_name: Last name of the volunteer
+        email: Email address of the volunteer
+        volunteer_type: Type of volunteer (mentor, sponsor, judge)
+        
+    Returns:
+        True if email was sent successfully, False otherwise
+    """
+    resend_api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
+    if not resend_api_key:
+        logger.error("RESEND_WELCOME_EMAIL_KEY not set")
+        return False
+    
+    resend.api_key = resend_api_key
+    
+    try:
+        volunteer_type_readable = volunteer_type.capitalize()
+        params = {
+            "from": "Opportunity Hack <noreply@opportunityhack.io>",
+            "to": [email],
+            "subject": f"Thank you for volunteering as an Opportunity Hack {volunteer_type_readable}",
+            "html": f"""
+            <div>
+                <h2>Thank you for volunteering with Opportunity Hack!</h2>
+                <p>Hello {first_name} {last_name},</p>
+                <p>Thank you for signing up as a {volunteer_type_readable} for Opportunity Hack. 
+                   We've received your information and our team will review it shortly.</p>
+                <p>We'll be in touch with next steps.</p>
+                <p>The Opportunity Hack Team</p>
+            </div>
+            """
+        }
+        
+        resend.Emails.send(params)
+        logger.info(f"Sent confirmation email to volunteer {email}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending email via Resend: {str(e)}")
+        return False
+
+def send_admin_notification_email(volunteer_data: Dict[str, Any], is_update: bool = False) -> bool:
+    """
+    Send a notification email to the admin when a volunteer form is submitted or updated.
+    
+    Args:
+        volunteer_data: The volunteer data
+        is_update: Whether this is an update to an existing volunteer
+        
+    Returns:
+        True if email was sent successfully, False otherwise
+    """
+    resend_api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
+    if not resend_api_key:
+        logger.error("RESEND_WELCOME_EMAIL_KEY not set")
+        return False
+    
+    resend.api_key = resend_api_key
+    
+    try:
+        action_type = "updated" if is_update else "submitted"
+        first_name = volunteer_data.get('firstName', '')
+        last_name = volunteer_data.get('lastName', '')
+        email = volunteer_data.get('email', '')
+        volunteer_type = volunteer_data.get('volunteer_type', '')
+        
+        params = {
+            "from": "Opportunity Hack <noreply@opportunityhack.io>",
+            "to": ["greg@ohack.org"],
+            "subject": f"Volunteer form {action_type}: {first_name} {last_name}",
+            "html": f"""
+            <div>
+                <h2>Volunteer Form {action_type.capitalize()}</h2>
+                <p>A volunteer form has been {action_type}:</p>
+                <p>Name: {first_name} {last_name}<br>
+                   Email: {email}<br>
+                   Type: {volunteer_type}</p>
+            </div>
+            """
+        }
+        
+        resend.Emails.send(params)
+        logger.info(f"Sent admin notification email about volunteer {email}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending admin email via Resend: {str(e)}")
+        return False
+
+def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update: bool = False) -> bool:
+    """
+    Send a notification to Slack when a volunteer form is submitted or updated.
+    
+    Args:
+        volunteer_data: The volunteer data
+        is_update: Whether this is an update to an existing volunteer
+        
+    Returns:
+        True if notification was sent successfully, False otherwise
+    """
+    action_type = "updated" if is_update else "submitted"
+    first_name = volunteer_data.get('firstName', '')
+    last_name = volunteer_data.get('lastName', '')
+    email = volunteer_data.get('email', '')
+    volunteer_type = volunteer_data.get('volunteer_type', '')
+    event_id = volunteer_data.get('event_id', '')
+    
+    slack_message = f"""
+New volunteer form {action_type}:
+*Name:* {first_name} {last_name}
+*Email:* {email}
+*Type:* {volunteer_type}
+*Event ID:* {event_id}
+"""
+    
+    try:
+        send_slack(
+            message=slack_message,
+            channel="volunteer-applications",
+            icon_emoji=":raising_hand:",
+            username="Volunteer Bot"
+        )
+        logger.info(f"Sent Slack notification about volunteer {email}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending Slack notification: {str(e)}")
+        return False
+
 def create_or_update_volunteer(
     user_id: str,
     event_id: str,
@@ -180,6 +312,14 @@ def create_or_update_volunteer(
         # Clear all related caches
         _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
         
+        # Send admin notification about the update
+        try:
+            send_admin_notification_email({**existing, **update_data}, is_update=True)
+            send_slack_volunteer_notification({**existing, **update_data}, is_update=True)
+            logger.info(f"Sent notifications about updated volunteer {email}")
+        except Exception as e:
+            logger.error(f"Failed to send notifications for updated volunteer {email}: {str(e)}")
+        
         return {**existing, **update_data}
     else:
         # Create new record
@@ -215,6 +355,17 @@ def create_or_update_volunteer(
         
         # Clear all related caches 
         _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+        
+        # Send confirmation email to the volunteer
+        try:
+            first_name = volunteer_doc.get('firstName', '')
+            last_name = volunteer_doc.get('lastName', '')
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type)
+            send_admin_notification_email(volunteer_doc)
+            send_slack_volunteer_notification(volunteer_doc)
+            logger.info(f"Sent notifications for new volunteer {email}")
+        except Exception as e:
+            logger.error(f"Failed to send notifications for new volunteer {email}: {str(e)}")
         
         return volunteer_doc
 

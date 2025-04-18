@@ -133,9 +133,9 @@ def send_confirmation_email(first_name: str, last_name: str, email: str) -> bool
         True if email was sent successfully, False otherwise
     """
     # Set Resend API key
-    resend_api_key = os.environ.get('RESEND_API_KEY')
+    resend_api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
     if not resend_api_key:
-        logger.error("RESEND_API_KEY not set")
+        logger.error("RESEND_WELCOME_EMAIL_KEY not set")
         return False
     
     resend.api_key = resend_api_key
