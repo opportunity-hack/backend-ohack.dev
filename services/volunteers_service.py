@@ -3,20 +3,16 @@ import uuid
 from datetime import datetime
 import pytz
 from functools import lru_cache
-from cachetools import TTLCache
-from cachetools.func import ttl_cache
 from ratelimiter import RateLimiter
 from db.db import get_db
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger
+from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern
 import os
 import requests
 import resend
 
 logger = get_logger(__name__)
-
-# Cache for volunteers (10 minute TTL)
-volunteers_cache = TTLCache(maxsize=1000, ttl=600)
 
 def _generate_volunteer_id() -> str:
     """Generate a unique ID for a volunteer."""
@@ -27,7 +23,7 @@ def _get_current_timestamp() -> str:
     az_timezone = pytz.timezone('US/Arizona')
     return datetime.now(az_timezone).isoformat()
 
-@ttl_cache(maxsize=100, ttl=10)
+@redis_cached(prefix="volunteer:by_user_id", ttl=10)
 def get_volunteer_by_user_id(user_id: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
     """Get volunteer by user ID, event ID, and volunteer type."""
     db = get_db()
@@ -40,7 +36,7 @@ def get_volunteer_by_user_id(user_id: str, event_id: str, volunteer_type: str) -
         return volunteer.to_dict()
     return None
 
-@ttl_cache(maxsize=100, ttl=10)
+@redis_cached(prefix="volunteer:by_email", ttl=10)
 def get_volunteer_by_email(email: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
     """Get volunteer by email, event ID, and volunteer type."""
     db = get_db()
@@ -56,19 +52,21 @@ def get_volunteer_by_email(email: str, event_id: str, volunteer_type: str) -> Op
 # Function to clear all caches related to a volunteer
 def _clear_volunteer_caches(user_id: str, email: str, event_id: str, volunteer_type: str):
     """Clear all caches related to a specific volunteer."""
-    # Clear manual cache
-    cache_key = f"{user_id}_{event_id}_{volunteer_type}"
-    if cache_key in volunteers_cache:
-        del volunteers_cache[cache_key]
-        
-    # Clear ttl_cache for get_volunteer_by_user_id
-    get_volunteer_by_user_id.cache_clear()
+    # Clear cache for specific user lookup
+    user_key = f"volunteer:by_user_id:{user_id}:{event_id}:{volunteer_type}"
+    delete_cached(user_key)
     
-    # Clear ttl_cache for get_volunteer_by_email
-    get_volunteer_by_email.cache_clear()
+    # Clear cache for specific email lookup
+    email_key = f"volunteer:by_email:{email}:{event_id}:{volunteer_type}"
+    delete_cached(email_key)
+    
+    # Clear event-based volunteer caches
+    event_key = f"volunteer:by_event:{event_id}:{volunteer_type}"
+    clear_pattern(f"{event_key}*")
     
     logger.debug(f"Cleared caches for volunteer: {email}, event: {event_id}, type: {volunteer_type}")
 
+@redis_cached(prefix="volunteer:by_event", ttl=120)
 def get_volunteers_by_event(
     event_id: str, 
     volunteer_type: str, 

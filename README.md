@@ -64,9 +64,12 @@ FIREBASE_CERT_CONFIG=
 
 OPENAI_API_KEY=
 
-#Propel Auth Settings
+# Propel Auth Settings
 PROPEL_AUTH_KEY=
 PROPEL_AUTH_URL=
+
+# Redis Settings (optional - for local development)
+# REDIS_URL=redis://localhost:6379
 ```
 
 ### Actually running the project
