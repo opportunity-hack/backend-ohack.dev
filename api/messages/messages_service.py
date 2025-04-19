@@ -1116,14 +1116,14 @@ def update_npo(json):
         send_slack_audit(action="update_npo", message="Updating", payload=doc_dict)
         
         # Extract all fields from the json
-        name = json["name"]
-        contact_email = json.get("contact_email", [])
-        contact_people = json.get("contact_people", [])
-        slack_channel = json["slack_channel"]
-        website = json["website"]
-        description = json["description"]
-        image = json.get("image", "")
-        rank = json.get("rank", 0)
+        name = json.get("name", None)
+        contact_email = json.get("contact_email", None)
+        contact_people = json.get("contact_people", None)
+        slack_channel = json.get("slack_channel", None)
+        website = json.get("website", None)
+        description = json.get("description", None)
+        image = json.get("image", None)
+        rank = json.get("rank", None)
 
         # Convert contact_email and contact_people to lists if they're not already
         if isinstance(contact_email, str):
@@ -1151,6 +1151,7 @@ def update_npo(json):
 
         # Remove any fields that are None to avoid overwriting with null values
         update_data = {k: v for k, v in update_data.items() if v is not None}
+        logger.debug(f"Update data: {update_data}")
 
         doc.update(update_data)
 
