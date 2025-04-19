@@ -8,7 +8,7 @@ from common.utils.redis_cache import redis_cached, clear_pattern
 
 logger = get_logger(__name__)
 
-@redis_cached(prefix="slack:active_users", ttl=600)  # Cache for 10 minutes
+@redis_cached(prefix="slack:active_users", ttl=10)  # Cache for 10 seconds
 def get_active_users(days: int = 30, include_presence: bool = False, minimum_presence: str = None) -> List[Dict[str, Any]]:
     """
     Get active Slack users based on their activity within the specified time period.
@@ -80,7 +80,7 @@ def get_active_users(days: int = 30, include_presence: bool = False, minimum_pre
     logger.info(f"Found {len(active_users)} active users")
     return active_users
 
-@redis_cached(prefix="slack:user_details", ttl=3600)  # Cache for 1 hour
+@redis_cached(prefix="slack:user_details", ttl=10)  # Cache for 10 seconds
 def get_user_details(user_id: str) -> Optional[Dict[str, Any]]:
     """
     Get detailed information about a specific Slack user.
