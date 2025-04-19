@@ -53,7 +53,19 @@ def presence(user_id=None):
 @RateLimiter(max_calls=20, period=60)
 def userlist():
     client = get_client()
-    return client.users_list()
+    users = []
+    next_cursor = None
+    
+    while True:
+        response = client.users_list(limit=1000, cursor=next_cursor)
+        users.extend(response["members"])
+        
+        # Check if there are more pages
+        next_cursor = response.get("response_metadata", {}).get("next_cursor")
+        if not next_cursor:
+            break
+    
+    return {"members": users}
 
 
 def get_active_users():
