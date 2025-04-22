@@ -439,7 +439,9 @@ def get_team(id):
         
         team_data = doc_to_json(docid=doc.id, doc=doc)
         logger.info(f"Successfully retrieved team with id={id}")
-        return team_data
+        return {
+            "team" : team_data
+        }
     
     except Exception as e:
         logger.error(f"Error retrieving team with id={id}: {str(e)}")
@@ -454,6 +456,40 @@ def get_teams_batch(json):
     if "team_ids" not in json:
         logger.info(json["team_ids"])
         # TODO: Return for a batch of team ids to speed up the frontend
+
+@limits(calls=40, period=ONE_MINUTE)
+def get_npos_by_hackathon_id(id):
+    logger.debug(f"get_npos_by_hackathon_id start id={id}")    
+    db = get_db()      
+    doc = db.collection('hackathons').document(id)    
+    
+    if doc is None:
+        logger.warning("get_npos_by_hackathon_id end (no results)")
+        return {}
+    else:                        
+        # Get all nonprofits from hackathon
+        npo_ids = doc.get().to_dict()["nonprofits"]
+
+        logger.info(f"get_npos_by_hackathon_id end (with result):{npo_ids}")
+
+        # npo_ids are a list of DocumentReferences
+
+        # Get all nonprofits
+        npos = []
+        for npo_id in npo_ids:
+            # Convert DocumentReference to dict
+            npo_doc = npo_id.get()
+            npo = doc_to_json(docid=npo_doc.id, doc=npo_doc)
+            npos.append(npo)
+                        
+        
+        return {
+            "nonprofits": npos
+        }
+
+        
+        
+    return {}
 
 
 @limits(calls=40, period=ONE_MINUTE)

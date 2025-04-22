@@ -20,6 +20,76 @@ from api.messages.messages_service import (
 
 logger = logging.getLogger("myapp")
 
+def edit_team(json):
+    """
+    Admin function to edit a team
+    - Update team details in the database
+    - Notify team members via Slack about the changes
+    """
+    send_slack_audit(action="edit_team", message="Editing", payload=json)
+    
+    db = get_db()
+    logger.debug("Team Edit")
+    logger.debug(json)
+    
+    team_id = json["id"]
+    
+    # Get the team document
+    team_doc = db.collection('teams').document(team_id)
+    team_data = team_doc.get().to_dict()
+    
+    if not team_data:
+        return {
+            "message": "Error: Team not found",
+            "success": False
+        }
+    
+    # Update the team document with new data
+    update_data = {}
+    
+    # Map all possible fields from the JSON to the database fields
+    field_mappings = {
+        "name": "name",
+        "slack_channel": "slackChannel",
+        "github_username": "github_username",
+        "comments": "comments",
+        "nonprofit_rankings": "nonprofitRankings",
+        "selected_nonprofit_id": "selected_nonprofit_id",
+        "status": "status", 
+        "team_number": "team_number",
+        "active": "active",
+        "hackathon_event_id": "hackathon_event_id",
+        "location": "location",
+        "admin_notes": "admin_notes",
+    }
+    
+    for db_field, json_field in field_mappings.items():
+        if json_field in json:
+            update_data[db_field] = json[json_field]
+    
+    # Add a last_updated field to track changes
+    update_data["last_updated"] = datetime.now().isoformat()
+
+    # Handle any other fields not in the mapping
+    if "created" in json:
+        update_data["created"] = json["created"]
+    
+    if len(update_data) > 0:
+        team_doc.set(update_data, merge=True)
+        clear_cache()  # Clear the cache to ensure updated data is reflected
+        
+        return {
+            "message": "Team updated successfully",
+            "success": True,
+            "team_id": team_id
+        }
+    else:
+        return {
+            "message": "No changes to update",
+            "success": True,
+            "team_id": team_id
+        }
+
 def queue_team(propel_user_id, json):
     """
     Create a team and queue it for nonprofit pairing
@@ -164,17 +234,26 @@ def get_teams_by_hackathon_id(user_id, hackathon_id):
     teams = []
     for t in event_collection_dict["teams"]:
         team_data = t.get().to_dict()
+        
         team_data["id"] = t.id
         # Get the team members
-        team_data["users"] = []
+        users = []
         for user_ref in team_data["users"]:
             user_data = user_ref.get().to_dict()
-            user_data["id"] = user_ref.id
-            team_data["users"].append(user_data)
+            user_data["id"] = user_ref.id              
+                  
             # Remove badges
             if "badges" in user_data:
                 del user_data["badges"]
-
+            if "hackathons" in user_data:
+                del user_data["hackathons"]
+            if "teams" in user_data:
+                del user_data["teams"]
+            
+            users.append(user_data)
+        del team_data["users"]
+        team_data["team_members"] = users
+        logger.debug("Team data: %s", team_data)
         teams.append(team_data)
         
     return {

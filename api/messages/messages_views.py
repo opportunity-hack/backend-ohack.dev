@@ -26,6 +26,7 @@ from api.messages.messages_service import (
     get_npo_list,
     get_single_npo,
     get_npo_by_hackathon_id,
+    get_npos_by_hackathon_id,
     get_single_hackathon_event,    
     single_add_volunteer,
     get_single_hackathon_id,
@@ -120,9 +121,9 @@ def get_npos():
 
 # Get nonprofits by hackathon
 @bp.route("/npos/hackathon/<id>", methods=["GET"])
-def get_npos_by_hackathon_id(id):
+def get_npos_by_hackathon_id_api(id):
     print(f"id: {id}")
-    return (get_npo_by_hackathon_id(id=id))
+    return (get_npos_by_hackathon_id(id=id))
 
 @bp.route("/npo/<npo_id>", methods=["GET"])
 def get_npo(npo_id):
