@@ -43,7 +43,7 @@ def get_active_users(days: int = 30, include_presence: bool = False, minimum_pre
             member.get("name", "").startswith("slackbot")
         ):
             continue
-        print(f"Processing user: {member}")
+        
         # Check if the user has been active within the specified time period
         updated_timestamp = member.get("updated", 0)
         updated_date = datetime.fromtimestamp(updated_timestamp)

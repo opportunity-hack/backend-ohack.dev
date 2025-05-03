@@ -9,7 +9,8 @@ from api.teams.teams_service import (
     approve_team,
     get_queued_teams,
     edit_team,
-    get_teams_by_hackathon_id
+    get_teams_by_hackathon_id,
+    get_my_teams_by_event_id
 )
 
 logger = logging.getLogger(__name__)
@@ -30,9 +31,21 @@ def get_teams_by_hackathon_id_api(hackathon_id):
     Get all teams for a specific hackathon ID.
     """
     if auth_user and auth_user.user_id:
-        return get_teams_by_hackathon_id(auth_user.user_id, hackathon_id)
+        return get_teams_by_hackathon_id(hackathon_id)
     
     logger.error("Could not obtain user details for GET /team/<hackathon_id>")
+    return {"error": "Unauthorized"}, 401
+
+@bp.route("/<event_id>/me", methods=["GET"])
+@auth.require_user
+def get_my_teams_by_event_if_api(event_id):
+    """
+    Get teams for user with hackathon event id.
+    """
+    if auth_user and auth_user.user_id:
+        return get_my_teams_by_event_id(auth_user.user_id, event_id)
+    
+    logger.error("Could not obtain user details for GET /team/<event_id>/me")
     return {"error": "Unauthorized"}, 401
 
 @bp.route("/edit", methods=["PATCH"])

@@ -218,13 +218,42 @@ Let's make a difference! :muscle: :heart:
         }
     }
 
+def get_my_teams_by_event_id(propel_id, event_id):
+    logger.debug(f"Getting my teams by event ID {event_id} for user {propel_id}")
 
-def get_teams_by_hackathon_id(user_id, hackathon_id):
+    # Call get_propel_user_details_by_id(propel_id) to get user details
+    _, user_id, _, _, name, _ = get_propel_user_details_by_id(propel_id)
+
+    hackathon_dict = get_hackathon_by_event_id(event_id)
+
+    teams = []
+    for t in hackathon_dict["teams"]:
+        team_data = t.get().to_dict()        
+        team_data["id"] = t.id
+        
+        for user_ref in team_data["users"]:
+            user_data = user_ref.get().to_dict()
+            user_data["id"] = user_ref.id
+            logger.debug("User data: %s", user_data)
+            if user_id == user_data["user_id"]:
+                del team_data["users"]
+                teams.append(team_data)                              
+
+    logger.debug("Teams data: %s", teams)
+
+    return {
+        "teams": teams,
+        "user_id": user_id
+    }
+
+    
+
+def get_teams_by_hackathon_id(hackathon_id):
     """
     Get all teams for a specific hackathon ID.
     """
     db = get_db()
-    logger.debug("Getting teams by hackathon ID")
+    logger.debug(f"Getting teams by hackathon ID: {hackathon_id}")
     
     # Get the event collection
     event_collection = db.collection("hackathons").document(hackathon_id)
@@ -257,8 +286,7 @@ def get_teams_by_hackathon_id(user_id, hackathon_id):
         teams.append(team_data)
         
     return {
-        "teams": teams,
-        "user_id": user_id
+        "teams": teams        
     }
 
 
