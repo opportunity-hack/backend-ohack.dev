@@ -1413,8 +1413,9 @@ def create_hackathon(json):
     doc_id = uuid.uuid1().hex
     collection = db.collection('hackathon_requests')
     json["created"] = datetime.now().isoformat()
-    json["status"] = "pending"
+    json["status"] = "pending"    
     insert_res = collection.document(doc_id).set(json)
+    json["id"] = doc_id
 
     if "contactEmail" in json and "contactName" in json:
         # Send the specialized hackathon request email instead of the general welcome email
