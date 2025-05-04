@@ -142,7 +142,7 @@ def send_confirmation_email(first_name: str, last_name: str, email: str) -> bool
     
     try:
         params = {
-            "from": "Opportunity Hack <noreply@opportunityhack.io>",
+            "from": "Opportunity Hack <welcome@apply.ohack.dev>",
             "to": [email],
             "subject": "Thank you for contacting Opportunity Hack",
             "html": f"""

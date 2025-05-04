@@ -154,7 +154,7 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
     try:
         volunteer_type_readable = volunteer_type.capitalize()
         params = {
-            "from": "Opportunity Hack <noreply@opportunityhack.io>",
+            "from": "Opportunity Hack <welcome@apply.ohack.dev>",
             "to": [email],
             "subject": f"Thank you for volunteering as an Opportunity Hack {volunteer_type_readable}",
             "html": f"""
@@ -202,7 +202,7 @@ def send_admin_notification_email(volunteer_data: Dict[str, Any], is_update: boo
         volunteer_type = volunteer_data.get('volunteer_type', '')
         
         params = {
-            "from": "Opportunity Hack <noreply@opportunityhack.io>",
+            "from": "Opportunity Hack <welcome@apply.ohack.dev>",
             "to": ["greg@ohack.org"],
             "subject": f"Volunteer form {action_type}: {first_name} {last_name}",
             "html": f"""
