@@ -1302,6 +1302,108 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
         "Updated Hackathon Volunteers"
     )
 
+def send_hackathon_request_email(contact_name, contact_email, request_id):    
+    """
+    Send a specialized confirmation email to someone who has submitted a hackathon request.
+    
+    Args:
+        contact_name: Name of the requestor
+        contact_email: Email address of the requestor
+        request_id: The unique ID of the hackathon request for edit link
+        
+    Returns:
+        True if email was sent successfully, False otherwise
+    """
+    resend_api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY")
+    if not resend_api_key:
+        logger.error("RESEND_WELCOME_EMAIL_KEY not set")
+        return False
+    
+    resend.api_key = resend_api_key
+
+    # Rotate between images for better engagement
+    images = [
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_1.webp",
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_2.webp",
+        "https://cdn.ohack.dev/ohack.dev/2023_hackathon_3.webp"
+    ]
+    chosen_image = random.choice(images)
+    image_number = images.index(chosen_image) + 1
+    image_utm_content = f"hackathon_request_image_{image_number}"
+    
+    # Build the edit link for the hackathon request
+    base_url = os.getenv("FRONTEND_URL", "https://www.ohack.dev")
+    edit_link = f"{base_url}/hack/request/{request_id}"
+    
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Thank You for Your Hackathon Request</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <img src="{add_utm(chosen_image, content=image_utm_content)}" alt="Opportunity Hack Event" style="width: 100%; max-width: 600px; height: auto; margin-bottom: 20px;">
+        
+        <h1 style="color: #0088FE;">Thank You for Your Hackathon Request!</h1>
+        
+        <p>Dear {contact_name},</p>
+        
+        <p>We're thrilled you're interested in hosting an Opportunity Hack event! Your request has been received and our team is reviewing it now.</p>
+        
+        <div style="background-color: #f0f8ff; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <h2 style="color: #0088FE; margin-top: 0;">Next Steps:</h2>
+            <ol style="margin-bottom: 0;">
+                <li>A member of our team will reach out within 3-5 business days</li>
+                <li>We'll schedule a call to discuss your goals and requirements</li>
+                <li>Together, we'll create a customized hackathon plan for your community</li>
+            </ol>
+        </div>
+        
+        <p><strong>Need to make changes to your request?</strong><br>
+        You can <a href="{add_utm(edit_link, medium='email', campaign='hackathon_request', content=image_utm_content)}" style="color: #0088FE; font-weight: bold;">edit your request here</a> at any time.</p>
+        
+        <h2 style="color: #0088FE;">Why Host an Opportunity Hack?</h2>
+        <ul>
+            <li>Connect local nonprofits with skilled tech volunteers</li>
+            <li>Build lasting technology solutions for social good</li>
+            <li>Create meaningful community engagement opportunities</li>
+            <li>Develop technical skills while making a difference</li>
+        </ul>
+        
+        <p>Have questions in the meantime? Feel free to reply to this email or reach out through our <a href="{add_utm('https://ohack.dev/signup', content=image_utm_content)}">Slack community</a>.</p>
+        
+        <p>Together, we can create positive change through technology!</p>
+        
+        <p>Warm regards,<br>The Opportunity Hack Team</p>
+        
+        <!-- Tracking pixel for email opens -->
+        <img src="{add_utm('https://ohack.dev/track/open.gif', content=image_utm_content)}" alt="" width="1" height="1" border="0" style="height:1px!important;width:1px!important;border-width:0!important;margin-top:0!important;margin-bottom:0!important;margin-right:0!important;margin-left:0!important;padding-top:0!important;padding-bottom:0!important;padding-right:0!important;padding-left:0!important"/>
+    </body>
+    </html>
+    """
+
+    # If name is none, or an empty string, or an unassigned string, or a unprintable character like a space string set it to "Event Organizer"
+    if contact_name is None or contact_name == "" or contact_name == "Unassigned" or contact_name.isspace():
+        contact_name = "Event Organizer"
+
+    params = {
+        "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+        "to": f"{contact_name} <{contact_email}>",
+        "subject": "Your Opportunity Hack Event Request - Next Steps",
+        "html": html_content,
+    }
+
+    try:
+        email = resend.Emails.SendParams(params)
+        resend.Emails.send(email)
+        logger.info(f"Sent hackathon request confirmation email to {contact_email}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending hackathon request email via Resend: {str(e)}")
+        return False
+
 def create_hackathon(json):
     db = get_db()  # this connects to our Firestore database
     logger.debug("Hackathon Create")
@@ -1310,20 +1412,52 @@ def create_hackathon(json):
     # Save payload for potential hackathon in the database under the hackathon_requests collection
     doc_id = uuid.uuid1().hex
     collection = db.collection('hackathon_requests')
+    json["created"] = datetime.now().isoformat()
+    json["status"] = "pending"
     insert_res = collection.document(doc_id).set(json)
 
     if "contactEmail" in json and "contactName" in json:
-        send_welcome_email(json["contactName"], json["contactEmail"])
+        # Send the specialized hackathon request email instead of the general welcome email
+        send_hackathon_request_email(json["contactName"], json["contactEmail"], doc_id)
 
     send_slack(
         message=":rocket: New Hackathon Request :rocket: with json: " + str(json), channel="log-hackathon-requests", icon_emoji=":rocket:")        
     logger.debug(f"Insert Result: {insert_res}")
 
-    return Message(
-        "Created Hackathon"
-    )
+    return {
+        "message": "Hackathon Request Created",
+        "success": True,
+        "id": doc_id
+    }
+
+def get_hackathon_request_by_id(doc_id):
+    db = get_db()  # this connects to our Firestore database
+    logger.debug("Hackathon Request Get")
+    doc = db.collection('hackathon_requests').document(doc_id)
+    if doc:
+        doc_dict = doc.get().to_dict()
+        send_slack_audit(action="get_hackathon_request_by_id", message="Getting", payload=doc_dict)
+        return doc_dict
+    else:
+        return None
 
 
+def update_hackathon_request(doc_id, json):
+    db = get_db()  # this connects to our Firestore database
+    logger.debug("Hackathon Request Update")
+    doc = db.collection('hackathon_requests').document(doc_id)
+    if doc:
+        doc_dict = doc.get().to_dict()
+        send_slack_audit(action="update_hackathon_request", message="Updating", payload=doc_dict)
+        # Send email for the update too
+        send_hackathon_request_email(json["contactName"], json["contactEmail"], doc_id)
+        # Update the date
+        doc_dict["updated"] = datetime.now().isoformat()
+
+        doc.update(json)
+        return doc_dict
+    else:
+        return None
 
 
 

@@ -4,6 +4,7 @@ from typing import Dict, Any, Optional, List, Tuple
 from common.auth import auth, auth_user
 from common.log import get_logger
 from common.exceptions import InvalidUsageError
+from common.utils.slack import send_slack_audit
 from services.volunteers_service import (
     get_volunteer_by_user_id,
     get_volunteers_by_event,
@@ -57,8 +58,17 @@ def _error_response(message: str, status_code: int = 400) -> Tuple[Dict[str, Any
 def handle_submit(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, Any], int]:
     """Generic handler for volunteer application submission."""
     logger.info(f"Submitting {volunteer_type} application for event {event_id}")
+
+
     try:
         volunteer_data = _process_request()
+
+        # Send Slack Audit message
+        send_slack_audit(
+            action="submit_volunteer_application",
+            message=f"User {user.user_id} submitted a {volunteer_type} application for event {event_id}",
+            payload=volunteer_data
+        )
         
         # Ensure volunteer_type is set correctly
         volunteer_data['volunteer_type'] = volunteer_type

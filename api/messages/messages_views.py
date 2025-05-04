@@ -33,6 +33,8 @@ from api.messages.messages_service import (
     add_nonprofit_to_hackathon,
     save_hackathon,
     create_hackathon,
+    get_hackathon_request_by_id,
+    update_hackathon_request,
     update_hackathon_volunteers,
     get_teams_list,
     get_team,
@@ -531,4 +533,11 @@ def admin_get_all_giveaways():
 @bp.route("/create-hackathon", methods=["POST"])
 def submit_create_hackathon():
     return vars(create_hackathon(request.get_json()))
-    
+
+@bp.route("/create-hackathon/<request_id>", methods=["GET"])
+def get_submitted_hackathon(request_id):
+    return get_hackathon_request_by_id(request_id)
+
+@bp.route("/create-hackathon/<request_id>", methods=["PATCH"])
+def update_submitted_hackathon(request_id):
+    return update_hackathon_request(request_id, request.get_json())
