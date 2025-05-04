@@ -532,7 +532,7 @@ def admin_get_all_giveaways():
 
 @bp.route("/create-hackathon", methods=["POST"])
 def submit_create_hackathon():
-    return vars(create_hackathon(request.get_json()))
+    return create_hackathon(request.get_json())
 
 @bp.route("/create-hackathon/<request_id>", methods=["GET"])
 def get_submitted_hackathon(request_id):
