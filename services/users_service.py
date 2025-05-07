@@ -216,7 +216,7 @@ def get_profile_metadata(propel_id):
             nickname=nickname)
 
     # Get all of the user history and profile data from the DB
-    response = get_history(db_id)
+    response = get_history(db_id.id)
     logger.debug(f"get_profile_metadata {response}")
 
     return response #TODO: Breaking API change
