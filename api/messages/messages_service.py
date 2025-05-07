@@ -787,6 +787,9 @@ def join_team(propel_user_id, json):
         if success:
             send_slack_audit(action="join_team", message="Added", payload=json)
             message = "Joined Team"
+            # Add person to Slack channel
+            team_slack_channel = team_ref.get().to_dict()["slack_channel"]
+            invite_user_to_channel(userid, team_slack_channel)
         else:
             message = "User was already in the team"
     except Exception as e:
@@ -794,9 +797,7 @@ def join_team(propel_user_id, json):
         return Message(f"Error: {str(e)}")
 
     # Clear caches
-    get_team.cache_clear()
-    get_user_by_id_old.cache_clear()
-    doc_to_json.cache_clear()
+    clear_cache()
 
     logger.debug("Join Team End")
     return Message(message)
@@ -863,9 +864,7 @@ def unjoin_team(propel_user_id, json):
         return Message(f"Error: {str(e)}")
 
     # Clear caches
-    get_team.cache_clear()
-    get_user_by_id_old.cache_clear()
-    doc_to_json.cache_clear()
+    clear_cache()
 
     logger.debug("Unjoin Team End")
     return Message(message)
