@@ -17,6 +17,11 @@ from api.messages.messages_service import (
     send_slack,
     send_slack_audit
 )
+from services.users_service import (
+    save_user,
+    get_user_from_slack_id
+)
+    
 
 logger = logging.getLogger("myapp")
 
@@ -305,7 +310,8 @@ def queue_team(propel_user_id, json):
     _, user_id, _, _, name, _ = get_propel_user_details_by_id(propel_user_id)
     slack_user_id = user_id
     
-    root_slack_user_id = slack_user_id.replace("oauth2|slack|T1Q7936BH-", "")
+    SLACK_USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-"
+    root_slack_user_id = slack_user_id.replace(SLACK_USER_ID_PREFIX, "")
     users_list = []
     user = get_user_doc_reference(root_slack_user_id)
     users_list.append(user)
@@ -345,6 +351,25 @@ def queue_team(propel_user_id, json):
         if member["id"] != root_slack_user_id:
             logger.info("Inviting user %s to slack channel %s", member["id"], slack_channel)
             invite_user_to_channel(member["id"], slack_channel)
+            # Lookup the user in the database by user_id which is their slack user id            
+            full_user_id_with_slack_prefix = f"{SLACK_USER_ID_PREFIX}{member['id']}"
+            user_db_check = get_user_from_slack_id(full_user_id_with_slack_prefix)
+            if not user_db_check:
+                new_user = save_user(
+                    user_id=full_user_id_with_slack_prefix,
+                    email="",
+                    last_login="",
+                    profile_image="",
+                    name=member["real_name"],
+                    nickname=member["name"]
+                )                
+                users_list.append(get_user_doc_reference(new_user.user_id))
+            else:
+                in_db_user = get_user_doc_reference(user_db_check.user_id)
+                users_list.append(in_db_user)
+                logger.info("User %s already exists in the database", user_db_check)
+                    
+
         else:
             logger.info("User %s is the creator of the team, not inviting again", member["id"])
         
