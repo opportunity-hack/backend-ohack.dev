@@ -40,6 +40,7 @@ def finish_saving_insert(
     user.profile_image = profile_image
     user.name = name
     user.nickname = nickname
+    user.propel_id = user.propel_id
     return insert_user(user)
 
 def finish_saving_update(
@@ -52,6 +53,7 @@ def finish_saving_update(
         user.profile_image = profile_image
         user.name = name
         user.nickname = nickname
+        user.propel_id = user.propel_id
         return update_user(user)
 
 @limits(calls=50, period=ONE_MINUTE)
@@ -81,7 +83,9 @@ def save_user(
         last_login=None,
         profile_image=None,
         name=None,
-        nickname=None):
+        nickname=None,
+        propel_id=None,
+        ):
 
     logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
@@ -97,10 +101,10 @@ def save_user(
     user = fetch_user_by_user_id(user_id)
 
     if user is not None:
-        user = finish_saving_update(user, last_login, profile_image, name, nickname)
+        user = finish_saving_update(user, last_login, profile_image, name, nickname,propel_id)
         
     else:
-        user = finish_saving_insert(user_id, email, last_login, profile_image, name, nickname)
+        user = finish_saving_insert(user_id, email, last_login, profile_image, name, nickname,propel_id)
 
     return user if user is not None else None
 
@@ -178,7 +182,7 @@ def get_profile_by_db_id(id):
     res = None
 
     # Only keep these fields since this is a public api
-    fields = ["name", "profile_image", "user_id", "nickname", "github"] #TODO: Wait. We are getting extended profile data (e.g. hackathons above just to pitch it out here?)
+    fields = ["name", "profile_image", "user_id", "nickname", "github", "propel_id"] #TODO: Wait. We are getting extended profile data (e.g. hackathons above just to pitch it out here?)
 
     if u is not None:
         # Check if the field is in the response first
@@ -213,10 +217,12 @@ def get_profile_metadata(propel_id):
             last_login=last_login,
             profile_image=profile_image,
             name=name,
-            nickname=nickname)
+            nickname=nickname,
+            propel_id=propel_id
+            )
 
     # Get all of the user history and profile data from the DB
-    response = get_history(db_id)
+    response = get_history(db_id.id)
     logger.debug(f"get_profile_metadata {response}")
 
     return response #TODO: Breaking API change

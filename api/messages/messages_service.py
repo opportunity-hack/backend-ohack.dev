@@ -36,7 +36,7 @@ import random
 
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 
 google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
@@ -787,6 +787,9 @@ def join_team(propel_user_id, json):
         if success:
             send_slack_audit(action="join_team", message="Added", payload=json)
             message = "Joined Team"
+            # Add person to Slack channel
+            team_slack_channel = team_ref.get().to_dict()["slack_channel"]
+            invite_user_to_channel(userid, team_slack_channel)
         else:
             message = "User was already in the team"
     except Exception as e:
@@ -794,9 +797,7 @@ def join_team(propel_user_id, json):
         return Message(f"Error: {str(e)}")
 
     # Clear caches
-    get_team.cache_clear()
-    get_user_by_id_old.cache_clear()
-    doc_to_json.cache_clear()
+    clear_cache()
 
     logger.debug("Join Team End")
     return Message(message)
@@ -863,9 +864,7 @@ def unjoin_team(propel_user_id, json):
         return Message(f"Error: {str(e)}")
 
     # Clear caches
-    get_team.cache_clear()
-    get_user_by_id_old.cache_clear()
-    doc_to_json.cache_clear()
+    clear_cache()
 
     logger.debug("Unjoin Team End")
     return Message(message)
@@ -2177,7 +2176,9 @@ def get_profile_metadata_old(propel_id):
             last_login=last_login,
             profile_image=profile_image,
             name=name,
-            nickname=nickname)
+            nickname=nickname,
+            propel_id=propel_id
+            )
 
     # Get all of the user history and profile data from the DB
     response = get_history_old(db_id)
@@ -2259,7 +2260,8 @@ def get_history_old(db_id):
         "github": res["github"] if "github" in res else "",
         "why": res["why"] if "why" in res else "",
         "role": res["role"] if "role" in res else "",
-        "company": res["company"] if "company" in res else ""
+        "company": res["company"] if "company" in res else "",
+        "propel_id": res["propel_id"] if "propel_id" in res else "",
 
     }
 
@@ -2276,7 +2278,9 @@ def save_user_old(
         last_login=None,
         profile_image=None,
         name=None,
-        nickname=None):
+        nickname=None,
+        propel_id=None
+        ):
     logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
 
@@ -2304,7 +2308,8 @@ def save_user_old(
                     "last_login": last_login,
                     "profile_image": profile_image,
                     "name": name,
-                    "nickname": nickname
+                    "nickname": nickname,
+                    "propel_id": propel_id,
             })
             logger.debug(f"Update Result: {update_res}")
 
@@ -2324,7 +2329,8 @@ def save_user_old(
         "badges": [
             default_badge
         ],
-        "teams": []
+        "teams": [],
+        "propel_id": propel_id,
     })
     logger.debug(f"Insert Result: {insert_res}")
     return doc_id
@@ -2347,7 +2353,7 @@ def save_profile_metadata_old(propel_id, json):
         logger.info(f"User exists: {user.id}")        
 
     # Only update metadata that is in the json
-    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "linkedin_url", "instagram_url"]
+    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "linkedin_url", "instagram_url", "propel_id"]
 
     d = {}
 

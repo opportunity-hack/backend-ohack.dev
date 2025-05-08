@@ -100,8 +100,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             pass
         return u
     
-    def fetch_user_by_db_id_raw(self, db, id):
-        u = db.collection('users').document(id).get()
+    def fetch_user_by_db_id_raw(self, db, db_id):
+        u = db.collection('users').document(db_id).get()
         return u
 
     def insert_user(self, user:User):
@@ -121,7 +121,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             "badges": [
                 default_badge
             ],
-            "teams": []
+            "teams": [],
+            "propel_id": user.propel_id,
         })
         return user if insert_res is not None else None
     
@@ -140,7 +141,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
                     "last_login": user.last_login,
                     "profile_image": user.profile_image,
                     "name": user.name,
-                    "nickname": user.nickname
+                    "nickname": user.nickname,
+                    "propel_id": user.propel_id,
                 })
             
         return user if update_res is not None else None

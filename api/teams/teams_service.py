@@ -17,8 +17,215 @@ from api.messages.messages_service import (
     send_slack,
     send_slack_audit
 )
+from services.users_service import (
+    save_user,
+    get_user_from_slack_id
+)
+    
 
 logger = logging.getLogger("myapp")
+
+def add_team_member(team_id, user_id):
+    """
+    Admin function to add a member to a team
+    - Add user to the team in the database
+    - Notify the user via Slack about the addition
+    """
+    send_slack_audit(action="add_team_member", message="Adding", payload={"team_id": team_id, "user_id": user_id})
+    
+    db = get_db()
+    logger.debug("Adding Team Member")
+    
+    # Get the team document
+    team_doc = db.collection('teams').document(team_id)
+    team_data = team_doc.get().to_dict()
+    
+    if not team_data:
+        logger.error("Team not found")
+        return {
+            "message": "Error: Team not found",
+            "success": False
+        }
+    
+    # Get the user document
+    user_doc = db.collection('users').document(user_id)
+    user_data = user_doc.get().to_dict()
+    
+    if not user_data:
+        logger.error("User not found")
+        return {
+            "message": "Error: User not found",
+            "success": False
+        }
+    
+    # Check if the user is already in the team
+    if user_doc in team_data.get("users", []):
+        logger.error("User is already a member of the team")
+        return {
+            "message": "Error: User is already a member of the team",
+            "success": False
+        }
+
+    # Add the user to the team
+    users = team_data.get("users", [])
+    users.append(user_doc)
+    
+    # Update the team document
+    team_doc.set({
+        "users": users
+    }, merge=True)
+    
+    # Notify the user via Slack
+    slack_message = f''':rocket: You have been added to the team *{team_data["name"]}*! :tada:'''
+    # Get the user's slack ID if user_data["user_id"] is not None and split with - getting the last
+    if user_data["user_id"] is not None:
+        slack_user_id = user_data["user_id"].split("-")[-1]
+        send_slack(slack_message, slack_user_id)
+    else:
+        # If user_id is None, send to the team channel
+        slack_channel = team_data["slack_channel"]
+        send_slack(slack_message, slack_channel)    
+
+    logger.info("User %s added to team %s", user_data["name"], team_data["name"])
+
+    return {
+        "message": f"User {user_data['name']} added to team {team_data['name']}",
+        "success": True,
+        "team_id": team_id
+    }
+
+def remove_team_member(team_id, user_id):
+    """
+    Admin function to remove a member from a team
+    - Remove user from the team in the database
+    - Notify the user via Slack about the removal
+    """
+    send_slack_audit(action="remove_team_member", message="Removing", payload={"team_id": team_id, "user_id": user_id})
+    
+    db = get_db()
+    logger.debug(f"Removing Team Member {user_id} from Team {team_id}")
+    
+    # Get the team document
+    team_doc = db.collection('teams').document(team_id)
+    team_data = team_doc.get().to_dict()
+    
+    if not team_data:
+        logger.error("Team not found")
+        return {
+            "message": "Error: Team not found",
+            "success": False
+        }
+    
+    # Get the user document
+    user_doc = db.collection('users').document(user_id)
+    user_data = user_doc.get().to_dict()
+    
+    if not user_data:
+        logger.error("User not found")
+        return {
+            "message": "Error: User not found",
+            "success": False
+        }
+    
+    # Check if the user is in the team
+    if user_doc not in team_data.get("users", []):
+        logger.error("User is not a member of the team")
+        return {
+            "message": "Error: User is not a member of the team",
+            "success": False
+        }
+
+    # Remove the user from the team
+    users = team_data.get("users", [])
+    users.remove(user_doc)
+    
+    # Update the team document
+    team_doc.set({
+        "users": users
+    }, merge=True)
+    
+    # Notify the user via Slack
+    slack_message = f''':rocket: You have been removed from the team *{team_data["name"]}*! :tada:'''
+    # Get the user's slack ID if user_data["user_id"] is not None and split with - getting the last
+    if user_data["user_id"] is not None:
+        slack_user_id = user_data["user_id"].split("-")[-1]
+        send_slack(slack_message, slack_user_id)
+    else:
+        # If user_id is None, send to the team channel
+        slack_channel = team_data["slack_channel"]
+        send_slack(slack_message, slack_channel)    
+
+    logger.info("User %s removed from team %s", user_data["name"], team_data["name"])
+
+    return {
+        "message": f"User {user_data['name']} removed from team {team_data['name']}",
+        "success": True,
+        "team_id": team_id
+    }
+
+def remove_team(team_id):
+    """
+    Admin function to remove a team
+    - Delete the team from the database
+    - Notify team members via Slack about the deletion
+    """
+    send_slack_audit(action="remove_team", message="Removing", payload={"team_id": team_id})
+    
+    db = get_db()
+    logger.debug("Removing Team")
+    
+    # Get the team document
+    team_doc = db.collection('teams').document(team_id)
+    team_data = team_doc.get().to_dict()
+    
+    if not team_data:
+        logger.error("Team not found")
+        return {
+            "message": "Error: Team not found",
+            "success": False
+        }
+    
+    # Remove team from all users
+    for user_ref in team_data.get("users", []):
+        user_data = user_ref.get().to_dict()
+        if user_data:
+            # Remove the team from the user's teams list
+            user_teams = user_data.get("teams", [])
+            if team_doc in user_teams:
+                user_teams.remove(team_doc)
+                user_ref.set({
+                    "teams": user_teams
+                }, merge=True)
+    logger.info("Removed team from all users")
+
+    # Remove team from all hackathon events
+    hackathon_event_id = team_data.get("hackathon_event_id")
+    if hackathon_event_id:
+        hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
+        event_collection = db.collection("hackathons").document(hackathon_db_id)
+        event_collection_dict = event_collection.get().to_dict()
+        
+        # Remove the team from the hackathon event
+        new_teams = []
+        for t in event_collection_dict["teams"]:
+            if t != team_doc:
+                new_teams.append(t)
+        
+        event_collection.set({
+            "teams": new_teams
+        }, merge=True)
+
+    # Delete the team document
+    team_doc.delete()
+    logger.info("Deleted team document")
+
+    logger.info("Team %s removed", team_data["name"])
+
+    return {
+        "message": f"Team {team_data['name']} removed",
+        "success": True,
+        "team_id": team_id
+    }
 
 def edit_team(json):
     """
@@ -103,8 +310,11 @@ def queue_team(propel_user_id, json):
     _, user_id, _, _, name, _ = get_propel_user_details_by_id(propel_user_id)
     slack_user_id = user_id
     
-    root_slack_user_id = slack_user_id.replace("oauth2|slack|T1Q7936BH-", "")
+    SLACK_USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-"
+    root_slack_user_id = slack_user_id.replace(SLACK_USER_ID_PREFIX, "")
+    users_list = []
     user = get_user_doc_reference(root_slack_user_id)
+    users_list.append(user)
     
     db = get_db()
     logger.debug("Team Queue")
@@ -115,6 +325,8 @@ def queue_team(propel_user_id, json):
     slack_channel = json["slackChannel"]
     hackathon_event_id = json["eventId"]
     comments = json.get("comments", "")
+    teamMembers = json.get("teamMembers", []) # In addition to the user
+    
     
     # Store nonprofit rankings if provided
     nonprofit_rankings = json.get("nonprofitRankings", [])
@@ -131,6 +343,36 @@ def queue_team(propel_user_id, json):
 
     logger.info("Inviting user %s to slack channel %s", slack_user_id, slack_channel)
     invite_user_to_channel(slack_user_id, slack_channel)
+
+    # Look at teamMember.id to get the slack user id
+    
+
+    for member in teamMembers:
+        if member["id"] != root_slack_user_id:
+            logger.info("Inviting user %s to slack channel %s", member["id"], slack_channel)
+            invite_user_to_channel(member["id"], slack_channel)
+            # Lookup the user in the database by user_id which is their slack user id            
+            full_user_id_with_slack_prefix = f"{SLACK_USER_ID_PREFIX}{member['id']}"
+            user_db_check = get_user_from_slack_id(full_user_id_with_slack_prefix)
+            if not user_db_check:
+                new_user = save_user(
+                    user_id=full_user_id_with_slack_prefix,
+                    email="",
+                    last_login="",
+                    profile_image="",
+                    name=member["real_name"],
+                    nickname=member["name"]
+                )                
+                users_list.append(get_user_doc_reference(new_user.user_id))
+            else:
+                in_db_user = get_user_doc_reference(user_db_check.user_id)
+                users_list.append(in_db_user)
+                logger.info("User %s already exists in the database", user_db_check)
+                    
+
+        else:
+            logger.info("User %s is the creator of the team, not inviting again", member["id"])
+        
     
     # Add Slack admins
     slack_admins = ["UC31XTRT5"], #"UCQKX6LPR", "U035023T81Z", "UC31XTRT5", "UC2JW3T3K", "UPD90QV17", "U05PYC0LMHR"]
@@ -149,7 +391,7 @@ Thank you for your nonprofit preferences! Our team will review your request and 
 We'll notify you once the pairing process is complete.
 
 :question: *Need help?* 
-Join <#C01E5CGDQ74> or <#C07KYG3CECX> for questions and updates.
+Join <#C01E5CGDQ74> for questions and updates.
 
 Let's make a difference! :muscle: :heart:
 '''
@@ -162,7 +404,7 @@ Let's make a difference! :muscle: :heart:
     # Save the team with status IN_REVIEW and active=False
     insert_res = collection.document(doc_id).set({
         "team_number": -1,
-        "users": [user],
+        "users": users_list,
         "name": team_name,
         "slack_channel": slack_channel,
         "created": my_date.isoformat(),
@@ -178,13 +420,16 @@ Let's make a difference! :muscle: :heart:
 
     # Link the team to the user
     new_team_doc = db.collection('teams').document(doc_id)
-    user_doc = user.get()
-    user_dict = user_doc.to_dict()
-    user_teams = user_dict["teams"]
-    user_teams.append(new_team_doc)
-    user.set({
-        "teams": user_teams
-    }, merge=True)
+    for user in users_list:
+        # Add the team to the user's teams list
+        user_doc = user.get()
+        user_dict = user_doc.to_dict()
+        user_teams = user_dict.get("teams", [])
+        user_teams.append(new_team_doc)
+        user.set({
+            "teams": user_teams
+        }, merge=True)
+
 
     # Link the team to the hackathon event
     hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
@@ -201,8 +446,8 @@ Let's make a difference! :muscle: :heart:
     }, merge=True)
 
     # Clear the cache
-    logger.info("Clearing cache for event_id=%s user_doc.id=%s doc_id=%s",
-                hackathon_db_id, user_doc.id, doc_id)
+    logger.info("Clearing cache for event_id=%s doc_id=%s",
+                hackathon_db_id, doc_id)
     clear_cache()
 
     # Get the team
@@ -211,11 +456,7 @@ Let's make a difference! :muscle: :heart:
     return {
         "message": f"Team queued successfully! Check your Slack channel --> #{slack_channel} for more details.",
         "success": True,
-        "team": team,
-        "user": {
-            "name": user_dict["name"],
-            "profile_image": user_dict["profile_image"],
-        }
+        "team": team        
     }
 
 def get_my_teams_by_event_id(propel_id, event_id):

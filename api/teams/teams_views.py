@@ -9,12 +9,15 @@ from api.teams.teams_service import (
     approve_team,
     get_queued_teams,
     edit_team,
+    add_team_member,
+    remove_team_member,
+    remove_team,
     get_teams_by_hackathon_id,
     get_my_teams_by_event_id
 )
 
 logger = logging.getLogger(__name__)
-logger.setLevel(logging.DEBUG)
+logger.setLevel(logging.INFO)
 
 bp_name = 'api-teams'
 bp_url_prefix = '/api/team'
@@ -56,12 +59,60 @@ def edit_team_api():
     Admin endpoint to edit a team.
     Requires user to be an org member with volunteer.admin permission.
     """
-    #if auth_user and auth_user.user_id:
-    return edit_team(request.get_json())
-    
-    #logger.error("Could not obtain user details for PATCH /team/edit")
-    #return {"error": "Unauthorized"}, 401
+    logger.info("Editing team")
 
+    if auth_user and auth_user.user_id:
+        return edit_team(request.get_json())
+    
+    logger.error("Could not obtain user details for PATCH /team/edit")
+    return {"error": "Unauthorized"}, 401
+
+@bp.route("/<teamid>/member", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def add_member_to_team_api(teamid):
+    """
+    Admin endpoint to add a member to a team.
+    Requires user to be an org member with volunteer.admin permission.
+    """
+    if auth_user and auth_user.user_id:
+        # Get the user_id from the request
+        user_id = request.get_json().get("id")
+        return add_team_member(teamid, user_id)
+    
+    logger.error("Could not obtain user details for POST /team/<teamid>/member")
+    return {"error": "Unauthorized"}, 401
+
+@bp.route("/<teamid>", methods=["DELETE"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def delete_team_api(teamid):
+    """
+    Admin endpoint to delete a team.
+    Requires user to be an org member with volunteer.admin permission.
+    """
+    if auth_user and auth_user.user_id:
+        return remove_team(teamid)
+    
+    logger.error("Could not obtain user details for DELETE /team/<teamid>")
+    return {"error": "Unauthorized"}, 401
+
+
+@bp.route("/<teamid>/member", methods=["DELETE"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def remove_member_from_team_api(teamid):
+    """
+    Admin endpoint to remove a member from a team.
+    Requires user to be an org member with volunteer.admin permission.
+    """
+    if auth_user and auth_user.user_id:
+        # Get the user_id from the request
+        user_id = request.get_json().get("id")
+        return remove_team_member(teamid, user_id)
+    
+    logger.error("Could not obtain user details for DELETE /team/<teamid>/member")
+    return {"error": "Unauthorized"}, 401
 
 @bp.route("/queue", methods=["POST"])
 @auth.require_user
