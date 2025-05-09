@@ -523,6 +523,7 @@ def get_teams_by_hackathon_id(hackathon_id):
             
             users.append(user_data)
         del team_data["users"]
+        del team_data["problem_statements"]
         team_data["team_members"] = users
         logger.debug("Team data: %s", team_data)
         teams.append(team_data)
