@@ -478,6 +478,7 @@ def get_my_teams_by_event_id(propel_id, event_id):
             logger.debug("User data: %s", user_data)
             if user_id == user_data["user_id"]:
                 del team_data["users"]
+                del team_data["problem_statements"]
                 teams.append(team_data)                              
 
     logger.debug("Teams data: %s", teams)
