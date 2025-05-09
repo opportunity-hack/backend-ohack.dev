@@ -48,33 +48,16 @@ def finish_saving_update(
         last_login=None,
         profile_image=None,
         name=None,
-        nickname=None):
+        nickname=None,
+        propel_id=None
+        ):
         user.last_login = last_login
         user.profile_image = profile_image
         user.name = name
         user.nickname = nickname
-        user.propel_id = user.propel_id
+        user.propel_id = propel_id
         return update_user(user)
 
-@limits(calls=50, period=ONE_MINUTE)
-def update_user_fields(
-        id=None,
-        user_id=None,
-        last_login=None,
-        profile_image=None,
-        name=None,
-        nickname=None):
-    
-    user = None
-    if id is not None:
-        user = fetch_user_by_db_id(id)
-    else:
-        user = fetch_user_by_user_id(user_id)
-
-    if user is not None:
-        return finish_saving_update(user, last_login, profile_image, name, nickname)
-    else:
-        return None
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_user(
@@ -101,7 +84,7 @@ def save_user(
     user = fetch_user_by_user_id(user_id)
 
     if user is not None:
-        user = finish_saving_update(user, last_login, profile_image, name, nickname,propel_id)
+        user = finish_saving_update(user, last_login, profile_image, name, nickname, propel_id)
         
     else:
         user = finish_saving_insert(user_id, email, last_login, profile_image, name, nickname,propel_id)
