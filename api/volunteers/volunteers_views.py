@@ -3,16 +3,22 @@ import json
 from typing import Dict, Any, Optional, List, Tuple
 from common.auth import auth, auth_user
 from common.log import get_logger
+import logging
 from common.exceptions import InvalidUsageError
 from common.utils.slack import send_slack_audit
 from services.volunteers_service import (
     get_volunteer_by_user_id,
     get_volunteers_by_event,
     create_or_update_volunteer,
-    update_volunteer_selection
+    update_volunteer_selection,
+    get_all_hackers_by_event_id,
+    get_mentor_checkin_status,
+    mentor_checkin,
+    mentor_checkout,
 )
 
 logger = get_logger(__name__)
+logger.setLevel(logging.INFO)
 bp = Blueprint('volunteers', __name__, url_prefix='/api')
 
 # Helper functions
@@ -44,7 +50,9 @@ def _success_response(data: Dict[str, Any] = None, message: str = "Success") -> 
     if data:
         response["data"] = data
     
-    return jsonify(response), 200
+    result = jsonify(response)
+    print("Candy: ", response)
+    return result, 200
 
 def _error_response(message: str, status_code: int = 400) -> Tuple[Dict[str, Any], int]:
     """Generate an error response."""
@@ -128,7 +136,9 @@ def handle_get(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, Any]
         volunteer = get_volunteer_by_user_id(user.user_id, event_id, volunteer_type)
         
         if volunteer:
-            return _success_response(volunteer, "Application retrieved successfully")
+            result = _success_response(volunteer, "Application retrieved successfully")
+            logger.info(f"Retrieved {volunteer_type} application: {result}")            
+            return result
         else:
             return _success_response(None, "No application found")
     except Exception as e:
@@ -396,9 +406,107 @@ def get_hacker_application(event_id):
     
     try:
         # Use query param userId if provided, otherwise use authenticated user
-        effective_user = type('User', (), {'user_id': user_id}) if user_id else user
+        effective_user = type('User', (), {'user_id': user_id}) if user_id else user        
         return handle_get(effective_user, event_id, 'hacker')
     except Exception as e:
         logger.error(f"Error retrieving hacker application: {str(e)}")
         return _error_response(f"Failed to retrieve application: {str(e)}")
     
+@bp.route('/hacker/applications/<event_id>', methods=['GET'])
+@auth.optional_user
+def get_hacker_applications(event_id):
+    """Get all hacker applications for a specific event. Only if teamStatus is 'I'd like to be matched with a team'. using get_all_hackers_by_event_id"""
+    user = auth_user
+    if not event_id:
+        return _error_response("Event ID is required", 400)
+    
+    try:
+        hackers = get_all_hackers_by_event_id(event_id)
+        return _success_response(hackers, "Hacker applications retrieved successfully")
+    except Exception as e:
+        logger.error(f"Error retrieving hacker applications: {str(e)}")
+        return _error_response(f"Failed to retrieve applications: {str(e)}")
+
+
+# Mentor Check-in API Endpoints
+@bp.route('/mentor/checkin/<event_id>/status', methods=['GET'])
+@auth.require_user
+def get_mentor_checkin_status_endpoint(event_id):
+    """Get the current check-in status for the authenticated mentor."""    
+
+    if not event_id:
+        return _error_response("Event ID is required", 400)
+    
+    try:
+        # Get the check-in status
+        user = auth_user
+        status = get_mentor_checkin_status(user.user_id, event_id)
+        
+        # Return the response
+        if status.get('success'):
+            return _success_response({
+                'isCheckedIn': status.get('isCheckedIn', False),
+                'checkInTime': status.get('checkInTime'),
+                'timeSlot': status.get('timeSlot')
+            }, "Check-in status retrieved successfully")
+        else:
+            return _error_response(status.get('error', "Failed to retrieve check-in status"), 404)
+    except Exception as e:
+        logger.error(f"Error retrieving mentor check-in status: {str(e)}")
+        return _error_response(f"Failed to retrieve check-in status: {str(e)}")
+
+
+@bp.route('/mentor/checkin/<event_id>/in', methods=['POST'])
+@auth.require_user
+def mentor_checkin_endpoint(event_id):
+    """Check in a mentor for an event."""
+    if not event_id:
+        return _error_response("Event ID is required", 400)
+    
+    try:
+        # Get time slot from request if provided
+        request_data = request.get_json() or {}
+        time_slot = request_data.get('timeSlot')
+        user = auth_user
+        # Perform check-in
+        result = mentor_checkin(user.user_id, event_id, time_slot)
+        
+        # Return the response
+        if result.get('success'):
+            return _success_response({
+                'message': result.get('message'),
+                'checkInTime': result.get('checkInTime'),
+                'timeSlot': result.get('timeSlot'),
+                'slackNotificationSent': result.get('slackNotificationSent', False)
+            }, "Checked in successfully")
+        else:
+            return _error_response(result.get('error', "Failed to check in"), 400)
+    except Exception as e:
+        logger.error(f"Error during mentor check-in: {str(e)}")
+        return _error_response(f"Failed to check in: {str(e)}")
+
+
+@bp.route('/mentor/checkin/<event_id>/out', methods=['POST'])
+@auth.require_user
+def mentor_checkout_endpoint(event_id):
+    """Check out a mentor from an event."""
+    if not event_id:
+        return _error_response("Event ID is required", 400)
+    
+    try:
+        # Perform check-out
+        user = auth_user
+        result = mentor_checkout(user.user_id, event_id)
+        
+        # Return the response
+        if result.get('success'):
+            return _success_response({
+                'message': result.get('message'),
+                'checkInDuration': result.get('checkInDuration'),
+                'slackNotificationSent': result.get('slackNotificationSent', False)
+            }, "Checked out successfully")
+        else:
+            return _error_response(result.get('error', "Failed to check out"), 400)
+    except Exception as e:
+        logger.error(f"Error during mentor check-out: {str(e)}")
+        return _error_response(f"Failed to check out: {str(e)}")

@@ -403,3 +403,328 @@ def update_volunteer_selection(volunteer_id: str, selected: bool, updated_by: st
     _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
     
     return {**volunteer_data, **update_data}
+
+
+def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:
+    """
+    Get all hackers for a specific event ID.
+    
+    Args:
+        event_id: The event ID
+        
+    Returns:
+        List of hacker records
+    """
+    db = get_db()
+    hackers = db.collection('volunteers').where('event_id', '==', event_id).where('volunteer_type', '==', 'hacker').stream()
+    
+    return [hacker.to_dict() for hacker in hackers] if hackers else []
+
+
+def get_mentor_checkin_status(user_id: str, event_id: str) -> Dict[str, Any]:
+    """
+    Get the current check-in status for a mentor.
+    
+    Args:
+        user_id: The mentor's user ID
+        event_id: The event ID
+        
+    Returns:
+        Dictionary containing check-in status information
+    """
+    db = get_db()
+    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
+    
+    if not volunteer:
+        return {
+            'success': False,
+            'error': 'Mentor record not found'
+        }
+    
+    return {
+        'success': True,
+        'isCheckedIn': volunteer.get('isCheckedIn', False),
+        'checkInTime': volunteer.get('checkInTime', None),
+        'timeSlot': volunteer.get('timeSlot', None)
+    }
+
+
+def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Check in a mentor for an event.
+    
+    Args:
+        user_id: The mentor's user ID
+        event_id: The event ID
+        time_slot: Optional time slot for the check-in
+        
+    Returns:
+        Dictionary containing check-in status information
+    """
+    db = get_db()
+    # Get the volunteer record
+    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
+    
+    if not volunteer:
+        return {
+            'success': False,
+            'error': 'Mentor record not found'
+        }
+    
+    # Check if mentor is already checked in
+    if volunteer.get('isCheckedIn', False):
+        # Update the time slot if provided
+        if time_slot:
+            volunteer_ref = db.collection('volunteers').document(volunteer['id'])
+            volunteer_ref.update({
+                'timeSlot': time_slot,
+                'updated_timestamp': _get_current_timestamp()
+            })
+            
+            # Clear caches
+            _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
+            
+            return {
+                'success': True,
+                'message': 'Updated check-in time slot',
+                'checkInTime': volunteer.get('checkInTime'),
+                'timeSlot': time_slot,
+                'slackNotificationSent': False  # No need to send notification for update
+            }
+        
+        return {
+            'success': True,
+            'message': 'Already checked in',
+            'checkInTime': volunteer.get('checkInTime'),
+            'timeSlot': volunteer.get('timeSlot'),
+            'slackNotificationSent': False
+        }
+    
+    # Perform check-in
+    current_time = _get_current_timestamp()
+    volunteer_ref = db.collection('volunteers').document(volunteer['id'])
+    
+    update_data = {
+        'isCheckedIn': True,
+        'checkInTime': current_time,
+        'updated_timestamp': current_time
+    }
+    
+    if time_slot:
+        update_data['timeSlot'] = time_slot
+    
+    volunteer_ref.update(update_data)
+    
+    # Clear caches
+    _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
+    
+    # Send Slack notification
+    slack_notification_sent = False
+    try:
+        slack_notification_sent = send_mentor_checkin_notification(volunteer, time_slot)
+    except Exception as e:
+        logger.error(f"Failed to send check-in notification: {str(e)}")
+    
+    return {
+        'success': True,
+        'message': 'Checked in successfully',
+        'checkInTime': current_time,
+        'timeSlot': time_slot,
+        'slackNotificationSent': slack_notification_sent
+    }
+
+
+def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
+    """
+    Check out a mentor from an event.
+    
+    Args:
+        user_id: The mentor's user ID
+        event_id: The event ID
+        
+    Returns:
+        Dictionary containing check-out status information
+    """
+    db = get_db()
+    # Get the volunteer record
+    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
+    
+    if not volunteer:
+        return {
+            'success': False,
+            'error': 'Mentor record not found'
+        }
+    
+    # Check if mentor is checked in
+    if not volunteer.get('isCheckedIn', False):
+        return {
+            'success': False,
+            'error': 'Mentor is not checked in'
+        }
+    
+    # Calculate check-in duration if possible
+    check_in_time = volunteer.get('checkInTime')
+    check_in_duration = None
+    
+    if check_in_time:
+        try:
+            # Parse the ISO timestamp
+            check_in_datetime = datetime.fromisoformat(check_in_time)
+            current_datetime = datetime.fromisoformat(_get_current_timestamp())
+            
+            # Calculate duration
+            duration = current_datetime - check_in_datetime
+            total_seconds = duration.total_seconds()
+            
+            # Format as hours and minutes
+            hours = int(total_seconds // 3600)
+            minutes = int((total_seconds % 3600) // 60)
+            check_in_duration = f"{hours}h {minutes}m"
+        except Exception as e:
+            logger.error(f"Error calculating check-in duration: {str(e)}")
+    
+    # Perform check-out
+    current_time = _get_current_timestamp()
+    volunteer_ref = db.collection('volunteers').document(volunteer['id'])
+    
+    update_data = {
+        'isCheckedIn': False,
+        'checkOutTime': current_time,
+        'updated_timestamp': current_time
+    }
+    
+    if check_in_duration:
+        update_data['checkInDuration'] = check_in_duration
+    
+    volunteer_ref.update(update_data)
+    
+    # Clear caches
+    _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
+    
+    # Send Slack notification
+    slack_notification_sent = False
+    try:
+        slack_notification_sent = send_mentor_checkout_notification(volunteer, check_in_duration)
+    except Exception as e:
+        logger.error(f"Failed to send check-out notification: {str(e)}")
+    
+    return {
+        'success': True,
+        'message': 'Checked out successfully',
+        'checkInDuration': check_in_duration,
+        'slackNotificationSent': slack_notification_sent
+    }
+
+
+def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optional[str] = None) -> bool:
+    """
+    Send a Slack notification when a mentor checks in.
+    
+    Args:
+        volunteer: The volunteer record
+        time_slot: Optional time slot for the check-in
+        
+    Returns:
+        True if notification was sent successfully, False otherwise
+    """
+    areas_of_expertise = volunteer.get('expertise', [])
+    specialties = volunteer.get('softwareEngineeringSpecifics', [])
+    slack_user_id = volunteer.get('slack_user_id', '')
+    linked_in = volunteer.get('linkedinProfile', None)
+    in_person = volunteer.get('inPerson', None)
+    
+    # Format the mention if we have a slack user ID
+    name_mention = f"<@{slack_user_id}>" if slack_user_id else None
+    
+    # Format areas of expertise if available
+    expertise_text = ""
+    if areas_of_expertise:
+        if isinstance(areas_of_expertise, list):
+            expertise_text = f"*Expertise:* {', '.join(areas_of_expertise)}"
+        else:
+            expertise_text = f"*Expertise:* {areas_of_expertise}"
+    
+    # Format specialties if available
+    specialties_text = ""
+    if specialties:
+        if isinstance(specialties, list):
+            specialties_text = f"*Specialties:* {', '.join(specialties)}"
+        else:
+            specialties_text = f"*Specialties:* {specialties}"
+    
+    # Format time slot if available
+    time_text = ""
+    if time_slot:
+        time_text = f"*Time Slot:* {time_slot}"
+    
+    slack_message = f"""
+:reversecongaparrot:  *Mentor Available!*
+
+{name_mention} has checked in and is available to help teams!
+
+{expertise_text}
+{specialties_text}
+{time_text}
+{f"*LinkedIn:* {linked_in}" if linked_in else ""}
+{f"*In-Person:* {in_person}" if in_person else ""}
+
+Teams needing help in these areas can reach out to directly or #ask-a-mentor so everyone can benefit from their expertise.
+"""
+    
+    try:
+        send_slack(
+            message=slack_message,
+            channel="mentor-checkin",
+            icon_emoji=":raising_hand:",
+            username="Mentor Check-in"
+        )
+        logger.info(f"Sent Slack notification about mentor check-in for {volunteer.get('email')}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending Slack notification: {str(e)}")
+        return False
+
+
+def send_mentor_checkout_notification(volunteer: Dict[str, Any], duration: Optional[str] = None) -> bool:
+    """
+    Send a Slack notification when a mentor checks out.
+    
+    Args:
+        volunteer: The volunteer record
+        duration: Optional duration of the check-in period
+        
+    Returns:
+        True if notification was sent successfully, False otherwise
+    """
+    first_name = volunteer.get('firstName', '')
+    last_name = volunteer.get('lastName', '')
+    slack_user_id = volunteer.get('slack_user_id', '')
+    
+    # Format the mention if we have a slack user ID
+    name_mention = f"<@{slack_user_id}>" if slack_user_id else f"{first_name} {last_name}"
+    
+    # Format duration if available
+    duration_text = ""
+    if duration:
+        duration_text = f"They were available for {duration}."
+    
+    slack_message = f"""
+:wave: *Mentor Update*
+
+{name_mention} has checked out and is no longer available. {duration_text}
+
+Thanks for your support!
+"""
+    
+    try:
+        send_slack(
+            message=slack_message,
+            channel="mentor-checkin",
+            icon_emoji=":v:",
+            username="Mentor Check-in"
+        )
+        logger.info(f"Sent Slack notification about mentor check-out for {volunteer.get('email')}")
+        return True
+    except Exception as e:
+        logger.error(f"Error sending Slack notification: {str(e)}")
+        return False
