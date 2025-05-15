@@ -17,3 +17,5 @@ scripts/slagenciesfy1819.pdf
 scripts/generated_image.png
 test/data/*.xlsx
 .env.prod
+
+**/.claude/settings.local.json
