@@ -2262,7 +2262,13 @@ def get_history_old(db_id):
         "role": res["role"] if "role" in res else "",
         "company": res["company"] if "company" in res else "",
         "propel_id": res["propel_id"] if "propel_id" in res else "",
-
+        "street_address": res["street_address"] if "street_address" in res else "",
+        "street_address_2": res["street_address_2"] if "street_address_2" in res else "",
+        "city": res["city"] if "city" in res else "",
+        "state": res["state"] if "state" in res else "",
+        "postal_code": res["postal_code"] if "postal_code" in res else "",
+        "country": res["country"] if "country" in res else "",
+        "want_stickers": res["want_stickers"] if "want_stickers" in res else "",
     }
 
     # Clear cache    
@@ -2353,7 +2359,10 @@ def save_profile_metadata_old(propel_id, json):
         logger.info(f"User exists: {user.id}")        
 
     # Only update metadata that is in the json
-    metadataList = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "linkedin_url", "instagram_url", "propel_id"]
+    metadataList = [
+        "role", "expertise", "education", "company", "why", "shirt_size", "github", "linkedin_url", "instagram_url", "propel_id",
+        "street_address", "street_address_2", "city", "state", "postal_code", "country", "want_stickers"
+        ]
 
     d = {}
 
