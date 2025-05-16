@@ -225,6 +225,60 @@ def add_nonprofit_to_hackathon(json):
         "message": "Nonprofit added to hackathon"
     }
 
+def remove_nonprofit_from_hackathon(json):
+    hackathonId = json["hackathonId"]
+    nonprofitId = json["nonprofitId"]
+
+    logger.info(f"Remove Nonprofit from Hackathon Start hackathonId={hackathonId} nonprofitId={nonprofitId}")
+
+    db = get_db()
+    # Get the hackathon document
+    hackathon_doc = db.collection('hackathons').document(hackathonId)
+    # Get the nonprofit document
+    nonprofit_doc = db.collection('nonprofits').document(nonprofitId)
+    
+    # Check if the hackathon document exists
+    if not hackathon_doc:
+        logger.warning(f"Remove Nonprofit from Hackathon End (hackathon not found)")
+        return {
+            "message": "Hackathon not found"
+        }
+    
+    # Get the hackathon document data
+    hackathon_data = hackathon_doc.get().to_dict()
+    
+    # Check if nonprofits array exists
+    if "nonprofits" not in hackathon_data or not hackathon_data["nonprofits"]:
+        logger.warning(f"Remove Nonprofit from Hackathon End (no nonprofits in hackathon)")
+        return {
+            "message": "No nonprofits in hackathon"
+        }
+    
+    # Check if the nonprofit is in the hackathon document
+    nonprofit_found = False
+    updated_nonprofits = []
+    
+    for np in hackathon_data["nonprofits"]:
+        if np.id != nonprofitId:
+            updated_nonprofits.append(np)
+        else:
+            nonprofit_found = True
+    
+    if not nonprofit_found:
+        logger.warning(f"Remove Nonprofit from Hackathon End (nonprofit not found in hackathon)")
+        return {
+            "message": "Nonprofit not found in hackathon"
+        }
+    
+    # Update the hackathon document with the filtered nonprofits list
+    hackathon_data["nonprofits"] = updated_nonprofits
+    hackathon_doc.set(hackathon_data, merge=True)
+    
+    logger.info(f"Remove Nonprofit from Hackathon End (nonprofit removed)")
+    return {
+        "message": "Nonprofit removed from hackathon"
+    }
+
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)
