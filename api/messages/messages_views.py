@@ -31,6 +31,7 @@ from api.messages.messages_service import (
     single_add_volunteer,
     get_single_hackathon_id,
     add_nonprofit_to_hackathon,
+    remove_nonprofit_from_hackathon,
     save_hackathon,
     create_hackathon,
     get_hackathon_request_by_id,
@@ -183,6 +184,13 @@ def list_hackathons():
 def add_nonprofit_to_hackathon_api():
     if auth_user and auth_user.user_id:
         return add_nonprofit_to_hackathon(request.get_json())
+
+@bp.route("/hackathon/nonprofit", methods=["DELETE"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def remove_nonprofit_from_hackathon_api():
+    if auth_user and auth_user.user_id:
+        return remove_nonprofit_from_hackathon(request.get_json())
 
 
 @bp.route("/hackathon/<event_id>/mentor", methods=["POST"])
