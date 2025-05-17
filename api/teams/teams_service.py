@@ -454,7 +454,7 @@ Let's make a difference! :muscle: :heart:
     team = get_teams_list(doc_id)
 
     return {
-        "message": f"Team queued successfully! Check your Slack channel --> #{slack_channel} for more details.",
+        "message": f"Thanks for creating a team, we'll get back to you shortly in your Slack channel: #{slack_channel} - watch for a message from us!",
         "success": True,
         "team": team        
     }
