@@ -326,7 +326,8 @@ def queue_team(propel_user_id, json):
     hackathon_event_id = json["eventId"]
     comments = json.get("comments", "")
     teamMembers = json.get("teamMembers", []) # In addition to the user
-    
+    url_hackathon = f"https://ohack.dev/hack/{hackathon_event_id}"
+    url_manage_team = f"{url_hackathon}/manageteam"
     
     # Store nonprofit rankings if provided
     nonprofit_rankings = json.get("nonprofitRankings", [])
@@ -382,16 +383,21 @@ def queue_team(propel_user_id, json):
 
     # Send a message to the team about their request being queued
     slack_message = f'''
-:rocket: Team *{team_name}* has been added to the queue! :tada:
+:rocket: Team *{team_name}* has been created! :tada:
 
 *Channel:* #{slack_channel}
 *Created by:* <@{root_slack_user_id}> (add your other team members here)
 
-Thank you for your nonprofit preferences! Our team will review your request and pair you with a nonprofit soon.
-We'll notify you once the pairing process is complete.
+- Thank you for your nonprofit preferences! 
+- Our team will review your request and pair you with a nonprofit soon.
+- We'll send a message to this Slack channel when the pairing process is complete.
+
 
 :question: *Need help?* 
 Join <#C01E5CGDQ74> for questions and updates.
+
+- Read more about the hackathon <{url_hackathon}|here>
+- Manage your team <{url_manage_team}|here>
 
 Let's make a difference! :muscle: :heart:
 '''
@@ -531,8 +537,12 @@ def get_teams_by_hackathon_id(hackathon_id):
                 del user_data["teams"]
             
             users.append(user_data)
-        del team_data["users"]
-        del team_data["problem_statements"]
+        
+        if "users" in team_data:
+            del team_data["users"]
+        if "problem_statements" in team_data:
+            del team_data["problem_statements"]
+            
         team_data["team_members"] = users
         logger.debug("Team data: %s", team_data)
         teams.append(team_data)

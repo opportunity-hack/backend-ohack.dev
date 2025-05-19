@@ -39,7 +39,7 @@ def save_problem_statement(d):
 
         # Clear relevant caches
         get_problem_statement.cache_clear()
-        get_problem_statements.cache_clear()
+        #get_problem_statements.cache_clear()
 
         send_slack_audit(action="save_problem_statement",
                         message="Saving", payload=d)
@@ -82,14 +82,14 @@ def remove_problem_statement(id):
         
         # Clear caches
         get_problem_statement.cache_clear()
-        get_problem_statements.cache_clear()
+        #get_problem_statements.cache_clear()
         
         return result
     except Exception as e:
         logger.error(f"Error deleting problem statement: {str(e)}")
         raise
 
-@cached(cache=TTLCache(maxsize=1, ttl=CACHE_TTL))
+# @cached(cache=TTLCache(maxsize=1, ttl=CACHE_TTL), key=lambda: hashkey('all_problem_statements'))
 def get_problem_statements():
     """Get all problem statements"""
     return fetch_problem_statements()
