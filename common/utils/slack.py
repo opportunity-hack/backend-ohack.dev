@@ -22,7 +22,7 @@ logger.addHandler(logging.StreamHandler())
 # set log level
 logger.setLevel(logging.INFO)
 
-# TODO: What is the purpose of this message?
+
 def send_slack_audit(action="", message="", payload=None):
     if not SLACK_URL or SLACK_URL == "":
         logger.warning("SLACK_URL not set, returning")
@@ -33,6 +33,16 @@ def send_slack_audit(action="", message="", payload=None):
     }
 
     if payload:
+        # Remove the "picture" key from the payload if it exists
+        if "picture" in payload:
+            del payload["picture"]
+        
+        if "photoUrl" in payload:
+            del payload["photoUrl"]
+
+        if "recaptchaToken" in payload:
+            del payload["recaptchaToken"]
+
         json = {
             "text": f"[{action}] {message}\n{payload}"
         }
