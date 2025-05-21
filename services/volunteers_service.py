@@ -237,13 +237,16 @@ def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update:
     action_type = "updated" if is_update else "submitted"
     first_name = volunteer_data.get('firstName', '')
     last_name = volunteer_data.get('lastName', '')
+    name = volunteer_data.get('name', '')
+
+
     email = volunteer_data.get('email', '')
     volunteer_type = volunteer_data.get('volunteer_type', '')
     event_id = volunteer_data.get('event_id', '')
     
     slack_message = f"""
 New volunteer form {action_type}:
-*Name:* {first_name} {last_name}
+*Name:* {name} {first_name} {last_name}
 *Email:* {email}
 *Type:* {volunteer_type}
 *Event ID:* {event_id}
