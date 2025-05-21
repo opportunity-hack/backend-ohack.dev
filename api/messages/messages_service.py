@@ -784,7 +784,15 @@ Let's make a difference! :muscle: :heart:
         }
 
 def get_github_repos(event_id):
-    return get_all_repos(event_id)
+    logger.info(f"Get Github Repos for event_id={event_id}")
+    # Get hackathon by event_id
+    hackathon = get_hackathon_by_event_id(event_id)
+    if hackathon is None:
+        logger.warning(f"Get Github Repos End (no results)")
+        return {}
+    else:
+        org_name = hackathon["github_org"]
+        return get_all_repos(org_name)
 
 
 def join_team(propel_user_id, json):

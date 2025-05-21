@@ -44,7 +44,7 @@ def get_github_organizations(event_id: str) -> Dict[str, Any]:
         logger.error("Error getting GitHub organizations for event ID %s: %s", event_id, e)
         return {"github_organizations": []}
 
-def get_github_repositories(event_id: str) -> Dict[str, Any]:
+def get_github_repositories(org_name: str) -> Dict[str, Any]:
     """
     Get GitHub repositories for an event.
     
@@ -54,11 +54,11 @@ def get_github_repositories(event_id: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing GitHub repositories.
     """
-    logger.debug("Getting GitHub repositories for event ID: %s", event_id)
+    logger.debug("Getting GitHub repositories for org_name: %s", org_name)
     
     try:
         # Get all repositories for the event
-        repos = get_all_repos(event_id)
+        repos = get_all_repos(org_name)
         
         github_repos = []
         for repo in repos:
@@ -71,7 +71,7 @@ def get_github_repositories(event_id: str) -> Dict[str, Any]:
         
         return {"github_repositories": github_repos}
     except ValueError as e:
-        logger.error("Error getting repositories for event ID %s: %s", event_id, e)
+        logger.error("Error getting repositories for org_name %s: %s", org_name, e)
         return {"github_repositories": []}
 
 def get_github_contributors(event_id: str) -> Dict[str, Any]:
@@ -514,8 +514,8 @@ def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
     logger.debug("Getting GitHub leaderboard for event ID: %s", event_id)
     
     # Get organization and repository data
-    orgs = get_github_organizations(event_id)
-    repos = get_github_repositories(event_id)
+    org_name = get_github_organizations(event_id)
+    repos = get_github_repositories(org_name["github_organizations"][0]["name"])
     
     # Get contributor data
     contributors_response = get_github_contributors(event_id)
@@ -536,7 +536,7 @@ def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
                 individual_count, team_count)
     
     return {
-        "github_organizations": orgs["github_organizations"],
+        "github_organizations": org_name["github_organizations"],
         "github_repositories": repos["github_repositories"],
         "github_contributors": contributors,
         "github_achievements": achievements,  # Include the full achievements list
