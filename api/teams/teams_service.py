@@ -542,7 +542,7 @@ def get_teams_by_hackathon_id(hackathon_id):
             del team_data["users"]
         if "problem_statements" in team_data:
             del team_data["problem_statements"]
-            
+
         team_data["team_members"] = users
         logger.debug("Team data: %s", team_data)
         teams.append(team_data)
@@ -622,11 +622,29 @@ def approve_team(admin_user_id, json):
             "success": False
         }
     
+    
     # Prepare data for GitHub repo creation
     team_name = team_data["name"]
     slack_channel = team_data["slack_channel"]
     github_username = team_data["github_username"]
     hackathon_event_id = team_data["hackathon_event_id"]
+
+    # Get hackathon event details by event ID
+    hackathon_event = get_hackathon_by_event_id(hackathon_event_id)
+    if not hackathon_event:
+        return {
+            "message": "Error: Hackathon event not found",
+            "success": False
+        }
+    
+    # Make sure that github_org is set within the event
+    if not hackathon_event.get("github_org"):
+        return {
+            "message": "Error: GitHub organization not found for the event",
+            "success": False
+        }
+    github_org = hackathon_event["github_org"]
+    logger.info("GitHub organization: %s", github_org)
     
     # Get admin user details for audit
     _, _, _, _, admin_name, _ = get_propel_user_details_by_id(admin_user_id)
@@ -655,9 +673,11 @@ def approve_team(admin_user_id, json):
             raw_problem_statement_title, 
             github_username, 
             nonprofit_name, 
-            nonprofit_id
+            nonprofit_id,
+            github_org
         )
     except ValueError as e:
+        logger.error("Error creating GitHub repo: %s", e)
         return {
             "message": f"Error creating GitHub repo: {e}",
             "success": False
@@ -665,6 +685,8 @@ def approve_team(admin_user_id, json):
     
     nonprofit_url = f"https://ohack.dev/nonprofit/{nonprofit_id}"
     project_url = f"https://ohack.dev/project/{problem_statement_id}"
+
+    logger.info("GitHub repo created: %s", repo["full_url"])
     
     # Send notification to the team
     slack_message = f'''
@@ -691,7 +713,7 @@ Join <#C01E5CGDQ74> or <#C07KYG3CECX> for questions and updates.
 7. <https://www.ohack.dev/volunteer/track|Log volunteer hours>
 8. Post-hack: Update LinkedIn with your amazing experience!
 9. Update <https://www.ohack.dev/profile|your profile> for a chance to win prizes!
-10. Follow the schedule at <https://www.ohack.dev/hack/2024_fall|ohack.dev/hack/2024_fall>
+10. Follow the schedule at <https://www.ohack.dev/hack/{hackathon_event_id}|ohack.dev/hack/{hackathon_event_id}>
 
 Let's make a difference! :muscle: :heart:
 '''
@@ -742,3 +764,55 @@ def get_queued_teams():
         teams.append(team_data)
     
     return {"teams": teams}
+
+
+def send_team_message(admin_user, teamid, json):
+    """
+    Send a message to a team
+    - Get the team document
+    - Send the message to the team Slack channel
+    """
+    send_slack_audit(action="send_team_message", message="Sending", payload=json)
+    
+    
+    admin_name = f"{admin_user.first_name} ({admin_user.last_name})"
+    db = get_db()
+    logger.debug("Sending Team Message")
+    
+    # Get the team document
+    team_doc = db.collection('teams').document(teamid)
+    team_data = team_doc.get().to_dict()
+    
+    if not team_data:
+        return {
+            "message": "Error: Team not found",
+            "success": False
+        }
+    
+    # Get the message from the request
+    message = json.get("message", "")
+    
+    # Send the message to the team Slack channel
+    slack_channel = team_data["slack_channel"]
+    send_slack(message, slack_channel)
+
+    # If communication_history doesn't exist, create it and append the timestamp, sender, text
+    if "communication_history" not in team_data:
+        team_data["communication_history"] = []
+    team_data["communication_history"].append({
+        "timestamp": datetime.now().isoformat(),
+        "sender": admin_name,
+        "text": message
+    })
+    # Update the team document
+    team_doc.set({
+        "communication_history": team_data["communication_history"]
+    }, merge=True)
+    # Clear cache
+    clear_cache()
+    
+    return {
+        "message": f"Message sent to team {teamid}",
+        "success": True,
+        "team_id": teamid
+    }

@@ -13,7 +13,8 @@ from api.teams.teams_service import (
     remove_team_member,
     remove_team,
     get_teams_by_hackathon_id,
-    get_my_teams_by_event_id
+    get_my_teams_by_event_id,
+    send_team_message
 )
 
 logger = logging.getLogger(__name__)
@@ -142,6 +143,21 @@ def approve_team_assignment():
     
     logger.error("Could not obtain user details for POST /team/approve")
     return {"error": "Unauthorized"}, 401
+
+@bp.route("/admin/<teamid>/message", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def send_team_message_api(teamid):
+    """
+    Admin endpoint to send a message to a team.
+    Requires user to be an org member with volunteer.admin permission.
+    """
+    if auth_user and auth_user.user_id:
+        return send_team_message(auth_user, teamid, request.get_json())
+    
+    logger.error("Could not obtain user details for POST /team/admin/message")
+    return {"error": "Unauthorized"}, 401
+
 
 @bp.route("/queue", methods=["GET"])
 @auth.require_user

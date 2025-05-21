@@ -6,16 +6,22 @@ from github import GithubException
 
 load_dotenv()
 
-def create_github_repo(repository_name, hackathon_event_id, slack_name_of_creator, team_name, team_slack_channel, problem_statement_id, problem_statement_title, github_username, nonprofit_name, nonprofit_id):
-    if hackathon_event_id == "2024_fall":
-        org_name = "2024-Arizona-Opportunity-Hack"
-    else:
-        raise ValueError('Not supported hackathon event id')
-    
+def create_github_repo(
+        repository_name,
+        hackathon_event_id,
+        slack_name_of_creator,
+        team_name,
+        team_slack_channel,
+        problem_statement_id,
+        problem_statement_title,
+        github_username,
+        nonprofit_name,
+        nonprofit_id,
+        org_name):        
     g = Github(os.getenv('GITHUB_TOKEN'))
     org = g.get_organization(org_name)
     
-    if does_repo_exist(repository_name, hackathon_event_id):
+    if does_repo_exist(repository_name, hackathon_event_id, org_name):
         raise ValueError(f"Repository {repository_name} already exists")
 
     # Catch GitHubException
@@ -130,12 +136,7 @@ Examples of stellar readmes:
     }
 
 
-def does_repo_exist(repo_name, hackathon_event_id):
-    if hackathon_event_id == "2024_fall":
-        org_name = "2024-Arizona-Opportunity-Hack"
-    else:
-        raise ValueError('Not supported hackathon event id')
-    
+def does_repo_exist(repo_name, hackathon_event_id, org_name):       
     g = Github(os.getenv('GITHUB_TOKEN'))
     org = g.get_organization(org_name)
     try:
@@ -157,12 +158,7 @@ def validate_github_username(github_username):
     
 
 
-def get_all_repos(hackathon_event_id):
-    if hackathon_event_id == "2024_fall":
-        org_name = "2024-Arizona-Opportunity-Hack"
-    else:
-        raise ValueError('Not supported hackathon event id')
-    
+def get_all_repos(org_name):    
     g = Github(os.getenv('GITHUB_TOKEN'))
     org = g.get_organization(org_name)
     repos = org.get_repos()
