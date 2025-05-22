@@ -39,6 +39,7 @@ def add_team_member(team_id, user_id):
     # Get the team document
     team_doc = db.collection('teams').document(team_id)
     team_data = team_doc.get().to_dict()
+    slack_channel = team_data.get("slack_channel", None)
     
     if not team_data:
         logger.error("Team not found")
@@ -50,6 +51,10 @@ def add_team_member(team_id, user_id):
     # Get the user document
     user_doc = db.collection('users').document(user_id)
     user_data = user_doc.get().to_dict()
+    slack_user_id = user_data.get("user_id")
+    
+    if slack_channel is not None:
+        invite_user_to_channel(slack_user_id, slack_channel)
     
     if not user_data:
         logger.error("User not found")
@@ -568,7 +573,6 @@ def approve_team(admin_user_id, json):
     
     team_id = json["teamId"]
     nonprofit_id = json["nonprofitId"]
-    problem_statement_id = json.get("problemStatementId")
     
     # Get the team
     team_doc = db.collection('teams').document(team_id)
@@ -595,11 +599,10 @@ def approve_team(admin_user_id, json):
         nonprofit = get_single_npo(nonprofit_id)["nonprofits"]
         nonprofit_name = nonprofit["name"]
         
-        # If no problem statement specified, use the first one from the nonprofit
-        if not problem_statement_id and "problem_statements" in nonprofit and len(nonprofit["problem_statements"]) > 0:
-            problem_statement_id = nonprofit["problem_statements"][0]
-            logger.info("Using problem statement ID %s", problem_statement_id)
-        elif not problem_statement_id:
+        # Just make sure there is at least a problem statement
+        if "problem_statements" in nonprofit and len(nonprofit["problem_statements"]) > 0:           
+            logger.info("Problem statements found for nonprofit %s", nonprofit_name)
+        else:
             return {
                 "message": "Error: No problem statement available for the nonprofit",
                 "success": False
@@ -609,20 +612,7 @@ def approve_team(admin_user_id, json):
             "message": "Error: Nonprofit ID is required",
             "success": False
         }
-    
-    # Get problem statement
-    problem_statement = None
-    if problem_statement_id:
-        problem_statement = get_problem_statement_from_id_old(problem_statement_id)
-        logger.info("Problem Statement %s", problem_statement)
-    
-    if not problem_statement:
-        return {
-            "message": "Error: Problem statement not found",
-            "success": False
-        }
-    
-    
+            
     # Prepare data for GitHub repo creation
     team_name = team_data["name"]
     slack_channel = team_data["slack_channel"]
@@ -645,6 +635,14 @@ def approve_team(admin_user_id, json):
         }
     github_org = hackathon_event["github_org"]
     logger.info("GitHub organization: %s", github_org)
+
+    # Look through the "links" within the hackathon event to find any url that contains "devpost"
+    devpost_url = ""
+    for link in hackathon_event.get("links", []):
+        if "devpost" in link.get("link", ""):
+            devpost_url = link["link"]
+            break
+    logger.info("DevPost URL: %s", devpost_url)
     
     # Get admin user details for audit
     _, _, _, _, admin_name, _ = get_propel_user_details_by_id(admin_user_id)
@@ -654,11 +652,9 @@ def approve_team(admin_user_id, json):
     first_user_data = first_user_ref.get().to_dict()
     first_user_name = first_user_data.get("name", "Team Member")
     
-    # Generate GitHub repo name
-    raw_problem_statement_title = problem_statement.get().to_dict()["title"]
-    problem_statement_title = raw_problem_statement_title.replace(" ", "").replace("-", "")
+    # Generate GitHub repo name        
     nonprofit_title = nonprofit_name.replace(" ", "").replace("-", "")[:20]
-    repository_name = f"{team_name}-{nonprofit_title}-{problem_statement_title}"[:100]
+    repository_name = f"{team_name}-{nonprofit_title}"[:100]
     
     # Create GitHub repo
     try:
@@ -668,23 +664,25 @@ def approve_team(admin_user_id, json):
             hackathon_event_id, 
             first_user_name, 
             team_name, 
-            slack_channel, 
-            problem_statement_id, 
-            raw_problem_statement_title, 
+            slack_channel,             
             github_username, 
             nonprofit_name, 
             nonprofit_id,
-            github_org
+            github_org,
+            devpost_url
         )
     except ValueError as e:
         logger.error("Error creating GitHub repo: %s", e)
-        return {
-            "message": f"Error creating GitHub repo: {e}",
-            "success": False
-        }
+        if "already exists" in str(e):
+            logger.error("GitHub repo already exists...continuing")
+        else:
+            return {
+                "message": f"Error creating GitHub repo: {e}",
+                "success": False
+            }
     
     nonprofit_url = f"https://ohack.dev/nonprofit/{nonprofit_id}"
-    project_url = f"https://ohack.dev/project/{problem_statement_id}"
+    
 
     logger.info("GitHub repo created: %s", repo["full_url"])
     
@@ -694,24 +692,23 @@ def approve_team(admin_user_id, json):
 
 *Channel:* #{slack_channel}
 *Nonprofit:* <{nonprofit_url}|{nonprofit_name}>
-*Project:* <{project_url}|{raw_problem_statement_title}>
 *Approved by:* {admin_name}
 
 :github_parrot: *GitHub Repository:* {repo['full_url']}
 All code goes here! Remember, we're building for the public good (MIT license).
 
 :question: *Need help?* 
-Join <#C01E5CGDQ74> or <#C07KYG3CECX> for questions and updates.
+Join <#C01E5CGDQ74> for questions and updates.
 
 :clipboard: *Next Steps:*
 1. Add team to GitHub repo: <https://opportunity-hack.slack.com/archives/C1Q6YHXQU/p1605657678139600|How-to guide>
 2. Create DevPost project: <https://youtu.be/vCa7QFFthfU?si=bzMQ91d8j3ZkOD03|Tutorial video>
-3. Submit to <https://opportunity-hack-2024-arizona.devpost.com|2024 DevPost>
+3. Submit to <{devpost_url}|this DevPost project> - you can continue to update this until the deadline!
 4. Study your nonprofit slides and software requirements doc and chat with mentors
 5. Code, collaborate, and create!
-6. Share your progress on the socials: `#ohack2024` @opportunityhack
+6. Share your progress on the socials: `#ohack` and `@opportunityhack`
 7. <https://www.ohack.dev/volunteer/track|Log volunteer hours>
-8. Post-hack: Update LinkedIn with your amazing experience!
+8. Post-hack: Update LinkedIn with your amazing experience! You are getting real-world industry experience!
 9. Update <https://www.ohack.dev/profile|your profile> for a chance to win prizes!
 10. Follow the schedule at <https://www.ohack.dev/hack/{hackathon_event_id}|ohack.dev/hack/{hackathon_event_id}>
 
@@ -725,11 +722,9 @@ Let's make a difference! :muscle: :heart:
     
     # Update the team document
     team_doc.set({
-        "status": "APPROVED",
-        "active": True,
-        "problem_statements": [problem_statement],
-        "nonprofit_id": nonprofit_id,
-        "problem_statement_id": problem_statement_id,
+        "status": "NONPROFIT_SELECTED",
+        "active": "True",        
+        "selected_nonprofit_id": nonprofit_id,        
         "github_links": [
             {
                 "link": full_github_repo_url,
