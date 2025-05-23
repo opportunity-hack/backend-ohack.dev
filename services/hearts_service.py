@@ -1,5 +1,5 @@
 from db.db import fetch_users
-import logging
+from common.log import get_logger, info, debug, warning, error, exception
 from google.cloud import storage
 from PIL import ImageFont
 from openai import OpenAI
@@ -23,12 +23,8 @@ CDN_SERVER = os.getenv("CDN_SERVER")
 GCLOUD_CDN_BUCKET = os.getenv("GCLOUD_CDN_BUCKET")
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
-# add logger
-logger = logging.getLogger(__name__)
-# set logger to standard out
-logger.addHandler(logging.StreamHandler())
-# set log level
-logger.setLevel(logging.DEBUG)
+# Initialize logger
+logger = get_logger("hearts_service")
 #
 from common.utils.firebase import add_hearts_for_user, get_user_by_user_id, add_certificate
 from common.utils.slack import send_slack
@@ -46,7 +42,7 @@ def get_hearts_for_all_users():
         total_hearts = 0
 
         if user.history:
-            print(f"User history: {user.history}")
+            debug(logger, "User history", history=user.history)
             '''
             Example of user history:
              {'what': {'unit_test_coverage': 0, 'documentation': 0.5, 'productionalized_projects': 0.5, 'unit_test_writing': 0, 'observability': 0, 'code_quality': 0.5, 'requirements_gathering': 0.5, 'design_architecture': 0.5}, 'how': {'iterations_of_code_pushed_to_production': 1.5, 'code_reliability': 2, 'standups_completed': 2.5, 'customer_driven_innovation_and_design_thinking': 1}}
@@ -83,12 +79,12 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
     user = get_user_by_user_id(slack_user_id)
     if user is None:
         error_string = f"User with slack id {slack_user_id} not found"
-        logger.error(error_string)
+        error(logger, "Error generating certificate", error=error_string)
         raise Exception(error_string)
     
     if "id" not in user:
         error_string = f"User with slack id {slack_user_id} not found"
-        logger.error(error_string)
+        error(logger, "Error generating certificate", error=error_string)
         raise Exception(error_string)
     
     id = user["id"]
@@ -204,7 +200,7 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
     draw.text((1024/2-width/2, 1024-25), bottom_text,
             font=smaller_font, fill=white_color)
 
-    logger.info(f"Generated certificate for {name} with {total_hearts} hearts with filename {filename}")
+    info(logger, "Generated certificate", name=name, hearts=total_hearts, filename=filename)
 
     # Generate a unique background image
     if generate_backround_image:
@@ -216,11 +212,11 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
         # Check if response is valid
         if not response.data:
             # Print error from response
-            logger.error(response)    
+            error(logger, "Error with OpenAI API", response=response)    
             raise Exception("OpenAI response is not valid")
         
         image_url = response.data[0].url
-        logger.info(f"Generated image from OpenAI: {image_url}")
+        info(logger, "Generated image from OpenAI", image_url=image_url)
 
         urllib.request.urlretrieve(image_url, "./generated_image.png")
 
@@ -239,7 +235,7 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
     text_img.save(filename, format="png")
     upload_to_cdn("certificates", filename)
     add_certificate(user_id=userid, certificate=filename)
-    logger.info(f"Generated certificate for {name} with {total_hearts} hearts with filename {filename}")
+    info(logger, "Generated certificate", name=name, hearts=total_hearts, filename=filename)
     return filename
 
 

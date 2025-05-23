@@ -5,17 +5,14 @@ import requests
 from common.utils.slack import send_slack_audit
 from model.user import User
 from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
-import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
-from common.log import get_log_level
+from common.log import get_logger, info, debug, warning, error, exception
 import uuid
 
 
-
-logger = logging.getLogger("myapp")
-logger.setLevel(logging.INFO)
+logger = get_logger("users_service")
 
 #TODO consts file?
 ONE_MINUTE = 1*60
@@ -70,14 +67,13 @@ def save_user(
         propel_id=None,
         ):
 
-    logger.info(f"User Save for {user_id} {email} {last_login} {profile_image} {name} {nickname}")
+    info(logger, "User Save", user_id=user_id, email=email, last_login=last_login, profile_image=profile_image, name=name, nickname=nickname)
     # https://towardsdatascience.com/nosql-on-the-cloud-with-python-55a1383752fc
 
     if user_id is None or email is None or last_login is None or profile_image is None:
-        logger.error(
-            f"Empty values provided for user_id: {user_id},\
-                email: {email}, or last_login: {last_login}\
-                    or profile_image: {profile_image}")
+        error(logger, "Empty values provided for user save", 
+              user_id=user_id, email=email, 
+              last_login=last_login, profile_image=profile_image)
         return None
 
     # TODO: Call get_user from db here
@@ -103,17 +99,17 @@ def get_slack_user_from_token(token):
     
     json = resp.json()
     if not json["ok"]:
-        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
+        warning(logger, "Error getting user details from Slack or Propel APIs", response=json)
         return None    
     
     if "sub" not in json:
-        logger.warning(f"Error getting user details from Slack or Propel APIs: {json}")
+        warning(logger, "Error getting user details from Slack or Propel APIs", response=json)
         return None
 
     # Add prefix to sub 
     json["sub"] = USER_ID_PREFIX + json["sub"]
 
-    logger.info(f"Slack RESP: {json}")
+    info(logger, "Slack API response", response=json)
     return json
 
 def get_user_from_propel_user_id(propel_id):
@@ -126,7 +122,7 @@ def get_slack_user_from_propel_user_id(propel_id):
 
     url = f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token"
 
-    logger.debug(f"Propel URL: {url}")
+    debug(logger, "Propel API URL", url=url)
 
     resp = requests.get(
         url, 
@@ -270,7 +266,7 @@ def save_volunteering_time(propel_id, json):
     # Get the user
     user = fetch_user_by_user_id(slack_user_id)
     if user is None:
-        logger.error(f"User not found for {slack_user_id}")
+        error(logger, "User not found", slack_user_id=slack_user_id)
         return
 
     timestamp = datetime.now().isoformat() + "Z"  
@@ -279,7 +275,7 @@ def save_volunteering_time(propel_id, json):
     if "finalHours" in json:
         finalHours = json["finalHours"] # This is sent at when volunteering is done        
         if finalHours is None:
-            logger.error(f"finalHours is None for {slack_user_id}")
+            error(logger, "finalHours is None", slack_user_id=slack_user_id)
             return
             
         user.volunteering.append({
@@ -297,7 +293,7 @@ def save_volunteering_time(propel_id, json):
     elif "commitmentHours" in json:
         commitmentHours = json["commitmentHours"] # This is sent at the start of volunteering        
         if commitmentHours is None:
-            logger.error(f"commitmentHours is None for {slack_user_id}")
+            error(logger, "commitmentHours is None", slack_user_id=slack_user_id)
             return
         
         user.volunteering.append({

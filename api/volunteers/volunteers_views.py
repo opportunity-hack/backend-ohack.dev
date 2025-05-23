@@ -51,7 +51,7 @@ def _success_response(data: Dict[str, Any] = None, message: str = "Success") -> 
         response["data"] = data
     
     result = jsonify(response)
-    print("Candy: ", response)
+    logger.debug(f"Response data: {response}")
     return result, 200
 
 def _error_response(message: str, status_code: int = 400) -> Tuple[Dict[str, Any], int]:

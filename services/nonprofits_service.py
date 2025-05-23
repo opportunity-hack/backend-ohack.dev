@@ -4,26 +4,24 @@ from ratelimit import limits
 import requests
 from db.db import delete_nonprofit, fetch_npo, fetch_npos, insert_nonprofit, update_nonprofit
 from model.nonprofit import Nonprofit
-import logging
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
-from common.log import get_log_level
+from common.log import get_logger, info, debug, warning, error, exception
 
-logger = logging.getLogger("ohack")
-logger.setLevel(get_log_level())
+logger = get_logger("nonprofits_service")
 
 #TODO consts file?
 ONE_MINUTE = 1*60
 
 @limits(calls=20, period=ONE_MINUTE)
 def get_npos():
-    logger.debug("Get NPOs start")
+    debug(logger, "Get NPOs start")
     
     npos = fetch_npos()
            
     # log result
-    logger.debug(f"Found {len(npos)} results")
+    debug(logger, "Found NPO results", count=len(npos))
     return npos
 
 def get_npo(id):
@@ -32,7 +30,7 @@ def get_npo(id):
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_npo(d):
-    logger.debug(f"Save NPO {d}")
+    debug(logger, "Save NPO", nonprofit=d)
 
     n = Nonprofit() # Don't use ProblemStatement.deserialize here. We don't have an id yet.
     n.update(d)
@@ -46,7 +44,7 @@ def save_npo(d):
 
 @limits(calls=50, period=ONE_MINUTE)
 def update_npo(d):
-    logger.debug(f"Update NPO {d}")
+    debug(logger, "Update NPO", nonprofit=d)
 
     n: Nonprofit | None = None
 

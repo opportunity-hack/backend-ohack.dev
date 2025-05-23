@@ -1,5 +1,5 @@
 import os 
-import logging
+from common.log import get_logger, info, debug, warning, error, exception
 import json
 from common.auth import auth, auth_user
 
@@ -65,8 +65,7 @@ from api.messages.messages_service import (
     get_all_giveaways,
 )
 
-logger = logging.getLogger("myapp")
-logger.setLevel(logging.DEBUG)
+logger = get_logger("messages_views")
 
 
 bp_name = 'api-messages'
@@ -125,7 +124,7 @@ def get_npos():
 # Get nonprofits by hackathon
 @bp.route("/npos/hackathon/<id>", methods=["GET"])
 def get_npos_by_hackathon_id_api(id):
-    print(f"id: {id}")
+    debug(logger, "Getting problem statement by ID", id=id)
     return (get_npos_by_hackathon_id(id=id))
 
 @bp.route("/npo/<npo_id>", methods=["GET"])
@@ -314,7 +313,7 @@ def add_team():
     if auth_user and auth_user.user_id:
         return save_team(auth_user.user_id, request.get_json())
     else:
-        print("** ERROR Could not obtain user details for POST /team")
+        error(logger, "Could not obtain user details for POST /team")
         return None
 
 
@@ -324,7 +323,7 @@ def remove_user_from_team():
     if auth_user and auth_user.user_id:        
         return vars(unjoin_team(auth_user.user_id, request.get_json()))
     else:
-        print("** ERROR Could not obtain user details for DELETE /team")
+        error(logger, "Could not obtain user details for DELETE /team")
         return None
 
 
@@ -334,7 +333,7 @@ def add_user_to_team():
     if auth_user and auth_user.user_id:
         return vars(join_team(auth_user.user_id, request.get_json()))
     else:
-        print("** ERROR Could not obtain user details for PATCH /team")
+        error(logger, "Could not obtain user details for PATCH /team")
         return None
 
 
@@ -362,7 +361,7 @@ def store_news():
 def read_news():
     limit_arg = request.args.get("limit")  # Get the value of the 'limit' parameter from the query string
     # Log
-    print(f"limit_arg: {limit_arg}")
+    debug(logger, "Processing problem statements list", limit=limit_arg)
 
     # If limit is set, convert to int
     limit=3
@@ -401,7 +400,7 @@ def store_praise():
     elif sender_id == receiver_id:
         return "You cannot write a praise about yourself", 400
     else:
-        logger.debug(f"Hre is the request object {request.get_json()}")
+        debug(logger, "Request object", data=request.get_json())
         return vars(save_praise(request.get_json()))
 
 @bp.route("/praises", methods=["GET"])
@@ -431,7 +430,7 @@ def register_helping_status():
         # todo
         return vars(save_helping_status_old(auth_user.user_id, request.get_json()))
     else:
-        print("** ERROR Could not obtain user details for POST /profile/helping")
+        error(logger, "Could not obtain user details for POST /profile/helping")
         return None
     
 @bp.route("/problem_statement", methods=["POST"])

@@ -12,10 +12,10 @@ from cachetools import cached, TTLCache
 from cachetools.keys import hashkey
 import uuid
 from services import users_service
-from common.log import get_logger
+from common.log import get_logger, info, debug, warning, error, exception
 from common.exceptions import InvalidInputError
 
-logger = get_logger(__name__)
+logger = get_logger("problem_statements_service")
 
 ONE_MINUTE = 60
 CACHE_TTL = 600  # 10 minutes
@@ -47,7 +47,7 @@ def save_problem_statement(d):
         return p
 
     except Exception as e:
-        logger.error(f"Error saving problem statement: {str(e)}")
+        exception(logger, "Error saving problem statement", exc_info=e)
         raise
 
 def validate_problem_statement(data):
@@ -64,14 +64,14 @@ def validate_problem_statement(data):
 @cached(cache=TTLCache(maxsize=100, ttl=CACHE_TTL))
 def get_problem_statement(id):
     """Get a single problem statement by ID"""
-    logger.debug(f"get_problem_statement start id={id}")    
+    debug(logger, "get_problem_statement start", id=id)    
     
     problem_statement = fetch_problem_statement(id)
     
     if problem_statement is None:
-        logger.warning("get_problem_statement end (no results)")
+        warning(logger, "get_problem_statement end (no results)", id=id)
     else:                                
-        logger.info(f"get_problem_statement end (with result):{problem_statement}")
+        info(logger, "get_problem_statement end (with result)", id=id, problem_statement=problem_statement)
         
     return problem_statement
 
@@ -86,7 +86,7 @@ def remove_problem_statement(id):
         
         return result
     except Exception as e:
-        logger.error(f"Error deleting problem statement: {str(e)}")
+        exception(logger, "Error deleting problem statement", exc_info=e, id=id)
         raise
 
 # @cached(cache=TTLCache(maxsize=1, ttl=CACHE_TTL), key=lambda: hashkey('all_problem_statements'))
@@ -110,7 +110,7 @@ def update_problem_statement_fields(d):
     
 @limits(calls=100, period=ONE_MINUTE)
 def save_helping_status(propel_user_id, d):
-    logger.info(f"save_helping_status {propel_user_id} // {d}")
+    info(logger, "save_helping_status", propel_user_id=propel_user_id, data=d)
     user = users_service.get_user_from_propel_user_id(propel_user_id)
 
     slack_message = None
@@ -163,7 +163,7 @@ def save_helping_status(propel_user_id, d):
 
 def save_user_helping_status(user: User, d):
 
-    logger.info(f"save_user_helping_status {user.serialize()} // {d}")
+    info(logger, "save_user_helping_status", user=user.serialize(), data=d)
     helping_status = d["status"] # helping or not_helping
     
     problem_statement_id = d["problem_statement_id"]
@@ -201,7 +201,7 @@ def link_problem_statements_to_events(json):
     #     "<problemStatementId>" : [ "<eventTitle1>|<eventId1>", "<eventTitle2>|<eventId2>" ]
     #   }
     # }
-    logger.debug(f"Linking payload {json}")
+    debug(logger, "Linking payload", payload=json)
     
     result = []
     
@@ -215,7 +215,7 @@ def link_problem_statements_to_events(json):
             hackathons = []
             
             for event in eventList:
-                logger.info(f"Checking event: {event}")
+                info(logger, "Checking event", event=event)
                 eventId = None
                 # <eventTitle>|<eventId>
                 if "|" in event:
