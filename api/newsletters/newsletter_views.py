@@ -2,7 +2,7 @@ from api.newsletters.newsletter_service import address, get_subscription_list,ad
 from .smtp import send_newsletters,format_message
 import json
 import os
-import logging
+from common.log import get_logger, info, debug, warning, error, exception
 from flask import (
     Blueprint,
     request
@@ -19,7 +19,7 @@ bp_name = 'api-newsletter'
 bp_url_prefix = '/api/newsletter'
 bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
 
-logger = logging.getLogger("myapp")
+logger = get_logger("newsletter_views")
 
 
 @bp.route("/")
@@ -41,22 +41,22 @@ def check_sub(user_id):
 def send_newsletter():
     data = request.get_json()
     try:
-        logger.info(data["addresses"])
+        info(logger, "Subscription list", addresses=data["addresses"])
         send_newsletters(addresses=data["addresses"],message=data["body"],subject=data["subject"],role=data["role"])
     except  Exception as e:
-        logger.debug("Error" + (str(e)))
+        exception(logger, "Error getting subscription list", exc_info=e)
         return "False" 
     return "True"
 
 @bp.route("/preview_newsletter", methods=["POST"])
 def preview_newsletter():
-    logger.debug("running")
+    debug(logger, "Sending newsletter")
     data = request.get_json()
     try:
         # logger.info(data["body"])
         content = format_message(message=data["body"], address={"id": "A_Random_user_id"})
     except  Exception as e:
-        logger.debug(str(e))
+        exception(logger, "Error sending newsletter", exc_info=e)
         content =  "Error".format(str(e))
     return content
 
@@ -65,7 +65,7 @@ def preview_newsletter():
 @auth.require_user
 # @auth.require_org_member_with_permission("admin_permissions")
 def newsletter_signup(subscribe, doc_id):
-    print("authorized")
+    debug(logger, "User authorized")
     if subscribe == "subscribe":
         return add_to_subscription_list(doc_id)
     elif subscribe == "verify":

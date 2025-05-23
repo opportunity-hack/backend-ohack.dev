@@ -14,7 +14,7 @@ import pytz
 import time
 from functools import wraps
 
-import logging
+from common.log import get_logger, info, debug, warning, error, exception
 import firebase_admin
 from firebase_admin.firestore import DocumentReference, DocumentSnapshot
 from firebase_admin import credentials, firestore
@@ -35,8 +35,7 @@ import resend
 import random
 
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+logger = get_logger("messages_service")
 
 
 google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
@@ -1979,7 +1978,7 @@ def send_welcome_email(name, email):
 
     email = resend.Emails.SendParams(params)
     resend.Emails.send(email)
-    print(email)
+    debug(logger, "Processing email", email=email)
     return True
 
 
