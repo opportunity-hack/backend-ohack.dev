@@ -63,6 +63,7 @@ from api.messages.messages_service import (
     get_user_giveaway,
     save_giveaway,
     get_all_giveaways,
+    upload_image_to_cdn,
 )
 
 logger = get_logger("messages_views")
@@ -548,3 +549,19 @@ def get_submitted_hackathon(request_id):
 @bp.route("/create-hackathon/<request_id>", methods=["PATCH"])
 def update_submitted_hackathon(request_id):
     return update_hackathon_request(request_id, request.get_json())
+
+
+@bp.route("/upload-image", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def upload_image():
+    """
+    Upload an image to CDN. Accepts binary data, base64, or standard image formats.
+    """
+    from api.messages.messages_service import upload_image_to_cdn
+    
+    if auth_user and auth_user.user_id:
+        return upload_image_to_cdn(request)
+    else:
+        error(logger, "Could not obtain user details for POST /upload-image")
+        return {"error": "Unauthorized"}, 401

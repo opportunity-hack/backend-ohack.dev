@@ -25,20 +25,17 @@ CDN_SERVER = os.getenv("CDN_SERVER")
 GCLOUD_CDN_BUCKET = os.getenv("GCLOUD_CDN_BUCKET")
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
-def upload_to_cdn(directory, source_file_name):
+def upload_to_cdn(directory, source_file_name, destination_file_name=None):
     """Uploads a file to the bucket."""
-    # The ID of your GCS bucket
-    # bucket_name = "your-bucket-name"
-    # The path to your file to upload
-    # source_file_name = "local/path/to/file"
-    # The ID of your GCS object
-    # destination_blob_name = "storage-object-name"
     gcp_json_credentials_dict = json.loads(GOOGLE_APPLICATION_CREDENTIALS)
     creds = service_account.Credentials.from_service_account_info(gcp_json_credentials_dict)
     project_name = GCLOUD_CDN_BUCKET.split("_")[0]
     storage_client = storage.Client(project=project_name,credentials=creds)
     bucket = storage_client.bucket(GCLOUD_CDN_BUCKET)
-    blob = bucket.blob(f"{directory}/{source_file_name}")
+    
+    # Use destination_file_name if provided, otherwise use source_file_name
+    blob_filename = destination_file_name if destination_file_name else source_file_name
+    blob = bucket.blob(f"{directory}/{blob_filename}")
 
     # Optional: set a generation-match precondition to avoid potential race conditions
     # and data corruptions. The request to upload is aborted if the object's
@@ -50,15 +47,15 @@ def upload_to_cdn(directory, source_file_name):
 
     # See if file already exists
     if blob.exists():
-        logger.info(f"File {source_file_name} already exists in {directory}/{source_file_name}. Overwriting...")
+        logger.info(f"File {source_file_name} already exists in {directory}/{blob_filename}. Overwriting...")
     else:
-        logger.info(f"File {source_file_name} does not exist in {directory}/{source_file_name}. Uploading...")
+        logger.info(f"File {source_file_name} does not exist in {directory}/{blob_filename}. Uploading...")
     
     # Upload the file
     blob.upload_from_filename(source_file_name)
 
     logger.info(
-        f"File {source_file_name} uploaded to {directory}/{source_file_name}."
+        f"File {source_file_name} uploaded to {directory}/{blob_filename}."
     )
 
-    return f"{CDN_SERVER}/{directory}/{source_file_name}"
+    return f"{CDN_SERVER}/{directory}/{blob_filename}"
