@@ -1888,9 +1888,11 @@ def send_nonprofit_welcome_email(organization_name, contact_name, email):
     </html>
     """
 
+    # If organization_name is none, or an empty string, or an unassigned string, or a unprintable character like a space string set it to "Nonprofit Partner"
     if organization_name is None or organization_name == "" or organization_name == "Unassigned" or organization_name.isspace():
         organization_name = "Nonprofit Partner"
     
+    # If contact_name is none, or an empty string, or an unassigned string, or a unprintable character like a space string set it to "Nonprofit Friend"
     if contact_name is None or contact_name == "" or contact_name == "Unassigned" or contact_name.isspace():
         contact_name = "Nonprofit Friend"
 
@@ -2066,24 +2068,26 @@ def save_helping_status_old(propel_user_id, json):
     slack_user_id = user_id.split("-")[1]  # Example user_id = oauth2|slack|T1Q7116BH-U041117EYTQ
     slack_message = f"<@{slack_user_id}>"
     problem_statement_title = ps_dict["title"]
-    problem_statement_slack_channel = ps_dict["slack_channel"]
 
-    url = ""
-    if npo_id == "":
-        url = f"for project https://ohack.dev/project/{problem_statement_id}"
-    else:
-        url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
+    if "slack_channel" in ps_dict:
+        problem_statement_slack_channel = ps_dict["slack_channel"]
 
-    if "helping" == helping_status:
-        slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
-    else:
-        slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
+        url = ""
+        if npo_id == "":
+            url = f"for project https://ohack.dev/project/{problem_statement_id}"
+        else:
+            url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
 
-    invite_user_to_channel(user_id=slack_user_id,
-                           channel_name=problem_statement_slack_channel)
+        if "helping" == helping_status:
+            slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
+        else:
+            slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
 
-    send_slack(message=slack_message,
-                channel=problem_statement_slack_channel)
+        invite_user_to_channel(user_id=slack_user_id,
+                            channel_name=problem_statement_slack_channel)
+
+        send_slack(message=slack_message,
+                    channel=problem_statement_slack_channel)
 
     return Message(
         "Updated helping status"
@@ -2444,8 +2448,6 @@ def save_profile_metadata_old(propel_id, json):
         "Saved Profile Metadata"
     )
 
-
-
 @cached(cache=TTLCache(maxsize=100, ttl=600), key=lambda id: id)
 def get_user_by_id_old(id):
     logger.debug(f"Attempting to get user by ID: {id}")
@@ -2624,3 +2626,222 @@ def get_all_giveaways():
 
 
     return { "giveaways" : list(giveaways.values()) }
+
+
+def upload_image_to_cdn(request):
+    """
+    Upload an image to CDN. Accepts binary data, base64, or standard image formats.
+    Returns the CDN URL of the uploaded image.
+    """
+    import base64
+    import tempfile
+    import mimetypes
+    from werkzeug.utils import secure_filename
+    from common.utils.cdn import upload_to_cdn
+    
+    logger.info("Starting image upload to CDN")
+    
+    try:
+        # Check if file is in request.files (multipart/form-data)
+        if 'file' in request.files:
+            logger.debug("Processing multipart file upload")
+            file = request.files['file']
+            if file.filename == '':
+                logger.warning("Upload failed: No file selected")
+                return {"success": False, "error": "No file selected"}, 400
+            
+            filename = secure_filename(file.filename)
+            if not filename:
+                logger.warning(f"Upload failed: Invalid filename provided: {file.filename}")
+                return {"success": False, "error": "Invalid filename"}, 400
+            
+            logger.debug(f"Processing file upload: {filename}")
+            
+            # Check if it's an image
+            if not _is_image_file(filename):
+                logger.warning(f"Upload failed: File is not an image: {filename}")
+                return {"success": False,"error": "File must be an image"}, 400
+            
+            # Create a properly named temporary file
+            import tempfile
+            temp_dir = tempfile.gettempdir()
+            temp_filepath = os.path.join(temp_dir, filename)
+            
+            logger.debug(f"Saving file to temporary location: {temp_filepath}")
+            file.save(temp_filepath)
+
+            # Get just the file name without the path as the destination
+            destination_filename = os.path.basename(temp_filepath)
+            logger.debug(f"Destination filename for CDN upload: {destination_filename}")
+            
+            try:
+                # Upload to CDN using the properly named temp file
+                logger.info(f"Uploading {filename} to CDN from {temp_filepath}")
+                cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                
+                logger.info(f"Successfully uploaded image to CDN: {cdn_url}")
+                return {"success": True, "url": cdn_url, "message": "Image uploaded successfully"}
+            finally:
+                # Clean up temp file
+                if os.path.exists(temp_filepath):
+                    os.unlink(temp_filepath)
+                    logger.debug(f"Cleaned up temporary file: {temp_filepath}")
+        
+        # Check if data is in JSON body (base64 or binary)
+        elif request.is_json:
+            logger.debug("Processing JSON request")
+            data = request.get_json()
+            
+            if 'base64' in data:
+                logger.debug("Processing base64 encoded image")
+                # Handle base64 encoded image
+                base64_data = data['base64']
+                filename = data.get('filename', 'uploaded_image.png')
+                
+                logger.debug(f"Processing base64 image with filename: {filename}")
+                
+                # Remove data URL prefix if present
+                if base64_data.startswith('data:image'):
+                    logger.debug("Removing data URL prefix from base64 string")
+                    base64_data = base64_data.split(',')[1]
+                
+                # Decode base64
+                try:
+                    image_data = base64.b64decode(base64_data)
+                    logger.debug(f"Successfully decoded base64 data, size: {len(image_data)} bytes")
+                except Exception as e:
+                    logger.error(f"Failed to decode base64 data: {str(e)}")
+                    return {"success": False, "error": "Invalid base64 data"}, 400
+                
+                filename = secure_filename(filename)
+                if not _is_image_file(filename):
+                    logger.warning(f"Upload failed: File is not an image: {filename}")
+                    return {"success": False, "error": "File must be an image"}, 400
+                
+                # Create a properly named temporary file
+                temp_dir = tempfile.gettempdir()
+                temp_filepath = os.path.join(temp_dir, filename)
+                
+                logger.debug(f"Saving base64 image to temporary file: {temp_filepath}")
+                with open(temp_filepath, 'wb') as temp_file:
+                    temp_file.write(image_data)
+                
+                # Get just the file name without the path as the destination
+                destination_filename = os.path.basename(temp_filepath)
+                logger.debug(f"Destination filename for CDN upload: {destination_filename}")
+
+                try:
+                    # Upload to CDN using the properly named temp file
+                    logger.info(f"Uploading base64 image {filename} to CDN from {temp_filepath}")
+                    cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                    
+                    logger.info(f"Successfully uploaded base64 image to CDN: {cdn_url}")
+                    return {"success": True, "url": cdn_url, "message": "Image uploaded successfully"}
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(temp_filepath):
+                        os.unlink(temp_filepath)
+                        logger.debug(f"Cleaned up temporary file: {temp_filepath}")
+            
+            elif 'binary' in data:
+                logger.debug("Processing binary image data")
+                # Handle binary data
+                binary_data = data['binary']
+                filename = data.get('filename', 'uploaded_image.png')
+                
+                logger.debug(f"Processing binary image with filename: {filename}")
+                
+                filename = secure_filename(filename)
+                if not _is_image_file(filename):
+                    logger.warning(f"Upload failed: File is not an image: {filename}")
+                    return {"success": False, "error": "File must be an image"}, 400
+                
+                # Convert binary data to bytes if it's a string
+                if isinstance(binary_data, str):
+                    logger.debug("Converting string binary data to bytes")
+                    binary_data = binary_data.encode('latin1')
+                
+                logger.debug(f"Binary data size: {len(binary_data)} bytes")
+                
+                # Create a properly named temporary file
+                temp_dir = tempfile.gettempdir()
+                temp_filepath = os.path.join(temp_dir, filename)
+                
+                logger.debug(f"Saving binary image to temporary file: {temp_filepath}")
+                with open(temp_filepath, 'wb') as temp_file:
+                    temp_file.write(binary_data)
+
+                # Get just the file name without the path as the destination
+                destination_filename = os.path.basename(temp_filepath)
+                logger.debug(f"Destination filename for CDN upload: {destination_filename}")
+                
+                try:
+                    # Upload to CDN using the properly named temp file
+                    logger.info(f"Uploading binary image {filename} to CDN from {temp_filepath}")
+                    cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                    
+                    logger.info(f"Successfully uploaded binary image to CDN: {cdn_url}")
+                    return {"success": True, "url": cdn_url, "message": "Image uploaded successfully"}
+                finally:
+                    # Clean up temp file
+                    if os.path.exists(temp_filepath):
+                        os.unlink(temp_filepath)
+                        logger.debug(f"Cleaned up temporary file: {temp_filepath}")
+            
+            else:
+                logger.warning("Upload failed: Missing 'base64' or 'binary' field in JSON data")
+                return {"success": False, "error": "Missing 'base64' or 'binary' field in JSON data"}, 400
+        
+        # Check if raw binary data is sent
+        elif request.content_type and request.content_type.startswith('image/'):
+            logger.debug(f"Processing raw binary image data with content-type: {request.content_type}")
+            # Handle raw binary image data
+            filename = f"uploaded_image_{uuid.uuid4().hex}.png"
+            
+            image_data = request.get_data()
+            logger.debug(f"Received raw image data, size: {len(image_data)} bytes")
+            
+            # Create a properly named temporary file
+            temp_dir = tempfile.gettempdir()
+            temp_filepath = os.path.join(temp_dir, filename)
+            
+            logger.debug(f"Saving raw image to temporary file: {temp_filepath}")
+            with open(temp_filepath, 'wb') as temp_file:
+                temp_file.write(image_data)
+
+            # Get just the file name without the path as the destination
+            destination_filename = os.path.basename(temp_filepath)
+            logger.debug(f"Destination filename for CDN upload: {destination_filename}")
+            
+            try:
+                # Upload to CDN using the properly named temp file
+                logger.info(f"Uploading raw image {filename} to CDN from {temp_filepath}")
+                cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                
+                logger.info(f"Successfully uploaded raw image to CDN: {cdn_url}")
+                return {
+                    "success": True,
+                    "url": cdn_url, 
+                    "message": "Image uploaded successfully"
+                    }
+            finally:
+                # Clean up temp file
+                if os.path.exists(temp_filepath):
+                    os.unlink(temp_filepath)
+                    logger.debug(f"Cleaned up temporary file: {temp_filepath}")
+        
+        else:
+            logger.warning(f"Upload failed: No valid image data found in request. Content-type: {request.content_type}")
+            return {"success": False, "error": "No valid image data found in request"}, 400
+            
+    except Exception as e:
+        logger.error(f"Unexpected error during image upload: {str(e)}", exc_info=True)
+        return {"success": False, "error": "Failed to upload image"}, 500
+
+
+def _is_image_file(filename):
+    """Check if the filename has an image extension"""
+    allowed_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.tiff', '.webp'}
+    is_image = any(filename.lower().endswith(ext) for ext in allowed_extensions)
+    logger.debug(f"File extension check for {filename}: {'valid' if is_image else 'invalid'} image file")
+    return is_image
