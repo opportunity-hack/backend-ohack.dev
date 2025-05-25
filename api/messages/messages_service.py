@@ -381,8 +381,8 @@ def get_hackathon_list(is_current_only=None):
     
     if is_current_only == "current":
         logger.debug(f"Querying current events (end_date >= {today_str})")
-        query = query.where("end_date", ">=", today_str).order_by("end_date", direction=firestore.Query.DESCENDING)
-    
+        query = query.where(filter=firestore.FieldFilter("end_date", ">=", today_str)).order_by("end_date", direction=firestore.Query.ASCENDING)
+
     elif is_current_only == "previous":
         # Look back 3 years for previous events
         target_date = datetime.now() + timedelta(days=-3*365)
@@ -396,6 +396,7 @@ def get_hackathon_list(is_current_only=None):
     
     # Execute query
     try:
+        logger.debug(f"Executing query: {query}")
         docs = query.stream()
         results = _process_hackathon_docs(docs)
         logger.debug(f"Retrieved {len(results)} hackathon results")

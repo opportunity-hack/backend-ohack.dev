@@ -162,8 +162,12 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         # Check if we have calendar attachments
         calendar_note = ""
         if calendar_attachments and len(calendar_attachments) > 0:
-            calendar_note = "<p><strong>Your volunteering time slots have been added as calendar invites to this email.</strong> Please add them to your calendar to reserve these times.</p>"
-            logger.info(f"Including {len(calendar_attachments)} calendar attachments in email to {email}")
+            calendar_note = """
+            <div style="background-color: #f8f9fa; padding: 15px; border-left: 4px solid #3498db; margin: 15px 0;">
+                <p style="margin: 0; font-weight: bold; color: #2c3e50;">📅 Calendar Invites Attached</p>
+                <p style="margin: 5px 0 0 0; color: #34495e;">Your volunteering time slots have been attached as calendar files (.ics). Click on the attachments to add them to your Google Calendar, Outlook, or Apple Calendar.</p>
+            </div>"""
+            info(logger, "Including calendar attachments in email", email=email, attachment_count=len(calendar_attachments))
         
         params = {
             "from": "Opportunity Hack <welcome@apply.ohack.dev>",
@@ -172,7 +176,7 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border-radius: 5px;">
                 <div style="text-align: center; margin-bottom: 20px;">
-                    <img src="https://ohack.dev/oh_logo.svg" alt="Opportunity Hack Logo" style="max-width: 150px;">
+                    <img src="https://cdn.ohack.dev/ohack.dev/logos/OpportunityHack_2Letter_Dark_Blue.png" alt="Opportunity Hack Logo" style="max-width: 150px;">
                 </div>
                 <h2 style="color: #3498db; text-align: center;">Thank you for volunteering with Opportunity Hack!</h2>
                 <p style="font-size: 16px;">Hello {full_name},</p>
@@ -185,9 +189,12 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                     <p style="font-size: 14px; color: #777;">Website: <a href="https://ohack.dev" style="color: #3498db;">ohack.dev</a></p>
                 </div>
             </div>
-            """,
-            "attachments": calendar_attachments
+            """
         }
+        
+        # Only add attachments if they exist
+        if calendar_attachments and len(calendar_attachments) > 0:
+            params["attachments"] = calendar_attachments
         
         resend.Emails.send(params)
         info(logger, "Sent confirmation email to volunteer", email=email, attachment_count=len(calendar_attachments) if calendar_attachments else 0)
@@ -241,6 +248,8 @@ def send_admin_notification_email(volunteer_data: Dict[str, Any], is_update: boo
         return True
     except Exception as e:
         exception(logger, "Error sending admin email via Resend", exc_info=e, email=email)
+        error(logger, "Failed to send admin notification email", exc_info=e)
+
         return False
 
 def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update: bool = False) -> bool:
@@ -287,16 +296,19 @@ New volunteer form {action_type}:
 
 def get_calendar_email_attachment_from_availability(
     availability: str, 
+    volunteer_email: str,
     event_name: str = "Opportunity Hack Volunteering", 
     location: str = "Virtual",
     organizer_email: str = "welcome@ohack.dev",
-    year: Optional[int] = None
+    year: Optional[int] = None,
+    volunteer_type: Optional[str] = None
 ) -> List[Dict[str, Any]]:
     """
     Parse availability string and generate calendar attachment data for email.
     
     Args:
         availability: String containing availability information
+        volunteer_email: Email of the volunteer (for proper ATTENDEE field)
         event_name: Name of the calendar event
         location: Location of the event
         organizer_email: Email of the event organizer
@@ -305,9 +317,9 @@ def get_calendar_email_attachment_from_availability(
     Returns:
         List of dictionaries containing calendar event data for email attachments
     """
+    import base64
     logger.info(f"Generating calendar attachments from availability: {availability}")
     from datetime import datetime, timedelta
-    from email.mime.text import MIMEText
     import uuid
     import re
     import calendar
@@ -349,48 +361,116 @@ def get_calendar_email_attachment_from_availability(
     elif "CST" in availability:
         timezone = "CST"
     
-    # Split into individual time slots
-    time_slots = [slot.strip() for slot in availability.split(',')]
-    debug(logger, "Parsed time slots", time_slots=time_slots)
+    # Split into individual time slots - need to be smarter about comma splitting
+    # The issue is that "Sunday, Oct 12: ☀️ Morning" gets split on the comma between Sunday and Oct
+    # We need to split on commas that are followed by a day name pattern
     
-    # If availableDays format is found in the input string, it means the availability format
-    # might be different than expected. Log this for debugging.
-    if "availableDays" in availability:
-        warning(logger, "Found 'availableDays' in availability string", message="Format might not be as expected")
+    # Use regex to split on commas that are followed by weekday patterns
+    import re
+    time_slot_pattern = r',\s*(?=[A-Za-z]+day,)'  # Split on comma followed by weekday,
+    time_slots = re.split(time_slot_pattern, availability)
+    time_slots = [slot.strip() for slot in time_slots if slot.strip()]
+    
+    debug(logger, "Parsed time slots", time_slots=time_slots, slot_count=len(time_slots))
     
     calendar_events = []
     
     for slot in time_slots:
-        # Parse the date and time slot with a more flexible regex
-        # Try multiple regex patterns to handle different formats
-        match = re.match(r'([A-Za-z]+), ([A-Za-z]+) (\d+): (.*?) \(', slot)
+        info(logger, "Processing time slot", slot=slot.strip(), original_slot=slot)
         
-        if not match:
-            # Try an alternative pattern for formats like "Sunday, Oct 12-Afternoon"
-            alt_match = re.match(r'([A-Za-z]+), ([A-Za-z]+) (\d+)[-\s]([A-Za-z\s]+)', slot)
+        # Parse the date and time slot with improved regex patterns
+        # Pattern 1: "Sunday, Oct 12: ☀️ Morning (9am - 12pm PST)"
+        pattern1 = r'([A-Za-z]+),\s*([A-Za-z]+)\s+(\d+):\s*(.*?)\s*\(([^)]+)\)'
+        match = re.match(pattern1, slot.strip())
+        
+        if match:
+            weekday, month_name, day_str, time_emoji_name, time_range = match.groups()
+            info(logger, "SUCCESS: Parsed with pattern 1", 
+                 pattern=pattern1,
+                 weekday=weekday, 
+                 month_name=month_name, 
+                 day=day_str, 
+                 time_name=time_emoji_name,
+                 time_range=time_range)
+        else:
+            warning(logger, "FAILED: Pattern 1 did not match", pattern=pattern1, slot=slot.strip())
+            
+            # Pattern 2: "Sunday, Oct 12-Afternoon" (fallback format)
+            pattern2 = r'([A-Za-z]+),\s*([A-Za-z]+)\s+(\d+)[-\s]([A-Za-z\s]+)'
+            alt_match = re.match(pattern2, slot.strip())
             if alt_match:
                 weekday, month_name, day_str, time_name = alt_match.groups()
                 # Map the time name to emoji format
                 time_emoji_mapping = {
                     "Afternoon": "🏙️ Afternoon",
-                    "Morning": "☀️ Morning",
+                    "Morning": "☀️ Morning", 
                     "Early Morning": "🌅 Early Morning",
                     "Evening": "🌆 Evening",
                     "Night": "🌃 Night",
                     "Late Night": "🌙 Late Night"
                 }
                 time_emoji_name = time_emoji_mapping.get(time_name.strip(), time_name.strip())
-                match = (weekday, month_name, day_str, time_emoji_name)
+                info(logger, "SUCCESS: Parsed with pattern 2", 
+                     pattern=pattern2,
+                     weekday=weekday, 
+                     month_name=month_name, 
+                     day=day_str, 
+                     time_name=time_emoji_name,
+                     original_time_name=time_name)
             else:
-                warning(logger, "Could not parse time slot", slot=slot, reason="Pattern match failed")
-                continue
+                warning(logger, "FAILED: Pattern 2 did not match", pattern=pattern2, slot=slot.strip())
                 
-        if isinstance(match, tuple):
-            weekday, month_name, day_str, time_emoji_name = match
-        else:
-            weekday, month_name, day_str, time_emoji_name = match.groups()
-        day = int(day_str)
+                # Pattern 3: More flexible - just capture everything after the colon
+                pattern3 = r'([A-Za-z]+),\s*([A-Za-z]+)\s+(\d+):\s*(.+)'
+                flexible_match = re.match(pattern3, slot.strip())
+                if flexible_match:
+                    weekday, month_name, day_str, full_time_desc = flexible_match.groups()
+                    info(logger, "SUCCESS: Pattern 3 matched", 
+                         pattern=pattern3,
+                         weekday=weekday, 
+                         month_name=month_name, 
+                         day=day_str, 
+                         full_time_desc=full_time_desc)
+                    
+                    # Extract just the emoji and time name part (before the parentheses)
+                    time_name_pattern = r'(.*?) \('
+                    time_name_match = re.match(time_name_pattern, full_time_desc)
+                    if time_name_match:
+                        time_emoji_name = time_name_match.group(1).strip()
+                        info(logger, "SUCCESS: Parsed with pattern 3 (with parentheses)", 
+                             weekday=weekday, 
+                             month_name=month_name, 
+                             day=day_str, 
+                             time_name=time_emoji_name,
+                             time_name_pattern=time_name_pattern)
+                    else:
+                        time_emoji_name = full_time_desc.strip()
+                        info(logger, "SUCCESS: Parsed with pattern 3 (no parentheses)", 
+                             weekday=weekday, 
+                             month_name=month_name, 
+                             day=day_str, 
+                             time_name=time_emoji_name)
+                else:
+                    error(logger, "CRITICAL: All patterns failed to match slot", 
+                          slot=slot.strip(),
+                          pattern1=pattern1,
+                          pattern2=pattern2, 
+                          pattern3=pattern3,
+                          slot_length=len(slot.strip()),
+                          slot_chars=[ord(c) for c in slot.strip()[:50]]  # Show character codes for debugging
+                          )
+                    continue
         
+        try:
+            day = int(day_str)
+            info(logger, "Successfully parsed day number", day=day, day_str=day_str)
+        except ValueError:
+            error(logger, "Invalid day number", day_str=day_str, slot=slot)
+            continue
+        except NameError:
+            error(logger, "day_str variable not defined - parsing failed completely", slot=slot)
+            continue
+
         # Convert month name to number
         month_abbr = month_name[:3]  # Take first 3 letters
         try:
@@ -445,39 +525,53 @@ def get_calendar_email_attachment_from_availability(
             # Generate unique ID for the event
             event_uid = str(uuid.uuid4())
             
-            # Format dates for iCalendar
+            # Format dates for iCalendar (UTC format for better compatibility)
             start_str = start_date.strftime("%Y%m%dT%H%M%S")
             end_str = end_date.strftime("%Y%m%dT%H%M%S")
+            created_str = datetime.now().strftime("%Y%m%dT%H%M%S")
             debug(logger, "Calendar event time range", start=start_str, end=end_str)
             
-            # Create iCalendar content
+            # Clean up emoji names for filenames
+            clean_time_name = re.sub(r'[^\w\s-]', '', time_emoji_name).strip().replace(' ', '_')
+            
+            # Create iCalendar content with proper formatting for Google Calendar compatibility
             ical_content = f"""BEGIN:VCALENDAR
 VERSION:2.0
-PRODID:-//Opportunity Hack//Calendar//EN
+PRODID:-//Opportunity Hack//Calendar Event//EN
 CALSCALE:GREGORIAN
-METHOD:REQUEST
+METHOD:PUBLISH
 BEGIN:VEVENT
-DTSTART:{start_str}
-DTEND:{end_str}
-DTSTAMP:{datetime.now().strftime("%Y%m%dT%H%M%S")}
-ORGANIZER;CN=Opportunity Hack:mailto:{organizer_email}
 UID:{event_uid}@ohack.dev
-ATTENDEE;CUTYPE=INDIVIDUAL;ROLE=REQ-PARTICIPANT;PARTSTAT=NEEDS-ACTION;RSVP=
- TRUE;CN=Volunteer:mailto:volunteer@example.com
-LOCATION:{location}
+DTSTART:{start_str}{timezone}
+DTEND:{end_str}{timezone}
+DTSTAMP:{created_str}{timezone}
+CREATED:{created_str}{timezone}
+LAST-MODIFIED:{created_str}{timezone}
 SUMMARY:{event_name} - {time_emoji_name}
-DESCRIPTION:Volunteer availability time slot for {weekday}, {month_name} {day} - {time_emoji_name}
+DESCRIPTION:{volunteer_type} availability time slot for {weekday}, {month_name} {day} - {time_emoji_name}. Thank you for volunteering with Opportunity Hack!
+LOCATION:{location}
+ORGANIZER:MAILTO:{organizer_email}
+ATTENDEE:MAILTO:{volunteer_email}
 STATUS:CONFIRMED
+TRANSP:OPAQUE
 SEQUENCE:0
+CLASS:PUBLIC
+BEGIN:VALARM
+TRIGGER:-PT15M
+ACTION:DISPLAY
+DESCRIPTION:Reminder: {event_name} in 15 minutes
+END:VALARM
 END:VEVENT
 END:VCALENDAR"""
             
-            debug(logger, "Generated iCalendar content", date=f"{weekday}, {month_name} {day}", time_slot=time_emoji_name)            
-            # Create attachment object
+            debug(logger, "Generated iCalendar content", date=f"{weekday}, {month_name} {day}", time_slot=time_emoji_name)
+            
+            # Don't base64 encode - Resend expects raw content for attachments
+            # Create attachment object formatted for Resend
             calendar_events.append({
-                "filename": f"OHack_Volunteer_{month_name}_{day}_{time_emoji_name.replace(' ', '_')}.ics",
-                "content": ical_content,
-                "content_type": "text/calendar; method=REQUEST",
+                "filename": f"OHack_{volunteer_type}_{month_name}_{day}_{clean_time_name}.ics",
+                "content": ical_content,  # Use raw string content, not base64
+                "type": "text/calendar",
                 "disposition": "attachment"
             })
             info(logger, "Generated calendar event", date=f"{weekday}, {month_name} {day}", time_slot=time_emoji_name)
@@ -567,9 +661,11 @@ def create_or_update_volunteer(
 
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
+            email,  # Pass volunteer email for proper ATTENDEE field
             event_name="Opportunity Hack Volunteering",
             location="Virtual",
-            organizer_email="welcome@ohack.dev"
+            organizer_email="welcome@ohack.dev",
+            volunteer_type=volunteer_type
         )
         
         # Clear all related caches
@@ -644,9 +740,11 @@ def create_or_update_volunteer(
 
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
+            email,  # Pass volunteer email for proper ATTENDEE field
             event_name="Opportunity Hack Volunteering",
             location="Virtual",
-            organizer_email="welcome@ohack.dev"
+            organizer_email="welcome@ohack.dev",
+            volunteer_type=volunteer_type
         )
         
         # Send confirmation email to the volunteer
