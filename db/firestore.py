@@ -440,7 +440,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     def fetch_hackathon(self, id):
         db = self.get_db()
         raw = self.fetch_hackathon_raw(db, id)
-        return Hackathon.deserialize(convert_to_entity(raw, Hackathon))
+        return convert_to_entity(raw, Hackathon)
 
     def fetch_hackathon_raw(self, db, id):
         logger.debug(f'fetch_hackathon_raw id:{id}')
@@ -512,16 +512,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         db = self.get_db()
 
-        raw: firestore.firestore.DocumentReference = self.fetch_problem_statement_raw(problem_statement.id)
+        raw: firestore.firestore.DocumentSnapshot = self.fetch_problem_statement_raw(db, problem_statement.id)
 
         all_events = []
 
         for hackathon in hackathons:
 
-            rawHackathon: firestore.firestore.DocumentReference = self.fetch_hackathon_raw(hackathon.id)
-            all_events.append(rawHackathon)
+            rawHackathon: firestore.firestore.DocumentSnapshot = self.fetch_hackathon_raw(db, hackathon.id)
+            all_events.append(rawHackathon.reference)
 
-        update_res = raw.update({
+        update_res = raw.reference.update({
             "events": all_events       
         })
 

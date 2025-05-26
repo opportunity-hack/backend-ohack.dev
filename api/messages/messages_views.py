@@ -44,7 +44,6 @@ from api.messages.messages_service import (
     unjoin_team,
     join_team,
     get_hackathon_list,
-    link_problem_statements_to_events_old,
     save_news,
     save_lead_async,
     get_news,
@@ -416,11 +415,6 @@ def get_praises_about_self(user_id):
 # -------------------- Praises routes end here --------------------------- #
 
 # -------------------- Problem Statement routes to be deleted --------------------------- #
-@auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
-@bp.route("/problem_statements/events", methods=["PATCH"])
-def update_problem_statement_events_link():    
-    return vars(link_problem_statements_to_events_old(request.get_json()))
 
 # Used to register when person says they are helping, not helping
 # TODO: This route feels like it should be relative to a problem statement. NOT a user.
