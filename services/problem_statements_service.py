@@ -192,42 +192,33 @@ def save_user_helping_status(user: User, d):
 
     return problem_statement
 
-# TODO: Look at reshaping JSON payload to be more natural. Do we actually need the event title?
+
 @limits(calls=100, period=ONE_MINUTE)
 def link_problem_statements_to_events(json):    
     # JSON should be in the format of
     # {
-    #   "mapping": {
-    #     "<problemStatementId>" : [ "<eventTitle1>|<eventId1>", "<eventTitle2>|<eventId2>" ]
-    #   }
+    #   'mapping': {'problem_statement_id': 'd5c9426e0c4d11f0b7ec0af23886a873', 'event_id': 'cF9a64EwbmGmQ1YySSLE'}
     # }
-    debug(logger, "Linking payload", payload=json)
-    
-    result = []
+    debug(logger, "Linking payload", payload=json)    
     
     data = json["mapping"]
-    for problemId, eventList in data.items():
+    
+    # Handle single mapping object format
+    if isinstance(data, dict) and 'problem_statement_id' in data and 'event_id' in data:
+        problem_statement_id = data['problem_statement_id']
+        event_id = data['event_id']
         
-        problem_statement = fetch_problem_statement(problemId)
+        problem_statement = fetch_problem_statement(problem_statement_id)
         
         if problem_statement is not None:
-
-            hackathons = []
+            info(logger, "Checking event", event=event_id)
             
-            for event in eventList:
-                info(logger, "Checking event", event=event)
-                eventId = None
-                # <eventTitle>|<eventId>
-                if "|" in event:
-                    eventId = event.split("|")[1]
-                else:
-                    eventId = event
-
-                hackathon = fetch_hackathon(eventId)
-                hackathons.append(hackathon)
+            hackathon = fetch_hackathon(event_id)
+            hackathons = [hackathon] if hackathon else []
 
             update_problem_statement_hackathons(problem_statement, hackathons)
-
-            result.append(fetch_problem_statement(problem_statement.id))
-
-    return result
+            return fetch_problem_statement(problem_statement.id)
+    else:
+        warning(logger, "Problem statement not found", id=problem_statement_id)
+        return None
+   
