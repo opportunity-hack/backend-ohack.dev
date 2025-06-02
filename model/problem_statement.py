@@ -25,6 +25,7 @@ class ProblemStatement:
         self.references = []
         self.events = [] # TODO: Breaking change. This used to be called "events"
         self.status = None
+        self.skills = []  # This is a list of skills, not a string
 
     @classmethod
     def deserialize(cls, d):
@@ -35,6 +36,7 @@ class ProblemStatement:
         p.first_thought_of = d['first_thought_of'] if 'first_thought_of' in d else None
         p.github = d['github'] if 'github' in d else None
         p.status = d['status'] if 'status' in d else None
+        p.skills = d['skills'] if 'skills' in d else []
 
         if 'events' in d:
             p.events = d['events']
@@ -96,7 +98,7 @@ class ProblemStatement:
             d['references'] = []
 
         # Add remaining fields that aren't special cases
-        for field in ['github', 'status', 'first_thought_of']:
+        for field in ['github', 'status', 'first_thought_of', 'skills']:
             if hasattr(self, field):
                 d[field] = getattr(self, field)
 
