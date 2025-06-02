@@ -13,10 +13,9 @@ from db.interface import DatabaseInterface
 import logging
 import uuid
 import logging
-from common.log import get_log_level
+from common.log import get_logger, info, debug, warning, error, exception
 
-logger = logging.getLogger("myapp")
-logger.setLevel(logging.DEBUG)
+logger = get_logger("firestore")
 
 mockfirestore = None
 
@@ -25,17 +24,14 @@ SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
 
 if safe_get_env_var("ENVIRONMENT") == "test":
     mockfirestore = MockFirestore() #Only used when testing
+    info(logger, "Using MockFirestore for testing")
 else: 
     cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
     cred = credentials.Certificate(cert_env)
     # see if firebase_admin is already been initialized
     if not firebase_admin._apps:
         firebase_admin.initialize_app(credential=cred)
-
-# add logger
-logger = logging.getLogger(__name__)
-# set log level
-logger.setLevel(logging.INFO)
+        info(logger, "Initialized Firebase Admin SDK")
 
 def convert_to_entity(doc: firestore.firestore.DocumentSnapshot, cls):
     d = doc.to_dict() or {}
@@ -66,8 +62,10 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         if _firestore_client is None:
             if safe_get_env_var("ENVIRONMENT") == "test":
                 _firestore_client = mockfirestore
+                debug(logger, "Created MockFirestore client")
             else:
                 _firestore_client = firestore.client()
+                debug(logger, "Created Firestore client")
                 
         return _firestore_client
     
@@ -79,14 +77,19 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     # ----------------------- Users --------------------------------------------
 
     def fetch_user_by_user_id(self, user_id):
+        debug(logger, "Fetching user by user_id", user_id=user_id)
         db = self.get_db()  # this connects to our Firestore database
         user = None
         raw = self.fetch_user_by_user_id_raw(db, user_id)
         if raw is not None:
             user = convert_to_entity(raw, User)
+            info(logger, "Successfully fetched user", user_id=user_id)
+        else:
+            warning(logger, "User not found", user_id=user_id)
         return user
 
     def fetch_user_by_user_id_raw(self, db, user_id):
+        debug(logger, "Fetching raw user by user_id", user_id=user_id)
         #TODO: Why are we putting the slack prefix in the DB?
         if user_id.startswith(SLACK_PREFIX):
             slack_user_id = user_id
@@ -96,7 +99,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         u = None
         try:
             u, *rest = db.collection('users').where("user_id", "==", slack_user_id).stream()
+            debug(logger, "Found user in database", slack_user_id=slack_user_id)
         except ValueError:
+            warning(logger, "ValueError when fetching user", slack_user_id=slack_user_id)
             pass
         return u
     
@@ -105,6 +110,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         return u
 
     def insert_user(self, user:User):
+        info(logger, "Inserting new user", email=user.email_address, name=user.name)
         #TODO: Does this throw?
         db = self.get_db()
         default_badge = self.get_default_badge()
@@ -124,6 +130,12 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             "teams": [],
             "propel_id": user.propel_id,
         })
+        
+        if insert_res is not None:
+            info(logger, "Successfully inserted user", user_id=user.id, email=user.email_address)
+        else:
+            error(logger, "Failed to insert user", email=user.email_address)
+            
         return user if insert_res is not None else None
     
     def update_user(self, user: User):
@@ -284,30 +296,32 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     # ----------------------- Problem Statements --------------------------------------------
     
     def fetch_problem_statements(self):
+        debug(logger, "Fetching all problem statements")
         db = self.get_db()
         try:
             docs = db.collection('problem_statements').stream()
-            return [convert_to_entity(doc, ProblemStatement) for doc in docs or []]
+            results = [convert_to_entity(doc, ProblemStatement) for doc in docs or []]
+            info(logger, "Successfully fetched problem statements", count=len(results))
+            return results
         except Exception as e:
-            logger.error(f"Error fetching problem statements: {e}")
-            # Print full stack trace
-            logger.error(e, exc_info=True)
-            
+            exception(logger, "Error fetching problem statements", exc_info=e)
             return []
 
     def fetch_problem_statement(self, id):
-        logger.debug(f'fetch_problem_statement :{id}')
+        debug(logger, "Fetching problem statement", id=id)
         res = None
         db = self.get_db()
         try:
             raw = self.fetch_problem_statement_raw(db, id) # This is going to return a SimpleNamespace for imported rows.
             res = convert_to_entity(raw, ProblemStatement) if raw is not None and raw.exists else None
-            print(f"res {res}")
-            
+            if res:
+                info(logger, "Successfully fetched problem statement", id=id, title=res.title)
+            else:
+                warning(logger, "Problem statement not found", id=id)
 
         except KeyError as e:
             # A key error here means that ProblemStatement.deserialize was expecting a property in the data that wasn't there
-            logger.debug(f'fetch_problem_statement_by_id error: {e}')
+            error(logger, "KeyError fetching problem statement", exc_info=e, id=id)
         return res
     
     def fetch_problem_statement_raw(self, db, id):
@@ -317,11 +331,10 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         return p
     
     def insert_problem_statement(self, problem_statement: ProblemStatement):
+        info(logger, "Inserting problem statement", title=problem_statement.title)
         db = self.get_db()
 
         # TODO: In this current form, you will overwrite any information that matches the same NPO name
-        logger.info(f"Inserting problem statement: {problem_statement}")
-        print(f"Inserting problem statement: {problem_statement}")
         problem_statement.id = uuid.uuid1().hex
             
         collection = db.collection('problem_statements')
@@ -341,16 +354,22 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             insert_data['status'] = problem_statement.status
         if hasattr(problem_statement, 'references'):
             insert_data['references'] = problem_statement.references
+        if hasattr(problem_statement, 'skills'):
+            insert_data['skills'] = problem_statement.skills
 
         insert_res = collection.document(problem_statement.id).set(insert_data)
 
-        logger.debug(f"Insert Result: {insert_res}")
+        if insert_res is not None:
+            info(logger, "Successfully inserted problem statement", id=problem_statement.id, title=problem_statement.title)
+        else:
+            error(logger, "Failed to insert problem statement", title=problem_statement.title)
 
         return problem_statement if insert_res is not None else None
     
     def update_problem_statement(self, problem_statement: ProblemStatement):
+        info(logger, "Updating problem statement", id=problem_statement.id, title=problem_statement.title)
+        debug(logger, "Problem statement data", problem_statement=problem_statement)
         db = self.get_db()
-        print(f"Updating problem statement: {problem_statement}")
             
         collection = db.collection('problem_statements')
         
@@ -368,11 +387,13 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             update_data['title'] = problem_statement.title
         if hasattr(problem_statement, 'references'):
             update_data['references'] = problem_statement.references
+        if hasattr(problem_statement, 'skills'):
+            update_data['skills'] = problem_statement.skills
 
         # Use update() instead of set() to only modify specified fields
         update_res = collection.document(problem_statement.id).update(update_data)
 
-        logger.debug(f"Update Result: {update_res}")
+        info(logger, "Successfully updated problem statement", id=problem_statement.id)
 
         return problem_statement if update_res is not None else None
     
@@ -509,6 +530,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         return problem_statement if update_res is not None else None
     
     def update_problem_statement_hackathons(self, problem_statement: ProblemStatement, hackathons):
+        info(logger, "Updating problem statement hackathons", 
+             problem_statement_id=problem_statement.id, 
+             hackathon_count=len(hackathons))
 
         db = self.get_db()
 
@@ -517,7 +541,6 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         all_events = []
 
         for hackathon in hackathons:
-
             rawHackathon: firestore.firestore.DocumentSnapshot = self.fetch_hackathon_raw(db, hackathon.id)
             all_events.append(rawHackathon.reference)
 
@@ -525,7 +548,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             "events": all_events       
         })
 
-        logger.debug(f"Update Result: {update_res}")
+        info(logger, "Successfully updated problem statement hackathons", 
+             problem_statement_id=problem_statement.id,
+             event_count=len(all_events))
 
         return problem_statement if update_res is not None else None
     

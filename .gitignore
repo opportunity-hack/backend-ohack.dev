@@ -19,3 +19,5 @@ test/data/*.xlsx
 .env.prod
 
 **/.claude/settings.local.json
+scripts/mailgun_email/*.csv
+scripts/mailgun_email/*.log
