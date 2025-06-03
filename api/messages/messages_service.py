@@ -1305,13 +1305,13 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
         return Message("No volunteer for Hackathon Found")
                     
     # This will help to make sure we don't always have all data in the Google Sheets/Forms and can add it later
-    fields_that_should_always_be_present = ["slack_user_id", "pronouns", "linkedinProfile"]
+    fields_that_should_always_be_present = ["participantType"]
 
     # Make sure that fields are present in json
     for field in fields_that_should_always_be_present:
         if field not in json:
             logger.error(f"Missing field {field} in {json}")
-            return Message("Missing field")
+            return Message(f"Missing field: {field}")
     
     # Update doc with timestamp and admin_name
     json["updated_by"] = admin_name
