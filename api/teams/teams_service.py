@@ -381,7 +381,7 @@ def queue_team(propel_user_id, json):
         
     
     # Add Slack admins
-    slack_admins = ["UC31XTRT5"], #"UCQKX6LPR", "U035023T81Z", "UC31XTRT5", "UC2JW3T3K", "UPD90QV17", "U05PYC0LMHR"]
+    slack_admins = ["UCQKX6LPR", "U035023T81Z", "UC31XTRT5", "UC2JW3T3K", "UPD90QV17", "UEP2U69AA"]
     for admin in slack_admins:
         logger.info("Inviting admin %s to slack channel %s", admin, slack_channel)
         invite_user_to_channel(admin, slack_channel)
