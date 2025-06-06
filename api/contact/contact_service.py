@@ -72,7 +72,7 @@ def submit_contact_form(
     
     # Send confirmation email
     try:
-        send_confirmation_email(first_name, last_name, email)
+        send_confirmation_email(contact_data)
         logger.info("Sent confirmation email to %s", email)
     except Exception as e:
         logger.error("Failed to send confirmation email to %s: %s", email, str(e))
@@ -120,7 +120,7 @@ def verify_recaptcha(token: str) -> bool:
         logger.exception("Error verifying recaptcha: %s", str(e))
         return False
 
-def send_confirmation_email(first_name: str, last_name: str, email: str) -> bool:
+def send_confirmation_email(contact_data) -> bool:
     """
     Send a confirmation email to the contact form submitter.
     
@@ -139,18 +139,58 @@ def send_confirmation_email(first_name: str, last_name: str, email: str) -> bool
         return False
     
     resend.api_key = resend_api_key
+    email = contact_data.get('email', '')
+    first_name = contact_data.get('firstName', '')
+    last_name = contact_data.get('lastName', '')
     
     try:
+        # Get inquiry type display name for better UX
+        inquiry_type_display = {
+            'hackathon': 'General Hackathon Inquiry',
+            'sponsor': 'Sponsorship Opportunity',
+            'nonprofit': 'Nonprofit Partnership',
+            'volunteer': 'Volunteer Opportunity',
+            'media': 'Media Inquiry',
+            'other': 'General Question'
+        }.get(contact_data.get('inquiryType', ''), contact_data.get('inquiryType', 'General Inquiry'))
+        
         params = {
             "from": "Opportunity Hack <welcome@apply.ohack.dev>",
             "to": [email],
-            "subject": "Thank you for contacting Opportunity Hack",
+            "reply_to": "questions@ohack.org",
+            "cc": ["questions@ohack.org"],
+            "subject": f"Thank you for your {inquiry_type_display.lower()} - Opportunity Hack",
             "html": f"""
-            <div>
-                <h2>Thank you for contacting Opportunity Hack!</h2>
-                <p>Hello {first_name} {last_name},</p>
-                <p>We've received your message and will get back to you as soon as possible.</p>
-                <p>The Opportunity Hack Team</p>
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+            <h2 style="color: #2c5aa0;">Thank you for contacting Opportunity Hack!</h2>
+            <p>Hello {first_name},</p>
+            <p>Inquiry Type: <strong>{inquiry_type_display.lower()}</strong></p>
+            
+            <div style="background-color: #f5f5f5; padding: 15px; border-radius: 5px; margin: 20px 0;">
+                <h3 style="margin-top: 0;">Your Submission Details:</h3>
+                <p><strong>Reference ID:</strong> {contact_data.get('id', '')}</p>
+                <p><strong>Name:</strong> {first_name} {last_name}</p>
+                <p><strong>Organization:</strong> {contact_data.get('organization', 'Not specified')}</p>
+                <p><strong>Inquiry Type:</strong> {inquiry_type_display}</p>
+                <p><strong>Submitted:</strong> {contact_data.get('timestamp', '')}</p>
+            </div>
+            
+            <p><strong>Your Message:</strong></p>
+            <div style="background-color: #f9f9f9; padding: 10px; border-left: 3px solid #2c5aa0; margin: 10px 0;">
+                {contact_data.get('message', '').replace(chr(10), '<br>')}
+            </div>
+            
+            <p>Our team will review your message and respond within 1-2 business days. For urgent matters, please don't hesitate to reach out directly at questions@ohack.org.</p>
+            
+            {"<p><em>You've opted to receive updates about Opportunity Hack events and opportunities.</em></p>" if contact_data.get('receiveUpdates', False) else ""}
+            
+            <hr style="margin: 30px 0; border: none; border-top: 1px solid #ddd;">
+            <p style="font-size: 14px; color: #666;">
+                Best regards,<br>
+                The Opportunity Hack Team<br>
+                <a href="mailto:questions@ohack.org">questions@ohack.org</a> | 
+                <a href="https://ohack.dev">ohack.dev</a>
+            </p>
             </div>
             """
         }
@@ -159,6 +199,8 @@ def send_confirmation_email(first_name: str, last_name: str, email: str) -> bool
         return True
     except Exception as e:
         logger.error("Error sending email via Resend: %s", str(e))
+        # Print stack trace for debugging        
+
         return False
 
 def send_slack_notification(contact_data: Dict[str, Any]) -> bool:
