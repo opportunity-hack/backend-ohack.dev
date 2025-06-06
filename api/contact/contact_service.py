@@ -149,6 +149,7 @@ def send_confirmation_email(contact_data) -> bool:
             'hackathon': 'General Hackathon Inquiry',
             'sponsor': 'Sponsorship Opportunity',
             'nonprofit': 'Nonprofit Partnership',
+            'judge': 'Judging Opportunity',
             'volunteer': 'Volunteer Opportunity',
             'media': 'Media Inquiry',
             'other': 'General Question'
@@ -159,7 +160,7 @@ def send_confirmation_email(contact_data) -> bool:
             "to": [email],
             "reply_to": "questions@ohack.org",
             "cc": ["questions@ohack.org"],
-            "subject": f"Thank you for your {inquiry_type_display.lower()} - Opportunity Hack",
+            "subject": f"Contact Us: {inquiry_type_display.lower()} - Opportunity Hack",
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
             <h2 style="color: #2c5aa0;">Thank you for contacting Opportunity Hack!</h2>
