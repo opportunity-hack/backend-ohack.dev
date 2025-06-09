@@ -352,9 +352,9 @@ def queue_team(propel_user_id, json):
 
     # Look at teamMember.id to get the slack user id
     
-
+    send_slack_audit(action="queue_team", message=f"Queueing {len(teamMembers)} team members", payload=json)
     for member in teamMembers:
-        if member["id"] != root_slack_user_id:
+        if "id" in member and member["id"] != root_slack_user_id:
             logger.info("Inviting user %s to slack channel %s", member["id"], slack_channel)
             invite_user_to_channel(member["id"], slack_channel)
             # Lookup the user in the database by user_id which is their slack user id            
@@ -377,7 +377,7 @@ def queue_team(propel_user_id, json):
                     
 
         else:
-            logger.info("User %s is the creator of the team, not inviting again", member["id"])
+            logger.info("Skipping user: %s", member)
         
     
     # Add Slack admins
@@ -427,6 +427,7 @@ Let's make a difference! :muscle: :heart:
         "comments": comments,
     })
 
+    send_slack_audit(action="queue_team", message=f"Queueing {len(teamMembers)} team members - insert into database successful {insert_res}", payload=json)
     logger.debug("Insert Result: %s", insert_res)
 
     # Link the team to the user

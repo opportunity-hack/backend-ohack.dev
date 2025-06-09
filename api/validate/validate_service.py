@@ -23,6 +23,14 @@ def validate_slack_channel(channel_name):
             "message": "Invalid channel name. Must be lowercase, no spaces, and only contain letters, numbers, hyphens, and underscores."
         }
     
+    # Make sure the channel isn't general, ask-a-mentor, or anything with the current year YYYY-summmer, spring, fall, or winter
+    if channel_name in ["general", "ask-a-mentor"] or re.search(r'\d{4}-(summer|spring|fall|winter)', channel_name):
+        logger.info(f"Slack channel name is reserved or invalid: {channel_name}")
+        return {
+            "valid": False,
+            "message": "Channel name is reserved or invalid. Please choose a different name."
+        }
+
     # Check if channel already exists
     try:
         channel_id = get_channel_id_from_channel_name(channel_name)
@@ -30,7 +38,7 @@ def validate_slack_channel(channel_name):
             logger.info(f"Slack channel exists: {channel_name}")
             return {
                 "valid": True,
-                "exists": True,
+                "exists": False, # Don't block creation if it exists (used to be True)
                 "message": f"Channel '{channel_name}' already exists."
             }
         else:
