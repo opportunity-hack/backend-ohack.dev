@@ -29,7 +29,8 @@ def finish_saving_insert(
         last_login=None,
         profile_image=None,
         name=None,
-        nickname=None):
+        nickname=None,
+        propel_id=None):
     user = User()
     user.user_id = user_id
     user.email_address = email
@@ -37,7 +38,7 @@ def finish_saving_insert(
     user.profile_image = profile_image
     user.name = name
     user.nickname = nickname
-    user.propel_id = user.propel_id
+    user.propel_id = propel_id
     return insert_user(user)
 
 def finish_saving_update(

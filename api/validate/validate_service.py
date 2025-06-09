@@ -30,7 +30,7 @@ def validate_slack_channel(channel_name):
             logger.info(f"Slack channel exists: {channel_name}")
             return {
                 "valid": True,
-                "exists": True,
+                "exists": False, # Don't block creation if it exists (used to be True)
                 "message": f"Channel '{channel_name}' already exists."
             }
         else:
