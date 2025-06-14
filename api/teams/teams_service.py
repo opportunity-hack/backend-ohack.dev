@@ -514,49 +514,148 @@ def get_my_teams_by_event_id(propel_id, event_id):
 def get_teams_by_hackathon_id(hackathon_id):
     """
     Get all teams for a specific hackathon ID.
+    Optimized version using batch operations for better performance.
     """
     db = get_db()
-    logger.debug(f"Getting teams by hackathon ID: {hackathon_id}")
+    logger.info(f"Getting teams by hackathon ID: {hackathon_id}")
     
-    # Get the event collection
-    event_collection = db.collection("hackathons").document(hackathon_id)
-    event_collection_dict = event_collection.get().to_dict()
-    
-    # Get the teams
-    teams = []
-    for t in event_collection_dict["teams"]:
-        team_data = t.get().to_dict()
+    try:
+        # Get the event collection
+        event_doc = db.collection("hackathons").document(hackathon_id).get()
         
-        team_data["id"] = t.id
-        # Get the team members
-        users = []
-        for user_ref in team_data["users"]:
-            user_data = user_ref.get().to_dict()
-            user_data["id"] = user_ref.id              
-                  
-            # Remove badges
-            if "badges" in user_data:
-                del user_data["badges"]
-            if "hackathons" in user_data:
-                del user_data["hackathons"]
-            if "teams" in user_data:
-                del user_data["teams"]
+        if not event_doc.exists:
+            logger.warning(f"Hackathon {hackathon_id} not found")
+            return {"teams": []}
             
-            users.append(user_data)
+        event_data = event_doc.to_dict()
+        team_refs = event_data.get("teams", [])
         
-        if "users" in team_data:
-            del team_data["users"]
-        if "problem_statements" in team_data:
-            del team_data["problem_statements"]
-
-        team_data["team_members"] = users
-        logger.debug("Team data: %s", team_data)
-        teams.append(team_data)
+        if not team_refs:
+            logger.debug(f"No teams found for hackathon {hackathon_id}")
+            return {"teams": []}
         
-    return {
-        "teams": teams        
-    }
-
+        logger.info(f"Found {len(team_refs)} team references for hackathon {hackathon_id}")
+        
+        # Try batch get all team documents, with fallback to individual gets
+        team_docs = []
+        try:
+            if len(team_refs) <= 10:  # Firestore batch limit is 10
+                team_docs = db.get_all(team_refs)
+                logger.info(f"Successfully batch retrieved {len(team_docs)} team documents")
+            else:
+                # For larger batches, process in chunks of 10
+                for i in range(0, len(team_refs), 10):
+                    chunk = team_refs[i:i+10]
+                    chunk_docs = db.get_all(chunk)
+                    team_docs.extend(chunk_docs)
+                logger.info(f"Successfully batch retrieved {len(team_docs)} team documents in chunks")
+        except Exception as batch_error:
+            logger.warning(f"Batch get failed, falling back to individual gets: {str(batch_error)}")
+            # Fallback to individual gets
+            team_docs = []
+            for team_ref in team_refs:
+                try:
+                    team_doc = team_ref.get()
+                    if team_doc.exists:
+                        team_docs.append(team_doc)
+                except Exception as individual_error:
+                    logger.error(f"Failed to get individual team {team_ref.id}: {str(individual_error)}")
+        
+        # Collect all user references for batch processing
+        all_user_refs = []
+        team_user_mapping = {}  # Maps team_id to list of user_refs
+        
+        for team_doc in team_docs:
+            if team_doc.exists:
+                team_data = team_doc.to_dict()
+                user_refs = team_data.get("users", [])
+                team_user_mapping[team_doc.id] = user_refs
+                all_user_refs.extend(user_refs)
+        
+        logger.info(f"Found {len(all_user_refs)} total user references across all teams")
+        
+        # Batch get all user documents if there are any users
+        user_data_map = {}  # Maps user_ref.id to user_data
+        if all_user_refs:
+            # Remove duplicates while preserving order
+            unique_user_refs = []
+            seen_refs = set()
+            for ref in all_user_refs:
+                if ref.id not in seen_refs:
+                    unique_user_refs.append(ref)
+                    seen_refs.add(ref.id)
+            
+            logger.info(f"Processing {len(unique_user_refs)} unique user references")
+            
+            # Try batch get users, with fallback to individual gets
+            try:
+                if len(unique_user_refs) <= 10:
+                    user_docs = db.get_all(unique_user_refs)
+                else:
+                    # For larger batches, process in chunks of 10
+                    user_docs = []
+                    for i in range(0, len(unique_user_refs), 10):
+                        chunk = unique_user_refs[i:i+10]
+                        chunk_docs = db.get_all(chunk)
+                        user_docs.extend(chunk_docs)
+                
+                for user_doc in user_docs:
+                    if user_doc.exists:
+                        user_data = user_doc.to_dict()
+                        user_data["id"] = user_doc.id
+                        
+                        # Remove unnecessary fields to reduce memory usage
+                        for field in ["badges", "hackathons", "teams"]:
+                            user_data.pop(field, None)
+                        
+                        user_data_map[user_doc.id] = user_data
+            except Exception as user_batch_error:
+                logger.warning(f"User batch get failed, falling back to individual gets: {str(user_batch_error)}")
+                # Fallback to individual gets for users
+                for user_ref in unique_user_refs:
+                    try:
+                        user_doc = user_ref.get()
+                        if user_doc.exists:
+                            user_data = user_doc.to_dict()
+                            user_data["id"] = user_doc.id
+                            
+                            # Remove unnecessary fields
+                            for field in ["badges", "hackathons", "teams"]:
+                                user_data.pop(field, None)
+                            
+                            user_data_map[user_doc.id] = user_data
+                    except Exception as individual_user_error:
+                        logger.error(f"Failed to get individual user {user_ref.id}: {str(individual_user_error)}")
+        
+        # Build the final teams list
+        teams = []
+        for team_doc in team_docs:
+            if not team_doc.exists:
+                continue
+                
+            team_data = team_doc.to_dict()
+            team_data["id"] = team_doc.id
+            
+            # Get team members using the pre-fetched user data
+            users = []
+            for user_ref in team_user_mapping.get(team_doc.id, []):
+                if user_ref.id in user_data_map:
+                    users.append(user_data_map[user_ref.id])
+            
+            # Remove unnecessary fields from team data
+            for field in ["users", "problem_statements"]:
+                team_data.pop(field, None)
+            
+            team_data["team_members"] = users
+            logger.debug("Team data: %s", team_data)
+            teams.append(team_data)
+        
+        logger.info(f"Retrieved {len(teams)} teams for hackathon {hackathon_id}")
+        return {"teams": teams}
+        
+    except Exception as e:
+        logger.error(f"Error getting teams for hackathon {hackathon_id}: {str(e)}")
+        return {"teams": []}
 
 def approve_team(admin_user_id, json):
     """

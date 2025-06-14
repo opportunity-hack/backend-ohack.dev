@@ -180,6 +180,28 @@ def invite_user_to_channel(user_id, channel_name):
 
     logger.debug("invite_user_to_channel end")
 
+
+def invite_user_to_channel_id(user_id, channel_id):
+    logger.debug("invite_user_to_channel_id start")
+    client = get_client()    
+    logger.info(f"Channel ID: {channel_id}")
+
+    # If user_id has a - in it, use split to get the last part
+    if "-" in user_id:
+        user_id = user_id.split("-")[1]        
+
+    try:
+        #client.conversations_join(channel=channel_id)
+        result = client.conversations_invite(channel=channel_id, users=user_id)        
+    except Exception as e:
+        logger.error(
+            "Caught exception - this might be okay if the user is already in the channel.")
+        #log error stack trace
+        logger.error(e, exc_info=True)
+        
+
+    logger.debug("invite_user_to_channel end")
+
 def create_slack_channel(channel_name):
     logger.debug("create_slack_channel start")
     client = get_client()
@@ -211,9 +233,9 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
     
     logger.info("Sending message...")
     try:
-        response = client.chat_postMessage(
-            channel=channel_id,
-            blocks=[
+        kwargs = {
+            "channel": channel_id,
+            "blocks": [
                 SectionBlock(
                     text={
                         "type": "mrkdwn",
@@ -221,9 +243,15 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
                     }
                 )
             ],
-            username=username,
-            icon_emoji=icon_emoji
-        )
+            "username": username
+        }
+        
+        if icon_emoji:
+            kwargs["icon_emoji"] = icon_emoji
+        else:
+            kwargs["icon_url"] = "https://cdn.ohack.dev/ohack.dev/logos/OpportunityHack_2Letter_Light_Blue.png"
+        
+        response = client.chat_postMessage(**kwargs)
     except SlackApiError as e:
         logger.error(e.response["error"])
         assert e.response["error"]
