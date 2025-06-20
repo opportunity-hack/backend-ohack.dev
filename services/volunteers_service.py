@@ -1085,7 +1085,7 @@ Teams needing help in these areas can reach out to directly or #ask-a-mentor so 
     try:
         send_slack(
             message=slack_message,
-            channel="mentor-checkin",
+            channel="ask-a-mentor",
             icon_emoji=":raising_hand:",
             username="Mentor Check-in"
         )
@@ -1130,7 +1130,7 @@ Thanks for your support!
     try:
         send_slack(
             message=slack_message,
-            channel="mentor-checkin",
+            channel="ask-a-mentor",
             icon_emoji=":v:",
             username="Mentor Check-in"
         )
