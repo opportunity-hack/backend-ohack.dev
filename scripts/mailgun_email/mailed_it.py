@@ -369,7 +369,7 @@ def main():
         #recipients.extend(parser.parse_from_string(email_string))
         
         # From CSV file (if exists)
-        csv_file = "email_list.csv"
+        csv_file = "0.email_list.csv"
         if Path(csv_file).exists():
             recipients.extend(parser.parse_from_csv(csv_file, email_column='email', name_column='name'))
         
@@ -385,7 +385,7 @@ def main():
         logger.info(f"Found {len(recipients)} valid recipients")
         
         # Example email content
-        subject = "🚀 Your Code Can Change Lives - Summer 2025 Opportunity"
+        subject = "OHack Summer 2025: 🎥 Must-watch videos + Team formation deadline approaching"
         html_content = """
         <html>
         <body>
