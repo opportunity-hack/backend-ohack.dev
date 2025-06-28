@@ -1,9 +1,8 @@
+import logging
+from typing import Dict, Any, Optional, Tuple
 from flask import Blueprint, request, jsonify
-import json
-from typing import Dict, Any, Optional, List, Tuple
 from common.auth import auth, auth_user
 from common.log import get_logger
-import logging
 from common.exceptions import InvalidUsageError
 from common.utils.slack import send_slack_audit
 from services.volunteers_service import (
@@ -15,7 +14,9 @@ from services.volunteers_service import (
     get_mentor_checkin_status,
     mentor_checkin,
     mentor_checkout,
+    send_volunteer_message,
 )
+from common.auth import auth, auth_user
 
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
@@ -343,14 +344,14 @@ def get_volunteer_application(event_id):
         return _error_response(f"Failed to retrieve application: {str(e)}")
 
 @bp.route('/admin/volunteers/<event_id>', methods=['GET'])
-@auth.require_org_member_with_permission("all")
+@auth.require_org_member_with_permission("all") #TODO
 def admin_list_volunteers(user, org, event_id):
     """Admin endpoint to list general volunteer applications."""
     return handle_admin_list(user, event_id, 'volunteer')
 
 # Admin selection update route
 @bp.route('/admin/volunteer/<volunteer_id>/select', methods=['POST'])
-@auth.require_org_member_with_permission("all")
+@auth.require_org_member_with_permission("all") #TODO
 def admin_update_selection(user, org, volunteer_id):
     """Admin endpoint to update volunteer selection status."""
     try:
@@ -510,3 +511,48 @@ def mentor_checkout_endpoint(event_id):
     except Exception as e:
         logger.error(f"Error during mentor check-out: {str(e)}")
         return _error_response(f"Failed to check out: {str(e)}")
+
+
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
+
+@bp.route('/admin/<volunteer_id>/message', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_send_volunteer_message(volunteer_id):
+    """Admin endpoint to send a message to a volunteer via Slack and email."""
+    try:
+        # Process request data
+        request_data = _process_request()
+        message = request_data.get('message')
+        recipient_type = request_data.get('recipient_type', 'volunteer')
+        recipient_id = request_data.get('recipient_id', volunteer_id)
+
+        if not message:
+            return _error_response("Message is required", 400)
+
+        # Use the service function to send the message
+        if auth_user and auth_user.user_id: 
+            result = send_volunteer_message(
+                volunteer_id=volunteer_id, 
+                message=message, 
+                admin_user_id=auth_user.user_id,
+                admin_user=auth_user,
+                recipient_type=recipient_type,
+                recipient_id=recipient_id
+            )
+
+            if result['success']:
+                return _success_response(result, "Message sent successfully")
+
+        # Handle different error cases
+        if result.get('error') == 'Volunteer not found':
+            return _error_response(result['error'], 404)
+        if result.get('error') == 'Volunteer email not found':
+            return _error_response(result['error'], 400)
+
+        return _error_response(result.get('error', 'Unknown error'), 500)
+
+    except Exception as e:
+        logger.error("Error in admin_send_volunteer_message: %s", str(e))
+        return _error_response(f"Failed to send message: {str(e)}")
