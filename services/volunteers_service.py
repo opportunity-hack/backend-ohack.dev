@@ -1249,10 +1249,7 @@ def send_volunteer_message(
                 <p>You have received a message from the Opportunity Hack team:</p>
                 <div style="background-color: #f5f5f5; padding: 15px; border-left: 4px solid #007bff; margin: 15px 0; font-family: Arial, sans-serif;">
                     <p style="white-space: pre-wrap; margin: 0;">{formatted_message}</p>
-                </div>
-                <p style="font-size: 12px; color: #666; font-style: italic;">
-                    This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack.
-                </p>
+                </div>                
                 <p>Best regards,<br>The Opportunity Hack Team</p>
                 
                 <!-- Social Media Footer -->
