@@ -5,6 +5,7 @@ import pytz
 from functools import lru_cache
 from ratelimiter import RateLimiter
 from db.db import get_db
+from google.cloud import firestore
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger, info, debug, warning, error, exception
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern
@@ -972,7 +973,6 @@ def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
             'success': False,
             'error': 'Mentor is not checked in'
         }
-    
     # Calculate check-in duration if possible
     check_in_time = volunteer.get('checkInTime')
     check_in_duration = None
@@ -1139,3 +1139,241 @@ Thanks for your support!
     except Exception as e:
         logger.error(f"Error sending Slack notification: {str(e)}")
         return False
+
+
+def send_volunteer_message(
+    volunteer_id: str, 
+    message: str, 
+    admin_user_id: str,
+    admin_user: Any = None,
+    recipient_type: str = 'volunteer',
+    recipient_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Send a message to a volunteer via Slack and email.
+    
+    Args:
+        volunteer_id: The ID of the volunteer to message
+        message: The message content to send
+        admin_user_id: The user ID of the admin sending the message
+        recipient_type: Type of recipient (mentor, sponsor, judge, volunteer, hacker, etc.)
+        recipient_id: Optional specific recipient ID for enhanced context
+        
+    Returns:
+        Dict containing delivery status and volunteer information
+    """
+    from db.db import get_db
+    import html
+    
+    try:
+        # Get volunteer by ID from the volunteers collection
+        db = get_db()
+        volunteer_doc = db.collection('volunteers').document(volunteer_id).get()
+        
+        if not volunteer_doc.exists:
+            return {
+                'success': False,
+                'error': 'Volunteer not found',
+                'volunteer_id': volunteer_id
+            }
+        
+        volunteer = volunteer_doc.to_dict()
+        
+        # Extract contact information from volunteer data
+        email = volunteer.get('email')
+        slack_user_id = volunteer.get('slack_user_id')
+        name = volunteer.get('name', 'Volunteer')
+        volunteer_type = volunteer.get('volunteer_type', recipient_type)
+        
+        if not email:
+            return {
+                'success': False,
+                'error': 'Volunteer email not found',
+                'volunteer_id': volunteer_id
+            }
+        
+        # Track message delivery status
+        delivery_status = {
+            'slack_sent': False,
+            'email_sent': False,
+            'slack_error': None,
+            'email_error': None
+        }
+        
+        # Send Slack message if slack_user_id is available
+        if slack_user_id:
+            try:
+                # Enhanced Slack message with context
+                slack_message = f"📧 *Message from Opportunity Hack Team*\n\n{message}\n\n_This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack._"
+                send_slack(message=slack_message, channel=slack_user_id)
+                delivery_status['slack_sent'] = True
+                info(logger, "Slack message sent to volunteer", 
+                     volunteer_id=volunteer_id, slack_user_id=slack_user_id, recipient_type=recipient_type)
+            except Exception as slack_error:
+                delivery_status['slack_error'] = str(slack_error)
+                error(logger, "Failed to send Slack message to volunteer", 
+                      volunteer_id=volunteer_id, exc_info=slack_error)
+        
+        # Send email message using the resend service
+        try:
+            # Configure resend
+            resend.api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
+            
+            # Escape HTML characters and convert newlines to <br> tags
+            escaped_message = html.escape(message)
+            formatted_message = escaped_message.replace('\n', '<br>')
+            
+            # Enhanced subject line based on recipient type
+            subject_map = {
+                'mentor': 'Message for Mentors - Opportunity Hack',
+                'sponsor': 'Message for Sponsors - Opportunity Hack',
+                'judge': 'Message for Judges - Opportunity Hack',
+                'hacker': 'Message for Participants - Opportunity Hack',
+                'volunteer': 'Message from Opportunity Hack Team'
+            }
+            email_subject = subject_map.get(recipient_type.lower(), 'Message from Opportunity Hack Team')
+            
+            # Enhanced greeting based on recipient type
+            greeting_map = {
+                'mentor': 'Dear Mentor',
+                'sponsor': 'Dear Sponsor',
+                'judge': 'Dear Judge',
+                'hacker': 'Dear Participant',
+                'volunteer': 'Dear Volunteer'
+            }
+            greeting = greeting_map.get(recipient_type.lower(), 'Dear Volunteer')
+            
+            # Create HTML email content
+            html_content = f"""
+                <h2>{greeting} {html.escape(name)},</h2>
+                <p>You have received a message from the Opportunity Hack team:</p>
+                <div style="background-color: #f5f5f5; padding: 15px; border-left: 4px solid #007bff; margin: 15px 0; font-family: Arial, sans-serif;">
+                    <p style="white-space: pre-wrap; margin: 0;">{formatted_message}</p>
+                </div>
+                <p style="font-size: 12px; color: #666; font-style: italic;">
+                    This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack.
+                </p>
+                <p>Best regards,<br>The Opportunity Hack Team</p>
+                
+                <!-- Social Media Footer -->
+                <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 8px; text-align: center;">
+                    <h3 style="color: #2c3e50; margin-bottom: 15px; font-size: 16px;">🌟 Stay Connected with Opportunity Hack!</h3>
+                    <p style="margin-bottom: 15px; color: #34495e;">Follow us for updates, volunteer opportunities, and inspiring stories from our community:</p>
+                    <div style="margin: 15px 0;">
+                        <a href="https://www.instagram.com/opportunityhack/" style="text-decoration: none; margin: 0 8px; color: #E4405F;">📸 Instagram</a> |
+                        <a href="https://www.facebook.com/OpportunityHack/" style="text-decoration: none; margin: 0 8px; color: #1877F2;">👥 Facebook</a> |
+                        <a href="https://www.linkedin.com/company/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #0A66C2;">💼 LinkedIn</a> |
+                        <a href="https://www.threads.net/@opportunityhack" style="text-decoration: none; margin: 0 8px; color: #000;">🧵 Threads</a>
+                    </div>
+                    <div style="margin: 10px 0;">
+                        <a href="https://opportunity-hack.slack.com" style="text-decoration: none; margin: 0 8px; color: #4A154B;">💬 Join Slack</a> |
+                        <a href="https://twitter.com/opportunityhack" style="text-decoration: none; margin: 0 8px; color: #1DA1F2;">🐦 Twitter</a> |
+                        <a href="https://github.com/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #333;">💻 GitHub</a>
+                    </div>
+                    <p style="font-size: 12px; color: #666; margin-top: 15px;">Help us make a bigger impact - share our mission with your network! 🚀</p>
+                </div>
+                
+                <hr>
+                <p style="font-size: 12px; color: #666;">
+                    This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack.
+                </p>
+                """
+            
+            # Send email
+            params = {
+                "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+                "to": [email],
+                "reply_to": "Opportunity Hack Questions <questions@ohack.org>",
+                "subject": email_subject,
+                "html": html_content,
+            }
+            
+            email_result = resend.Emails.send(params)
+            delivery_status['email_sent'] = True
+            info(logger, "Email sent to volunteer", 
+                 volunteer_id=volunteer_id, email=email, result=email_result, recipient_type=recipient_type)
+            
+        except Exception as email_error:
+            delivery_status['email_error'] = str(email_error)
+            error(logger, "Failed to send email to volunteer", 
+                  volunteer_id=volunteer_id, exc_info=email_error)
+        
+        # Update volunteer document with message tracking
+        try:
+            # Combine first_name and last_name for full name, don't use get but use .first_name and .last_name directly
+            admin_full_name = f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "Admin"
+           
+            message_record = {                
+                'subject': email_subject,
+                'timestamp': _get_current_timestamp(),
+                'sent_by': admin_full_name,
+                'recipient_type': recipient_type,
+                'delivery_status': delivery_status
+            }
+            
+            # Add the message to the volunteer's messages_sent array
+            volunteer_ref = db.collection('volunteers').document(volunteer_id)
+            volunteer_ref.update({
+                'messages_sent': firestore.ArrayUnion([message_record]),
+                'last_message_timestamp': _get_current_timestamp(),
+                'updated_timestamp': _get_current_timestamp()
+            })
+            
+            info(logger, "Updated volunteer document with message tracking", 
+                 volunteer_id=volunteer_id, message_timestamp=message_record['timestamp'])
+                 
+        except Exception as tracking_error:
+            error(logger, "Failed to update volunteer document with message tracking", 
+                  volunteer_id=volunteer_id, exc_info=tracking_error)
+        
+        # Enhanced Slack audit message with recipient context
+        from common.utils.slack import send_slack_audit
+        message_preview = message[:100] + "..." if len(message) > 100 else message
+        send_slack_audit(
+            action="admin_send_volunteer_message",
+            message=f"Admin {admin_user_id} sent message to {recipient_type} {volunteer_id} ({name})",
+            payload={
+                "volunteer_id": volunteer_id,
+                "recipient_type": recipient_type,
+                "recipient_id": recipient_id,
+                "volunteer_email": email,
+                "volunteer_slack_id": slack_user_id,
+                "volunteer_type": volunteer_type,
+                "message_preview": message_preview,
+                "delivery_status": delivery_status
+            }
+        )
+        
+        # Determine success based on whether at least one message was sent
+        success = delivery_status['slack_sent'] or delivery_status['email_sent']
+        
+        result = {
+            'success': success,
+            'volunteer_id': volunteer_id,
+            'recipient_type': recipient_type,
+            'recipient_id': recipient_id,
+            'volunteer_name': name,
+            'volunteer_email': email,
+            'volunteer_slack_id': slack_user_id,
+            'volunteer_type': volunteer_type,
+            'delivery_status': delivery_status
+        }
+        
+        if not success:
+            result['error'] = (
+                f"Failed to send message via both Slack and email. "
+                f"Slack error: {delivery_status['slack_error']}. "
+                f"Email error: {delivery_status['email_error']}"
+            )
+        
+        return result
+        
+    except Exception as e:
+        error(logger, "Error sending message to volunteer", 
+              volunteer_id=volunteer_id, exc_info=e)
+        return {
+            'success': False,
+            'error': f"Failed to send message: {str(e)}",
+            'volunteer_id': volunteer_id,
+            'recipient_type': recipient_type
+        }
