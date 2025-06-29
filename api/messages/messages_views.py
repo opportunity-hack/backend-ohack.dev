@@ -63,6 +63,7 @@ from api.messages.messages_service import (
     save_giveaway,
     get_all_giveaways,
     upload_image_to_cdn,
+    save_onboarding_feedback,
 )
 
 logger = get_logger("messages_views")
@@ -413,6 +414,12 @@ def get_praises_about_self(user_id):
     # return all praise data about user with user_id in route
     return vars(get_praises_about_user(user_id)) 
 # -------------------- Praises routes end here --------------------------- #
+
+# ------------- Onboarding Feedback routes begin here --------------------- #
+@bp.route("/onboarding_feedback", methods=["POST"])
+def submit_onboarding_feedback():
+    debug(logger, "onboarding feedback saving now..", data=request.get_json())
+    return vars(save_onboarding_feedback(request.get_json()))
 
 # -------------------- Problem Statement routes to be deleted --------------------------- #
 
