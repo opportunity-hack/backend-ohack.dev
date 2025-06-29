@@ -11,3 +11,7 @@ auth = init_auth(
 )
 
 auth_user = current_user
+
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
