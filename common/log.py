@@ -100,9 +100,12 @@ def log_structured(logger: logging.Logger, level: int, message: str, **kwargs) -
     """
     if not logger.isEnabledFor(level):
         return
-        
+    
+    # Extract exc_info if present in kwargs
+    exc_info = kwargs.pop('exc_info', None)
+    
     extra = {'extra': kwargs} if kwargs else None
-    logger.log(level, message, extra=extra)
+    logger.log(level, message, extra=extra, exc_info=exc_info)
 
 # Define helpers for structured logging
 def debug(logger: logging.Logger, message: str, **kwargs) -> None:
