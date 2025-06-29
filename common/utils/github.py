@@ -5,8 +5,8 @@ from dotenv import load_dotenv
 from github import GithubException
 import logging
 
-logger = logging.getLogger("myapp")
-logger.setLevel(logging.INFO)
+logger = logging.getLogger("common.utils.github")
+logger.setLevel(logging.DEBUG)
 load_dotenv()
 
 def create_github_repo(
@@ -188,3 +188,68 @@ def get_all_repos(org_name):
         })
     
     return repo_list
+
+def create_issue(
+        repo_name,
+        org_name,
+        title,
+        body,
+        assignees=None,
+        labels=None
+    ):
+    g = Github(os.getenv('GITHUB_TOKEN'))
+    org = g.get_organization(org_name)
+    
+    try:
+        repo = org.get_repo(repo_name)
+        issue = repo.create_issue(
+            title=title,
+            body=body,
+            #assignees=assignees,
+            #labels=labels
+        )
+        return {
+            "issue_number": issue.number,
+            "issue_url": issue.html_url
+        }
+    except GithubException as e:
+        print(e)
+        raise ValueError(e.data['message'])
+    
+def get_issues(
+        repo_name,
+        org_name,
+        state=None
+    ):
+    g = Github(os.getenv('GITHUB_TOKEN'))
+    org = g.get_organization(org_name)
+    
+    try:
+        repo = org.get_repo(repo_name)
+        if state is not None:
+            state = state.lower()
+            if state not in ['open', 'closed', 'all']:
+                raise ValueError("State must be 'open', 'closed', or 'all'")
+        
+        issues = repo.get_issues(state=state)
+        # Filter out pull requests to get only issues
+        issues = [issue for issue in issues if not issue.pull_request]
+        
+        issue_list = []
+        for issue in issues:
+            issue_list.append({
+                "issue_number": issue.number,
+                "title": issue.title,
+                "body": issue.body,
+                "state": issue.state,
+                "created_at": issue.created_at,
+                "updated_at": issue.updated_at
+            })
+        return issue_list
+    except GithubException as e:
+        logger.error(f"Error getting issues: {e}")
+        # print traceback
+        import traceback
+        logger.error(traceback.format_exc())
+
+        raise ValueError(e.data['message'])

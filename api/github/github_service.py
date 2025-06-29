@@ -1,8 +1,9 @@
 import logging
 from typing import Dict, Any, List
 from db.db import get_db
+from common.utils.github import create_issue, get_issues
 
-logger = logging.getLogger("myapp")
+logger = logging.getLogger("api.github.github_service")
 logger.setLevel(logging.DEBUG)
 
 def get_github_organization_data(org_name: str) -> Dict[str, Any]:
@@ -300,3 +301,79 @@ def get_github_contributors_by_repo(repo_name: str, org_name: str = None) -> Lis
         logger.error("Error getting GitHub contributors for repository %s/%s: %s",
                     org_name or "any", repo_name, e)
         return []
+    
+
+def create_github_issue(org_name: str, repo_name: str, title: str, body: str) -> Dict[str, Any]:
+    """
+    Create a new GitHub issue in a specific repository.
+
+    Args:
+        org_name: The GitHub organization name.
+        repo_name: The repository name.
+        title: The title of the issue.
+        body: The body content of the issue.
+
+    Returns:
+        Dictionary with the created issue data or an error message.
+    """
+    logger.debug("Creating GitHub issue in %s/%s: %s", org_name, repo_name, title)
+
+    try:
+        # Validate inputs
+        if not org_name or not repo_name or not title:
+            return {"error": "Organization name, repository name, and title are required"}
+
+        # Create the issue using the utility function
+        issue = create_issue(org_name=org_name, repo_name=repo_name, title=title, body=body)
+        
+        if "error" in issue:
+            return {"error": issue["error"]}
+
+        return {
+            "success": True,
+            "issue": issue
+        }
+
+    except Exception as e:
+        logger.error("Error creating GitHub issue in %s/%s: %s", org_name, repo_name, e)
+        # Log traceback for debugging
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"error": f"Failed to create issue: {str(e)}"}
+    
+def get_github_issues(org_name: str, repo_name: str, state: str ) -> Dict[str, Any]:
+    """
+    Get all issues for a specific GitHub repository.
+
+    Args:
+        org_name: The GitHub organization name.
+        repo_name: The repository name.
+        state: Optional. The state of the issues to retrieve (open, closed, all). Defaults to 'open'.
+
+    Returns:
+        Dictionary with the list of issues or an error message.
+    """
+    logger.debug("Getting GitHub issues for org:%s repo:%s", org_name, repo_name)
+
+    try:
+        # Validate inputs
+        if not org_name or not repo_name:
+            return {"error": "Organization name and repository name are required"}
+
+        # Get issues using the utility function
+        issues = get_issues(org_name=org_name, repo_name=repo_name, state=state)
+        
+        if "error" in issues:
+            return {"error": issues["error"]}
+
+        return {
+            "success": True,
+            "issues": issues
+        }
+
+    except Exception as e:
+        logger.error("Error getting GitHub issues for %s/%s: %s", org_name, repo_name, e)
+        # Log traceback for debugging
+        import traceback
+        logger.error(traceback.format_exc())
+        return {"error": f"Failed to retrieve issues: {str(e)}"}

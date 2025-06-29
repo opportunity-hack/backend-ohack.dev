@@ -4,8 +4,11 @@ from api.github.github_service import (
     get_github_organization_data,
     get_github_repository_data,
     get_github_contributors_by_org,
-    get_github_contributors_by_repo
+    get_github_contributors_by_repo,
+    create_github_issue,
+    get_github_issues
 )
+from common.auth import auth, auth_user, getOrgId
 
 logger = logging.getLogger("api.github.github_views")
 logger.setLevel(logging.DEBUG)
@@ -127,4 +130,76 @@ def get_repository_contributors():
 
     except Exception as e:
         logger.error("Error getting contributors for repository: %s", str(e))
+        return jsonify({"error": str(e)}), 500
+
+@bp.route("/create_issue", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def create_issue_api():
+    """
+    Create a new issue in a GitHub repository.
+
+    Request JSON body should contain:
+        - repo: Required. The repository name.
+        - org: Optional. The organization name.
+        - title: Required. The title of the issue.
+        - body: Optional. The body of the issue.
+        - assignees: Optional. List of assignee usernames.
+        - labels: Optional. List of label names.
+    Returns:
+        JSON response with the created issue details or error message.
+    """
+    try:
+        data = request.json
+        repo_name = data.get('repo')
+        org_name = data.get('org')
+        title = data.get('title')
+        body = data.get('body', '')        
+
+        if not repo_name or not title:
+            return jsonify({"error": "repo and title parameters are required"}), 400
+
+        logger.info("Creating issue in repo: %s, org: %s", repo_name, org_name)
+        issue_data = create_github_issue(
+            repo_name=repo_name,
+            org_name=org_name,
+            title=title,
+            body=body            
+        )
+
+        return jsonify(issue_data)
+
+    except Exception as e:
+        logger.error("Error creating issue: %s", str(e))
+        return jsonify({"error": str(e)}), 500
+    
+@bp.route("/issues", methods=["GET"])
+def get_issues_api():
+    """
+    Get issues from a GitHub repository.
+
+    Query Parameters:
+        repo: Required. The repository name.
+        org: Optional. The organization name.
+        state: Optional. The state of the issues ('open', 'closed', 'all'). Defaults to 'open'.
+
+    Returns:
+        JSON response with list of issues or error message.
+    """
+    try:
+        repo_name = request.args.get('repo')
+        org_name = request.args.get('org')
+        state = request.args.get('state', 'open')
+
+        if not repo_name:
+            return jsonify({"error": "repo parameter is required"}), 400
+
+        logger.info("Getting issues for repo: %s, org: %s, state: %s", repo_name, org_name, state)
+        issues = get_github_issues(repo_name=repo_name, org_name=org_name, state=state)
+        logger.info("Retrieved %d issues for repo: %s", len(issues), repo_name)
+
+        return jsonify(issues)
+
+    except Exception as e:
+        logger.error("Error getting issues: %s", str(e))
         return jsonify({"error": str(e)}), 500
