@@ -53,19 +53,28 @@ def get_volunteer_by_email(email: str, event_id: str, volunteer_type: str) -> Op
 # Function to clear all caches related to a volunteer
 def _clear_volunteer_caches(user_id: str, email: str, event_id: str, volunteer_type: str):
     """Clear all caches related to a specific volunteer."""
-    # Clear cache for specific user lookup
-    user_key = f"volunteer:by_user_id:{user_id}:{event_id}:{volunteer_type}"
-    delete_cached(user_key)
+    try:
+        # Clear cache for specific user lookup
+        user_key = f"volunteer:by_user_id:{user_id}:{event_id}:{volunteer_type}"
+        delete_cached(user_key)
+    except Exception as e:
+        warning(logger, "Failed to clear user cache", user_key=user_key, exc_info=e)
     
-    # Clear cache for specific email lookup
-    email_key = f"volunteer:by_email:{email}:{event_id}:{volunteer_type}"
-    delete_cached(email_key)
+    try:
+        # Clear cache for specific email lookup
+        email_key = f"volunteer:by_email:{email}:{event_id}:{volunteer_type}"
+        delete_cached(email_key)
+    except Exception as e:
+        warning(logger, "Failed to clear email cache", email_key=email_key, exc_info=e)
     
-    # Clear event-based volunteer caches
-    event_key = f"volunteer:by_event:{event_id}:{volunteer_type}"
-    clear_pattern(f"{event_key}*")
+    try:
+        # Clear event-based volunteer caches
+        event_key = f"volunteer:by_event:{event_id}:{volunteer_type}"
+        clear_pattern(f"{event_key}*")
+    except Exception as e:
+        warning(logger, "Failed to clear event cache pattern", event_key=event_key, exc_info=e)
     
-    debug(logger, "Cleared volunteer caches", email=email, event_id=event_id, volunteer_type=volunteer_type)
+    debug(logger, f"Attempted to clear volunteer caches for user_id={user_id}, email={email}, event_id={event_id}, volunteer_type={volunteer_type}")
 
 @redis_cached(prefix="volunteer:by_event", ttl=120)
 def get_volunteers_by_event(
@@ -1314,10 +1323,18 @@ def send_volunteer_message(
                 'messages_sent': firestore.ArrayUnion([message_record]),
                 'last_message_timestamp': _get_current_timestamp(),
                 'updated_timestamp': _get_current_timestamp()
-            })
-            
+            })                    
+            user_id = volunteer.get('user_id', '')
+
             info(logger, "Updated volunteer document with message tracking", 
                  volunteer_id=volunteer_id, message_timestamp=message_record['timestamp'])
+            
+            _clear_volunteer_caches(
+                user_id=user_id,
+                email=email,
+                event_id=volunteer.get('event_id', ''),
+                volunteer_type=volunteer_type
+            )
                  
         except Exception as tracking_error:
             error(logger, "Failed to update volunteer document with message tracking", 
