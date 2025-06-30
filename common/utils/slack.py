@@ -33,18 +33,14 @@ def send_slack_audit(action="", message="", payload=None):
     }
 
     if payload:
-        # Remove the "picture" key from the payload if it exists
-        if "picture" in payload:
-            del payload["picture"]
-        
-        if "photoUrl" in payload:
-            del payload["photoUrl"]
+        # Create a copy to avoid mutating the original payload
+        payload_copy = payload.copy()               
 
-        if "recaptchaToken" in payload:
-            del payload["recaptchaToken"]
+        if "recaptchaToken" in payload_copy:
+            del payload_copy["recaptchaToken"]
 
         json = {
-            "text": f"[{action}] {message}\n{payload}"
+            "text": f"[{action}] {message}\n{payload_copy}"
         }
 
     try: 
