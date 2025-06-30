@@ -547,7 +547,7 @@ def update_submitted_hackathon(request_id):
 
 @bp.route("/upload-image", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+#@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def upload_image():
     """
     Upload an image to CDN. Accepts binary data, base64, or standard image formats.
