@@ -81,7 +81,7 @@ SLACK_USER_IDS = ["U08V5VDDALA",
 
 
 def mass_add_to_slack_channel(slack_user_ids):
-    channel_id = "C05U8GTPF0F"
+    channel_id = "C093ZB02W72"
     for user_id in slack_user_ids:
         print(f"Inviting {user_id} to channel_id {channel_id}")
         invite_user_to_channel_id(user_id=user_id, channel_id=channel_id)

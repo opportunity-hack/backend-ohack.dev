@@ -13,7 +13,7 @@ import os
 import requests
 import resend
 
-logger = get_logger("volunteers_service")    
+logger = get_logger("services.volunteers_service")
 
 def _generate_volunteer_id() -> str:
     """Generate a unique ID for a volunteer."""
@@ -662,12 +662,30 @@ def create_or_update_volunteer(
         volunteer_id = existing.get('id')
         volunteer_ref = db.collection('volunteers').document(volunteer_id)
         
-        # Update with new data
+        # Prepare complete update data including all volunteer_data fields
         update_data = {**volunteer_data}
         update_data['updated_by'] = user_id
         update_data['updated_timestamp'] = _get_current_timestamp()
         
-        volunteer_ref.update(update_data)
+        # Preserve original creation metadata
+        update_data['id'] = volunteer_id
+        update_data['user_id'] = existing.get('user_id', user_id)
+        update_data['event_id'] = existing.get('event_id', event_id)
+        update_data['email'] = existing.get('email', email)
+        update_data['created_by'] = existing.get('created_by')
+        update_data['created_timestamp'] = existing.get('created_timestamp')
+        update_data['timestamp'] = existing.get('timestamp')
+        
+        # Keep existing isSelected status if not explicitly provided
+        if 'isSelected' not in volunteer_data:
+            update_data['isSelected'] = existing.get('isSelected', False)
+
+        # Log volunteer_data
+        logger.debug(f"volunteer_data: {volunteer_data}")
+        logger.debug(f"Updating volunteer record {volunteer_id} with complete data including new fields {update_data}")
+        
+        # Use set with merge=True to ensure all fields are updated, including new ones
+        volunteer_ref.set(update_data, merge=True)
 
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
