@@ -71,7 +71,7 @@ def handle_submit(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, A
 
     try:
         volunteer_data = _process_request()
-
+        logger.info(f"Received volunteer data: {volunteer_data}")
         # Send Slack Audit message
         send_slack_audit(
             action="submit_volunteer_application",
