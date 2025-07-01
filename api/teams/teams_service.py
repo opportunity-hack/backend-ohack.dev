@@ -241,8 +241,7 @@ def edit_team(json):
     send_slack_audit(action="edit_team", message="Editing", payload=json)
     
     db = get_db()
-    logger.debug("Team Edit")
-    logger.debug(json)
+    logger.debug(f"Team Edit with JSON: {json}")
     
     team_id = json["id"]
     
@@ -273,6 +272,7 @@ def edit_team(json):
         "hackathon_event_id": "hackathon_event_id",
         "location": "location",
         "admin_notes": "admin_notes",
+        "devpost_link": "devpost_link",
     }
     
     for db_field, json_field in field_mappings.items():
