@@ -68,6 +68,27 @@ def edit_team_api():
     logger.error("Could not obtain user details for PATCH /team/edit")
     return {"error": "Unauthorized"}, 401
 
+
+@bp.route("/<teamid>/devpost", methods=["POST"])
+@auth.require_user
+def add_devpost_to_team_api(teamid):
+    """
+    Add a Devpost link to a team.
+    Requires user to be authenticated.
+    """
+    if auth_user and auth_user.user_id:
+        # Get the Devpost link from the request
+        logger.info(f"Adding Devpost link to team {teamid}")
+        devpost_link = request.get_json().get("devpost_link")
+        logger.info(f"Devpost link: {devpost_link}")
+        if not devpost_link:
+            return {"error": "Devpost link is required"}, 400
+        
+        return edit_team({"id": teamid, "devpost_link": devpost_link})
+    
+    logger.error("Could not obtain user details for POST /team/<teamid>/devpost")
+    return {"error": "Unauthorized"}, 401
+
 @bp.route("/<teamid>/member", methods=["POST"])
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
