@@ -2567,13 +2567,15 @@ def upload_image_to_cdn(request):
     try:
         # Check if file is in request.files (multipart/form-data)
         if 'file' in request.files:
+            _directory = request.form.get("directory", "images")
+            _filename = request.form.get("filename", None)
             logger.debug("Processing multipart file upload")
             file = request.files['file']
             if file.filename == '':
                 logger.warning("Upload failed: No file selected")
                 return {"success": False, "error": "No file selected"}, 400
             
-            filename = secure_filename(file.filename)
+            filename = secure_filename(_filename or file.filename)
             if not filename:
                 logger.warning(f"Upload failed: Invalid filename provided: {file.filename}")
                 return {"success": False, "error": "Invalid filename"}, 400
@@ -2600,7 +2602,7 @@ def upload_image_to_cdn(request):
             try:
                 # Upload to CDN using the properly named temp file
                 logger.info(f"Uploading {filename} to CDN from {temp_filepath}")
-                cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                cdn_url = upload_to_cdn(_directory, temp_filepath, destination_filename)
                 
                 logger.info(f"Successfully uploaded image to CDN: {cdn_url}")
                 return {"success": True, "url": cdn_url, "message": "Image uploaded successfully"}
