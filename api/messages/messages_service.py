@@ -2777,3 +2777,15 @@ def _is_image_file(filename):
     is_image = any(filename.lower().endswith(ext) for ext in allowed_extensions)
     logger.debug(f"File extension check for {filename}: {'valid' if is_image else 'invalid'} image file")
     return is_image
+
+def save_onboarding_feedback(json_data):
+    """
+    Save onboarding feedback to Firestore.
+    """
+    db = get_db()
+    
+    # Add timestamp and user_id to the feedback data
+    json_data["timestamp"] = datetime.now(pytz.utc)
+
+    db.collection('onboarding_feedbacks').add(json_data)
+    return Message("Onboarding feedback submitted successfully")
