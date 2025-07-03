@@ -142,7 +142,7 @@ def verify_recaptcha(token: str) -> bool:
         return False
 
 def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str, 
-    calendar_attachments: Optional[List[Dict[str, Any]]] = None                                      
+    calendar_attachments: Optional[List[Dict[str, Any]]] = None, event_id: Optional[str] = None                                   
                                       ) -> bool:
     """
     Send a confirmation email to the volunteer who submitted the form.
@@ -153,6 +153,7 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         email: Email address of the volunteer
         volunteer_type: Type of volunteer (mentor, sponsor, judge)
         calendar_attachments: Optional list of calendar attachments
+        event_id: Event ID for generating links
         
     Returns:
         True if email was sent successfully, False otherwise
@@ -179,6 +180,40 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
             </div>"""
             info(logger, "Including calendar attachments in email", email=email, attachment_count=len(calendar_attachments))
         
+        # Generate volunteer type specific content
+        volunteer_specific_content = ""
+        if volunteer_type.lower() == "mentor":
+            volunteer_specific_content = f"""
+            <div style="background-color: #e8f5e8; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #27ae60;">
+                <h3 style="color: #27ae60; margin-top: 0;">🚀 Next Steps for Mentors</h3>
+                <p style="margin-bottom: 15px;">When you're ready to help teams during the event, please check in using the button below:</p>
+                <div style="text-align: center; margin: 20px 0;">
+                    <a href="https://www.ohack.dev/hack/{event_id}/mentor-checkin" 
+                       style="background-color: #27ae60; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; font-size: 16px;">
+                        ✅ Mentor Check-In
+                    </a>
+                </div>
+                <p style="margin-bottom: 10px;">Learn more about the mentor role and what to expect:</p>
+                <div style="text-align: center;">
+                    <a href="https://www.ohack.dev/about/mentors" 
+                       style="color: #27ae60; text-decoration: none; font-weight: bold;">
+                        📖 Mentor Guidelines & Information
+                    </a>
+                </div>
+            </div>"""
+        elif volunteer_type.lower() == "judge":
+            volunteer_specific_content = """
+            <div style="background-color: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
+                <h3 style="color: #856404; margin-top: 0;">⚖️ Information for Judges</h3>
+                <p style="margin-bottom: 15px;">Learn about the judging process, evaluation criteria, and what to expect:</p>
+                <div style="text-align: center;">
+                    <a href="https://www.ohack.dev/about/judges" 
+                       style="background-color: #ffc107; color: #212529; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; font-size: 16px;">
+                        📋 Judge Guidelines & Information
+                    </a>
+                </div>
+            </div>"""
+        
         params = {
             "from": "Opportunity Hack <welcome@apply.ohack.dev>",
             "to": [email],            
@@ -193,6 +228,7 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <p style="font-size: 16px;">Thank you for signing up as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. 
                 We've received your information and our team will review it shortly.</p>
                 {calendar_note}
+                {volunteer_specific_content}
                 <p style="font-size: 16px;">We'll be in touch with next steps.</p>
                 <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
                     <p style="font-size: 14px; color: #777;">The Opportunity Hack Team</p>
@@ -724,7 +760,7 @@ def create_or_update_volunteer(
             else:
                 warning(logger, "No calendar attachments generated despite availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id)
 
             info(logger, "Sent notifications about updated volunteer", email=email)
         except Exception as e:
@@ -797,7 +833,7 @@ def create_or_update_volunteer(
             else:
                 warning(logger, "No calendar attachments generated despite availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id)
             send_admin_notification_email(volunteer_doc)
             send_slack_volunteer_notification(volunteer_doc)
             info(logger, "Sent notifications for new volunteer", email=email)

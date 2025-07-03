@@ -517,33 +517,40 @@ def get_npos_by_hackathon_id(id):
     db = get_db()      
     doc = db.collection('hackathons').document(id)    
     
-    if doc is None:
-        logger.warning("get_npos_by_hackathon_id end (no results)")
-        return {}
-    else:                        
-        # Get all nonprofits from hackathon
-        npo_ids = doc.get().to_dict()["nonprofits"]
-
-        logger.info(f"get_npos_by_hackathon_id end (with result):{npo_ids}")
-
-        # npo_ids are a list of DocumentReferences
-
-        # Get all nonprofits
-        npos = []
-        for npo_id in npo_ids:
-            # Convert DocumentReference to dict
-            npo_doc = npo_id.get()
-            npo = doc_to_json(docid=npo_doc.id, doc=npo_doc)
-            npos.append(npo)
-                        
+    try:
+        doc_dict = doc.get().to_dict()
+        if doc_dict is None:
+            logger.warning("get_npos_by_hackathon_id end (no results)")
+            return {
+                "nonprofits": []
+            }
         
+        # Get all nonprofits from hackathon
+        npos = []
+        if "nonprofits" in doc_dict and doc_dict["nonprofits"]:
+            npo_refs = doc_dict["nonprofits"]
+            logger.info(f"get_npos_by_hackathon_id found {len(npo_refs)} nonprofit references")
+            
+            # Get all nonprofits            
+            for npo_ref in npo_refs:
+                try:
+                    # Convert DocumentReference to dict
+                    npo_doc = npo_ref.get()
+                    if npo_doc.exists:
+                        npo = doc_to_json(docid=npo_doc.id, doc=npo_doc)
+                        npos.append(npo)
+                except Exception as e:
+                    logger.error(f"Error processing nonprofit reference: {e}")
+                    continue
+                                        
         return {
             "nonprofits": npos
         }
-
-        
-        
-    return {}
+    except Exception as e:
+        logger.error(f"Error in get_npos_by_hackathon_id: {e}")
+        return {
+            "nonprofits": []
+        }
 
 
 @limits(calls=40, period=ONE_MINUTE)
@@ -2770,3 +2777,15 @@ def _is_image_file(filename):
     is_image = any(filename.lower().endswith(ext) for ext in allowed_extensions)
     logger.debug(f"File extension check for {filename}: {'valid' if is_image else 'invalid'} image file")
     return is_image
+
+def save_onboarding_feedback(json_data):
+    """
+    Save onboarding feedback to Firestore.
+    """
+    db = get_db()
+    
+    # Add timestamp and user_id to the feedback data
+    json_data["timestamp"] = datetime.now(pytz.utc)
+
+    db.collection('onboarding_feedbacks').add(json_data)
+    return Message("Onboarding feedback submitted successfully")
