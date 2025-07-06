@@ -3,6 +3,7 @@ from typing import Dict, Any, List
 from db.db import get_db
 from common.utils.github import get_all_repos
 from common.utils.firebase import get_hackathon_by_event_id
+import time
 
 logger = logging.getLogger("myapp")
 logger.setLevel(logging.DEBUG)
@@ -55,24 +56,47 @@ def get_github_repositories(org_name: str) -> Dict[str, Any]:
         Dictionary containing GitHub repositories.
     """
     logger.debug("Getting GitHub repositories for org_name: %s", org_name)
-    
-    try:
-        # Get all repositories for the event
-        repos = get_all_repos(org_name)
-        
-        github_repos = []
-        for repo in repos:
-            # Extract repository name
-            repo_name = repo["repo_name"]
-            github_repos.append({
-                "__id__": repo_name,
-                "name": repo_name
-            })
-        
-        return {"github_repositories": github_repos}
-    except ValueError as e:
-        logger.error("Error getting repositories for org_name %s: %s", org_name, e)
+
+    # Use the database to get all repositories for the organization
+    if not org_name:
+        logger.error("Organization name is empty or None")
         return {"github_repositories": []}
+    
+    # Given the org_name, get the child repositories as part of the group    
+    organization_ref = get_db().collection('github_organizations').document(org_name)    
+    repos_ref = organization_ref.collection('github_repositories')
+    logger.debug("Using organization reference: %s", organization_ref.id)
+
+    try:
+        # Check if the organization exists
+        if not organization_ref.get().exists:
+            logger.error("Organization %s not found in database", org_name)
+            return {"github_repositories": []}
+        
+        # Get all repositories for the organization
+        repos = repos_ref.stream()
+        
+        if not repos:
+            logger.warning("No repositories found for organization %s", org_name)
+            return {"github_repositories": []}
+        
+        github_repositories = []
+        for repo in repos:
+            repo_data = repo.to_dict()
+            # Add document ID if not present
+            if "__id__" not in repo_data:
+                repo_data["__id__"] = repo.id
+            # Add organization name
+            repo_data["org_name"] = org_name
+            github_repositories.append(repo_data)
+        
+        return {"github_repositories": github_repositories}
+        
+    except Exception as e:
+        logger.error("Error getting repositories for organization %s: %s", org_name, e)
+        return {"github_repositories": []}
+    
+    
 
 def get_github_contributors(event_id: str) -> Dict[str, Any]:
     """
@@ -511,29 +535,49 @@ def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
     Returns:
         Dictionary containing all GitHub leaderboard data.
     """
+    start_time = time.time()
     logger.debug("Getting GitHub leaderboard for event ID: %s", event_id)
     
     # Get organization and repository data
+    org_start = time.time()
     org_name = get_github_organizations(event_id)
+    org_duration = time.time() - org_start
+    logger.debug("get_github_organizations took %.2f seconds", org_duration)
+    
+    repos_start = time.time()
     repos = get_github_repositories(org_name["github_organizations"][0]["name"])
+    repos_duration = time.time() - repos_start
+    logger.debug("get_github_repositories took %.2f seconds", repos_duration)
     
     # Get contributor data
+    contributors_start = time.time()
     contributors_response = get_github_contributors(event_id)
     contributors = contributors_response.get("github_contributors", [])
-    logger.debug("Found %d contributors", len(contributors))
+    contributors_duration = time.time() - contributors_start
+    logger.debug("get_github_contributors took %.2f seconds and found %d contributors", 
+                contributors_duration, len(contributors))
     
     # Get achievement data from the new achievements collection
+    achievements_start = time.time()
     achievements = get_github_achievements(event_id)
-    logger.debug("Found %d achievements", len(achievements))
+    achievements_duration = time.time() - achievements_start
+    logger.debug("get_github_achievements took %.2f seconds and found %d achievements", 
+                achievements_duration, len(achievements))
     
     # Calculate analytics for the leaderboard
+    analytics_start = time.time()
     analytics = get_leaderboard_analytics(event_id, contributors, achievements)
+    analytics_duration = time.time() - analytics_start
+    logger.debug("get_leaderboard_analytics took %.2f seconds", analytics_duration)
     
     # Log the count of achievements in the final result for debugging
     individual_count = len(analytics.get("individualAchievements", []))
     team_count = len(analytics.get("teamAchievements", []))
     logger.debug("Final counts - Individual achievements: %d, Team achievements: %d", 
                 individual_count, team_count)
+    
+    total_duration = time.time() - start_time
+    logger.debug("Total get_github_leaderboard execution took %.2f seconds", total_duration)
     
     return {
         "github_organizations": org_name["github_organizations"],
