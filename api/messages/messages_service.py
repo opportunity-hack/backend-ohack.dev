@@ -2504,6 +2504,7 @@ def notify_feedback_receiver(feedback_receiver_id):
             params = {
                 "from": "Opportunity Hack <welcome@apply.ohack.dev>",
                 "to": f"{user_data.get('name', 'User')} <{user_email}>",
+                "bcc": "greg@ohack.org",
                 "subject": subject,
                 "html": html_content,
             }
