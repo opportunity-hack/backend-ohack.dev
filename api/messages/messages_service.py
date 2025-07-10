@@ -37,6 +37,11 @@ import random
 
 logger = get_logger("messages_service")
 
+resend_api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY")
+if not resend_api_key:
+    logger.error("RESEND_WELCOME_EMAIL_KEY not set")    
+else:
+    resend.api_key = resend_api_key
 
 google_recaptcha_key = safe_get_env_var("GOOGLE_CAPTCHA_SECRET_KEY")
 
@@ -80,8 +85,7 @@ def log_execution_time(func):
     return wrapper
 
 # Generically handle a DocumentSnapshot or a DocumentReference
-#@cached(cache=TTLCache(maxsize=1000, ttl=43200), key=hash_key)
-@cached(cache=LRUCache(maxsize=640*1024), key=hash_key)
+@cached(cache=TTLCache(maxsize=2000, ttl=3600), key=hash_key)
 def doc_to_json(docid=None, doc=None, depth=0):            
     if not docid:
         logger.debug("docid is NoneType")
@@ -192,32 +196,34 @@ def add_nonprofit_to_hackathon(json):
     # Get the nonprofit document
     nonprofit_doc = db.collection('nonprofits').document(nonprofitId)
     # Check if the hackathon document exists
-    if not hackathon_doc:
+    hackathon_data = hackathon_doc.get()
+    if not hackathon_data.exists:
         logger.warning(f"Add Nonprofit to Hackathon End (no results)")
         return {
             "message": "Hackathon not found"
         }
     # Check if the nonprofit document exists
-    if not nonprofit_doc:
+    nonprofit_data = nonprofit_doc.get()
+    if not nonprofit_data.exists:
         logger.warning(f"Add Nonprofit to Hackathon End (no results)")
         return {
             "message": "Nonprofit not found"
         }
     # Get the hackathon document data
-    hackathon_data = hackathon_doc.get().to_dict()
+    hackathon_dict = hackathon_data.to_dict()
     # Add the nonprofit document reference to the hackathon document
-    if "nonprofits" not in hackathon_data:
-        hackathon_data["nonprofits"] = []
+    if "nonprofits" not in hackathon_dict:
+        hackathon_dict["nonprofits"] = []
     # Check if the nonprofit is already in the hackathon document
-    if nonprofit_doc in hackathon_data["nonprofits"]:
+    if nonprofit_doc in hackathon_dict["nonprofits"]:
         logger.warning(f"Add Nonprofit to Hackathon End (no results)")
         return {
             "message": "Nonprofit already in hackathon"
         }
     # Add the nonprofit document reference to the hackathon document
-    hackathon_data["nonprofits"].append(nonprofit_doc)
+    hackathon_dict["nonprofits"].append(nonprofit_doc)
     # Update the hackathon document
-    hackathon_doc.set(hackathon_data, merge=True)
+    hackathon_doc.set(hackathon_dict, merge=True)
 
 
     return {
@@ -326,11 +332,11 @@ def get_single_hackathon_event(hackathon_id):
         logger.warning("get_single_hackathon_event end (no results)")
         return {}
     else:                  
-        if "nonprofits" in result:           
+        if "nonprofits" in result and result["nonprofits"]:           
             result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]   
         else:
             result["nonprofits"] = []
-        if "teams" in result:
+        if "teams" in result and result["teams"]:
             result["teams"] = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]        
         else:
             result["teams"] = []
@@ -1337,13 +1343,7 @@ def send_hackathon_request_email(contact_name, contact_email, request_id):
         
     Returns:
         True if email was sent successfully, False otherwise
-    """
-    resend_api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY")
-    if not resend_api_key:
-        logger.error("RESEND_WELCOME_EMAIL_KEY not set")
-        return False
-    
-    resend.api_key = resend_api_key
+    """    
 
     # Rotate between images for better engagement
     images = [
@@ -1415,6 +1415,8 @@ def send_hackathon_request_email(contact_name, contact_email, request_id):
     params = {
         "from": "Opportunity Hack <welcome@apply.ohack.dev>",
         "to": f"{contact_name} <{contact_email}>",
+        "cc": "questions@ohack.org",
+        "reply_to": "questions@ohack.org",
         "subject": "Your Opportunity Hack Event Request - Next Steps",
         "html": html_content,
     }
@@ -1863,6 +1865,8 @@ def send_nonprofit_welcome_email(organization_name, contact_name, email):
     params = {
         "from": "Opportunity Hack <welcome@apply.ohack.dev>",
         "to": f"{contact_name} <{email}>",
+        "cc": "questions@ohack.org",
+        "reply_to": "questions@ohack.org",
         "subject": subject,
         "html": html_content,
     }
@@ -1937,7 +1941,8 @@ def send_welcome_email(name, email):
     params = {
         "from": "Opportunity Hack <welcome@apply.ohack.dev>",
         "to": f"{name} <{email}>",
-        "bcc": "greg@ohack.org",
+        "cc": "questions@ohack.org",
+        "reply_to": "questions@ohack.org",
         "subject": subject,
         "html": html_content,
     }
@@ -2180,7 +2185,9 @@ def get_profile_metadata_old(propel_id):
     logger.debug(f"get_profile_metadata {response}")
 
 
-    return Message(response)
+    return {
+        "text" : response
+    }
 
 
 def get_all_profiles():
@@ -2459,6 +2466,7 @@ def notify_feedback_receiver(feedback_receiver_id):
     user_doc = db.collection('users').document(feedback_receiver_id).get()
     if user_doc.exists:
         user_data = user_doc.to_dict()
+        user_email = user_data.get('email_address', '')
         slack_user_id = user_data.get('user_id', '').split('-')[-1]  # Extract Slack user ID
         logger.info(f"User with ID {feedback_receiver_id} found")
         logger.info(f"Sending notification to user {slack_user_id}")
@@ -2471,6 +2479,38 @@ def notify_feedback_receiver(feedback_receiver_id):
         # Send Slack message
         send_slack(message=message, channel=slack_user_id)
         logger.info(f"Notification sent to user {slack_user_id}")
+
+        # Also send an email notification if user_email is available
+        if user_email:
+            subject = "New Feedback Received"
+            # Think like a senior UX person and re-use the email template from the welcome email and send using resend
+            html_content = f"""
+            <!DOCTYPE html>
+            <html lang="en">
+            <head>
+                <meta charset="UTF-8">
+                <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                <title>New Feedback Received</title>    
+            </head>
+            <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+                <h1 style="color: #0088FE;">New Feedback Received</h1>
+                <p>Hello,</p>
+                <p>You have received new feedback. Please visit <a href="https://www.ohack.dev/myfeedback">My Feedback</a> to view it.</p>
+                <p>Thank you for being a part of the Opportunity Hack community!</p>
+                <p>Best regards,<br>The Opportunity Hack Team</p>
+            </body>
+            </html>
+            """
+            params = {
+                "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+                "to": f"{user_data.get('name', 'User')} <{user_email}>",
+                "bcc": "greg@ohack.org",
+                "subject": subject,
+                "html": html_content,
+            }
+            email = resend.Emails.SendParams(params)
+            resend.Emails.send(email)
+            logger.info(f"Email notification sent to {user_email}")
     else:
         logger.warning(f"User with ID {feedback_receiver_id} not found")
 
@@ -2483,13 +2523,16 @@ def get_user_feedback(propel_user_id):
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     db_user_id = get_user_from_slack_id(slack_user["sub"]).id
     
-    feedback_docs = db.collection('feedback').where("feedback_receiver_id", "==", db_user_id).stream()
+    feedback_docs = db.collection('feedback').where("feedback_receiver_id", "==", db_user_id).order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
     
     feedback_list = []
     for doc in feedback_docs:
         feedback = doc.to_dict()
         if feedback.get("is_anonymous", False):
-            feedback.pop("feedback_giver_id", None)
+            if "feedback_giver_id" in feedback:
+                feedback.pop("feedback_giver_id")
+            if "feedback_giver_slack_id" in feedback:
+                feedback.pop("feedback_giver_slack_id")
         feedback_list.append(feedback)
     
     return {"feedback": feedback_list}

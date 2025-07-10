@@ -57,9 +57,15 @@ def get_users_in_team_by_name(team_name):
     user_list = []
     for doc in docs:
         adict = doc.to_dict()
-        for user in adict["users"]:
-            auser = user.get().to_dict()
-            user_list.append(auser)
+        if "users" in adict and adict["users"]:
+            # Batch fetch all user documents at once instead of individual gets
+            user_refs = adict["users"]
+            user_docs = db.get_all(user_refs)
+            for user_doc in user_docs:
+                if user_doc.exists:
+                    auser = user_doc.to_dict()
+                    auser["id"] = user_doc.id
+                    user_list.append(auser)
     return user_list
 
 def get_user_by_id(id):
@@ -233,13 +239,26 @@ def delete_user_by_id(userid):
         logger.error(f"**ERROR User {userid} does not exist")
         raise Exception(f"User {userid} does not exist")
 
-    # Delete user from all teams
-    if "teams" in user.to_dict():
-        user_teams = user.to_dict()["teams"]
-        for team in user_teams:
-            team_users = team.get().to_dict()["users"]
-            team_users.remove(user.reference)
-            db.collection("teams").document(team.id).set({"users": team_users}, merge=True)
+    # Delete user from all teams using batch operations
+    user_data = user.to_dict()
+    if "teams" in user_data and user_data["teams"]:
+        user_teams = user_data["teams"]
+        
+        # Batch fetch all team documents
+        team_docs = db.get_all(user_teams)
+        
+        # Batch update team documents
+        batch = db.batch()
+        for team_doc in team_docs:
+            if team_doc.exists:
+                team_data = team_doc.to_dict()
+                if "users" in team_data and user.reference in team_data["users"]:
+                    team_users = team_data["users"]
+                    team_users.remove(user.reference)
+                    batch.set(team_doc.reference, {"users": team_users}, merge=True)
+        
+        # Commit all team updates
+        batch.commit()
 
     # Delete user
     db.collection("users").document(userid).delete()
@@ -594,17 +613,35 @@ def add_hackathon_to_user_and_teams(hackathon_id):
     
     # Get teams from hackathon   
     hackathon_teams = hackathon.to_dict()["teams"]
-
-    # For each team, add hackathon to user
-    for team in hackathon_teams:
-        team_users = team.get().to_dict()["users"]
-        for user in team_users:
-            user_hackathons = user.get().to_dict()["hackathons"]
-            if hackathon.reference in user_hackathons:
-                logger.info(f"Hackathon {hackathon_id} is already in user {user.id}, not adding again")
-            else:
-                user_hackathons.append(hackathon.reference)
-                db.collection("users").document(user.id).set({"hackathons": user_hackathons}, merge=True)
+    
+    # Batch fetch all team documents at once
+    if hackathon_teams:
+        team_docs = db.get_all(hackathon_teams)
+        all_user_refs = []
+        
+        # Collect all user references from all teams
+        for team_doc in team_docs:
+            if team_doc.exists:
+                team_data = team_doc.to_dict()
+                if "users" in team_data and team_data["users"]:
+                    all_user_refs.extend(team_data["users"])
+        
+        # Batch fetch all user documents at once
+        if all_user_refs:
+            user_docs = db.get_all(all_user_refs)
+            
+            # Batch update user documents
+            batch = db.batch()
+            for user_doc in user_docs:
+                if user_doc.exists:
+                    user_data = user_doc.to_dict()
+                    user_hackathons = user_data.get("hackathons", [])
+                    if hackathon.reference not in user_hackathons:
+                        user_hackathons.append(hackathon.reference)
+                        batch.set(user_doc.reference, {"hackathons": user_hackathons}, merge=True)
+            
+            # Commit all updates in a single batch
+            batch.commit()
 
 def get_hackathon_by_event_id(event_id, return_reference=False):
     db = get_db()  # this connects to our Firestore database
