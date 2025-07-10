@@ -80,8 +80,7 @@ def log_execution_time(func):
     return wrapper
 
 # Generically handle a DocumentSnapshot or a DocumentReference
-#@cached(cache=TTLCache(maxsize=1000, ttl=43200), key=hash_key)
-@cached(cache=LRUCache(maxsize=640*1024), key=hash_key)
+@cached(cache=TTLCache(maxsize=2000, ttl=3600), key=hash_key)
 def doc_to_json(docid=None, doc=None, depth=0):            
     if not docid:
         logger.debug("docid is NoneType")
@@ -192,32 +191,34 @@ def add_nonprofit_to_hackathon(json):
     # Get the nonprofit document
     nonprofit_doc = db.collection('nonprofits').document(nonprofitId)
     # Check if the hackathon document exists
-    if not hackathon_doc:
+    hackathon_data = hackathon_doc.get()
+    if not hackathon_data.exists:
         logger.warning(f"Add Nonprofit to Hackathon End (no results)")
         return {
             "message": "Hackathon not found"
         }
     # Check if the nonprofit document exists
-    if not nonprofit_doc:
+    nonprofit_data = nonprofit_doc.get()
+    if not nonprofit_data.exists:
         logger.warning(f"Add Nonprofit to Hackathon End (no results)")
         return {
             "message": "Nonprofit not found"
         }
     # Get the hackathon document data
-    hackathon_data = hackathon_doc.get().to_dict()
+    hackathon_dict = hackathon_data.to_dict()
     # Add the nonprofit document reference to the hackathon document
-    if "nonprofits" not in hackathon_data:
-        hackathon_data["nonprofits"] = []
+    if "nonprofits" not in hackathon_dict:
+        hackathon_dict["nonprofits"] = []
     # Check if the nonprofit is already in the hackathon document
-    if nonprofit_doc in hackathon_data["nonprofits"]:
+    if nonprofit_doc in hackathon_dict["nonprofits"]:
         logger.warning(f"Add Nonprofit to Hackathon End (no results)")
         return {
             "message": "Nonprofit already in hackathon"
         }
     # Add the nonprofit document reference to the hackathon document
-    hackathon_data["nonprofits"].append(nonprofit_doc)
+    hackathon_dict["nonprofits"].append(nonprofit_doc)
     # Update the hackathon document
-    hackathon_doc.set(hackathon_data, merge=True)
+    hackathon_doc.set(hackathon_dict, merge=True)
 
 
     return {
@@ -326,11 +327,11 @@ def get_single_hackathon_event(hackathon_id):
         logger.warning("get_single_hackathon_event end (no results)")
         return {}
     else:                  
-        if "nonprofits" in result:           
+        if "nonprofits" in result and result["nonprofits"]:           
             result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]   
         else:
             result["nonprofits"] = []
-        if "teams" in result:
+        if "teams" in result and result["teams"]:
             result["teams"] = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]        
         else:
             result["teams"] = []
@@ -2180,7 +2181,9 @@ def get_profile_metadata_old(propel_id):
     logger.debug(f"get_profile_metadata {response}")
 
 
-    return Message(response)
+    return {
+        "text" : response
+    }
 
 
 def get_all_profiles():

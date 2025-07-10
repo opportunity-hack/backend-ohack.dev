@@ -1,5 +1,5 @@
 import os 
-from common.log import get_logger, info, debug, warning, error, exception
+from common.log import get_logger, debug, error
 import json
 from common.auth import auth, auth_user
 
@@ -77,6 +77,13 @@ def getOrgId(req):
     # Get the org_id from the req
     return req.headers.get("X-Org-Id")
 
+def get_authenticated_user_id():
+    """Helper function to get authenticated user ID with proper error handling"""
+    if not auth_user or not auth_user.user_id:
+        error(logger, "Could not obtain user details - user not authenticated")
+        return None
+    return auth_user.user_id
+
 
 @bp.route("/public")
 def public():
@@ -147,8 +154,10 @@ def get_npo_applications_api():
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def update_npo_application_api(application_id):
-    if auth_user and auth_user.user_id:
-        return vars(update_npo_application(application_id, request.get_json(), auth_user.user_id))
+    user_id = get_authenticated_user_id()
+    if user_id:
+        return vars(update_npo_application(application_id, request.get_json(), user_id))
+    return {"error": "Unauthorized"}, 401
 
 #
 # Hackathon Related Endpoints
@@ -157,23 +166,27 @@ def update_npo_application_api(application_id):
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def add_hackathon():
-    if auth_user and auth_user.user_id:
-        return vars(save_hackathon(request.get_json(), auth_user.user_id))
+    user_id = get_authenticated_user_id()
+    if user_id:
+        return vars(save_hackathon(request.get_json(), user_id))
+    return {"error": "Unauthorized"}, 401
 
 @bp.route("/hackathon", methods=["PATCH"])
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def update_hackathon():
-    if auth_user and auth_user.user_id:
-        return vars(save_hackathon(request.get_json(), auth_user.user_id))
+    user_id = get_authenticated_user_id()
+    if user_id:
+        return vars(save_hackathon(request.get_json(), user_id))
+    return {"error": "Unauthorized"}, 401
 
 
 @bp.route("/hackathons", methods=["GET"])
 def list_hackathons():
     arg = request.args.get("current") 
-    if arg != None and arg.lower() == "current":
+    if arg and arg.lower() == "current":
         return get_hackathon_list("current")
-    if arg != None and arg.lower() == "previous":
+    if arg and arg.lower() == "previous":
         return get_hackathon_list("previous")
     else:
         return get_hackathon_list("all") #all
@@ -392,8 +405,9 @@ def store_praise():
     # else return 401
     
     token = request.headers.get("X-Api-Key")
-    sender_id = request.get_json().get("praise_sender")
-    receiver_id = request.get_json().get("praise_receiver")
+    json_data = request.get_json()
+    sender_id = json_data.get("praise_sender")
+    receiver_id = json_data.get("praise_receiver")
 
     # Check BACKEND_NEWS_TOKEN
     if token == None or token != os.getenv("BACKEND_PRAISE_TOKEN"):
@@ -401,8 +415,8 @@ def store_praise():
     elif sender_id == receiver_id:
         return "You cannot write a praise about yourself", 400
     else:
-        debug(logger, "Request object", data=request.get_json())
-        return vars(save_praise(request.get_json()))
+        debug(logger, "Request object", data=json_data)
+        return vars(save_praise(json_data))
 
 @bp.route("/praises", methods=["GET"])
 def get_praises():
@@ -458,7 +472,7 @@ def get_single_problem(project_id):
 def profile():            
     # user_id is a uuid from Propel Auth
     if auth_user and auth_user.user_id:        
-        return vars(get_profile_metadata_old(auth_user.user_id))
+        return get_profile_metadata_old(auth_user.user_id)
     else:
         return None
 
