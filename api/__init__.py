@@ -63,8 +63,6 @@ dict_config = {
 logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
 
-# Top-level blueprint imports removed from here to prevent circular dependencies.
-
 def create_app():
     ##########################################
     # Environment Variables
