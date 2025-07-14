@@ -181,6 +181,7 @@ def create_app():
     app.register_blueprint(teams_views.bp)
     app.register_blueprint(contact_views.bp)
     app.register_blueprint(leaderboard_views.bp)
+    app.register_blueprint(github_views.bp)
     app.register_blueprint(slack_views.bp)
     app.register_blueprint(llm_views.bp)
 
