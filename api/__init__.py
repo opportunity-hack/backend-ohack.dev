@@ -11,6 +11,9 @@ from readme_metrics.flask_readme import ReadMeMetrics
 from common.utils import safe_get_env_var
 import os
 
+from common.utils import safe_get_env_var
+import os
+
 def grouping_function(request):
   env = safe_get_env_var("FLASK_ENV")
   if True:
@@ -59,6 +62,8 @@ dict_config = {
 
 logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
+
+# Top-level blueprint imports removed from here to prevent circular dependencies.
 
 def create_app():
     ##########################################
