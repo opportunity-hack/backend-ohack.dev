@@ -1,0 +1,50 @@
+from flask import Blueprint, request, jsonify
+from common.auth import auth 
+from services import llm_service
+
+bp = Blueprint("llm", __name__, url_prefix="/api/llm")
+
+@bp.route("/summary", methods=["POST"])
+@auth.require_user
+def get_summary():
+    """
+    Endpoint to generate a summary for a given application.
+    Expects application data in the request body.
+    """
+    application_data = request.get_json()
+    if not application_data:
+        return jsonify({"error": "Request body cannot be empty."}), 400
+    
+    summary = llm_service.generate_summary(application_data)
+    return jsonify({"summary": summary})
+
+@bp.route("/similar-projects", methods=["POST"])
+@auth.require_user
+def get_similar_projects():
+    """
+    Endpoint to find similar projects for a given application.
+    Expects application data in the request body.
+    """
+    application_data = request.get_json()
+    if not application_data:
+        return jsonify({"error": "Request body cannot be empty."}), 400
+
+    similar_projects = llm_service.find_similar_projects(application_data)
+    return jsonify({"similar_projects": similar_projects})
+
+@bp.route("/similarity-reasoning", methods=["POST"])
+@auth.require_user
+def get_similarity_reasoning():
+    """
+    Endpoint to generate a reason for similarity between an application and a project.
+    Expects { "application": {...}, "project": {...} } in the request body.
+    """
+    data = request.get_json()
+    application_data = data.get('application')
+    project_data = data.get('project')
+
+    if not application_data or not project_data:
+        return jsonify({"error": "Request must include both 'application' and 'project' data."}), 400
+
+    reasoning = llm_service.generate_similarity_reasoning(application_data, project_data)
+    return jsonify({"reasoning": reasoning})

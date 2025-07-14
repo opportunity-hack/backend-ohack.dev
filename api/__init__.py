@@ -8,8 +8,9 @@ from flask_talisman import Talisman
 import logging.config
 from readme_metrics import MetricsApiConfig
 from readme_metrics.flask_readme import ReadMeMetrics
+from common.utils import safe_get_env_var
+import os
 
-   
 def grouping_function(request):
   env = safe_get_env_var("FLASK_ENV")
   if True:
@@ -59,26 +60,7 @@ dict_config = {
 logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
 
-
-print("Starting Flask")
-from api import exception_views
-from api.messages import messages_views
-from api.newsletters import newsletter_views
-# Leaving this disabled for now - team can fix this based on fixes for above module import
-#from api.newsletters import subscription_views
-from api.certificates import certificate_views
-from api.users import users_views
-from api.hearts import hearts_views
-from api.problemstatements import problem_statement_views
-from api.volunteers import volunteers_views
-from api.validate import validate_views
-from api.teams import teams_views
-from api.contact import contact_views
-from api.leaderboard import leaderboard_views
-from api.slack import slack_views
-
-from common.utils import safe_get_env_var
-import os
+# Top-level blueprint imports removed from here to prevent circular dependencies.
 
 def create_app():
     ##########################################
@@ -171,6 +153,24 @@ def create_app():
     # Blueprint Registration
     ##########################################
 
+    # --- THIS IS THE FIX ---
+    # By importing the blueprints inside the function, we guarantee the app exists
+    # and we avoid the circular dependency during startup.
+    from api import exception_views
+    from api.messages import messages_views
+    from api.newsletters import newsletter_views
+    from api.certificates import certificate_views
+    from api.users import users_views
+    from api.hearts import hearts_views
+    from api.problemstatements import problem_statement_views
+    from api.volunteers import volunteers_views
+    from api.validate import validate_views
+    from api.teams import teams_views
+    from api.contact import contact_views
+    from api.leaderboard import leaderboard_views
+    from api.slack import slack_views
+    from api.llm import llm_views
+
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
     app.register_blueprint(newsletter_views.bp)
@@ -185,5 +185,6 @@ def create_app():
     app.register_blueprint(contact_views.bp)
     app.register_blueprint(leaderboard_views.bp)
     app.register_blueprint(slack_views.bp)
+    app.register_blueprint(llm_views.bp)
 
     return app
