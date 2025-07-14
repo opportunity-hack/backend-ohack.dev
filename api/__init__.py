@@ -60,8 +60,6 @@ dict_config = {
 logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
 
-# Top-level blueprint imports removed from here to prevent circular dependencies.
-
 def create_app():
     ##########################################
     # Environment Variables
@@ -153,12 +151,11 @@ def create_app():
     # Blueprint Registration
     ##########################################
 
-    # --- THIS IS THE FIX ---
-    # By importing the blueprints inside the function, we guarantee the app exists
-    # and we avoid the circular dependency during startup.
     from api import exception_views
     from api.messages import messages_views
     from api.newsletters import newsletter_views
+    # Leaving this disabled for now - team can fix this based on fixes for above module import
+    #from api.newsletters import subscription_views
     from api.certificates import certificate_views
     from api.users import users_views
     from api.hearts import hearts_views
