@@ -63,6 +63,8 @@ dict_config = {
 logger = logging.getLogger("myapp")
 logging.config.dictConfig(dict_config)
 
+print("Starting Flask")
+
 def create_app():
     ##########################################
     # Environment Variables
