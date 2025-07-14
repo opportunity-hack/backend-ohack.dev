@@ -165,6 +165,7 @@ def create_app():
     from api.teams import teams_views
     from api.contact import contact_views
     from api.leaderboard import leaderboard_views
+    from api.github import github_views
     from api.slack import slack_views
     from api.llm import llm_views
 
