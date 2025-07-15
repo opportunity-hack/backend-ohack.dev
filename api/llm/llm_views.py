@@ -18,6 +18,22 @@ def get_summary():
     summary = llm_service.generate_summary(application_data)
     return jsonify({"summary": summary})
 
+@bp.route("/summary/refresh", methods=["POST"])
+@auth.require_user
+def refresh_summary():
+    """
+    Endpoint to force a new summary generation for a given application,
+    bypassing any cached result.
+    """
+    application_data = request.get_json()
+    if not application_data:
+        return jsonify({"error": "Request body cannot be empty."}), 400
+    
+    # Call the service with force_refresh=True
+    summary = llm_service.generate_summary(application_data, force_refresh=True)
+    return jsonify({"summary": summary})
+
+
 @bp.route("/similar-projects", methods=["POST"])
 @auth.require_user
 def get_similar_projects():
