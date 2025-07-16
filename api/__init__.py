@@ -11,6 +11,9 @@ from readme_metrics.flask_readme import ReadMeMetrics
 from common.utils import safe_get_env_var
 import os
 
+from common.utils import safe_get_env_var
+import os
+
 def grouping_function(request):
   env = safe_get_env_var("FLASK_ENV")
   if True:
@@ -186,7 +189,6 @@ def create_app():
     app.register_blueprint(leaderboard_views.bp)
     app.register_blueprint(github_views.bp)
     app.register_blueprint(slack_views.bp)
-    app.register_blueprint(llm_views.bp)
     app.register_blueprint(llm_views.bp)
 
     return app
