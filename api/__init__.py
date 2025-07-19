@@ -11,9 +11,6 @@ from readme_metrics.flask_readme import ReadMeMetrics
 from common.utils import safe_get_env_var
 import os
 
-from common.utils import safe_get_env_var
-import os
-
 def grouping_function(request):
   env = safe_get_env_var("FLASK_ENV")
   if True:
