@@ -40,6 +40,7 @@ from api.messages.messages_service import (
     get_teams_list,
     get_team,
     get_teams_batch,
+    get_teams_by_event_id,
     save_team,
     unjoin_team,
     join_team,
@@ -317,6 +318,15 @@ def get_team_api(team_id):
 @bp.route("/teams/batch", methods=["POST"])
 def get_batch_teams():
     return get_teams_batch(request.get_json())
+
+
+@bp.route("/team/<event_id>", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_teams_by_event(event_id):
+    """Get teams for a specific hackathon (used in admin judging assignment)."""
+    debug(logger, "Getting teams by event", event_id=event_id)
+    return get_teams_by_event_id(event_id)
 
 
 @bp.route("/team", methods=["POST"])
