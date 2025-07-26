@@ -218,7 +218,7 @@ def generate_summary(application_data: dict, force_refresh: bool = False):
         except Exception as e:
             print(f"Error reading from Firestore: {e}")
 
-    # 2. If no cache, or if refresh is forced, generate a new summary
+    # 2. If no cache, or if refresh is forced, prepare to generate a new summary
     if force_refresh:
         print(f"Forcing refresh. Generating new summary for application ID: {app_id}")
     else:
@@ -226,6 +226,20 @@ def generate_summary(application_data: dict, force_refresh: bool = False):
     
     problem = application_data.get('technicalProblem', '')
     solution = application_data.get('solutionBenefits', '')
+
+    # 3. Fail-safe: If critical data is missing, return and cache a default summary
+    if not (problem and problem.strip()) and not (solution and solution.strip()):
+        print(f"Application {app_id} has insufficient data. Returning default summary.")
+        default_summary = "A summary could not be generated because the project's problem and solution details were not provided."
+        try:
+            # Cache the default summary to prevent re-processing
+            app_ref.set({'llm_summary': default_summary}, merge=True)
+            print(f"Successfully cached default summary for application ID: {app_id}")
+        except Exception as e:
+            print(f"Error caching default summary to Firestore: {e}")
+        return default_summary
+
+    # 4. If data is sufficient, proceed with API call
     idea = application_data.get('idea', '')
     input_text = f"Problem: {problem}\n\nSolution: {solution}\n\nIdea: {idea}"
     
@@ -252,7 +266,7 @@ def generate_summary(application_data: dict, force_refresh: bool = False):
         )
         new_summary = response.choices[0].message.content
 
-        # 3. Save the new summary back to Firestore
+        # 5. Save the new summary back to Firestore
         try:
             app_ref.set({'llm_summary': new_summary}, merge=True)
             print(f"Successfully cached summary for application ID: {app_id}")
