@@ -20,6 +20,7 @@ def get_summary():
 
 @bp.route("/summary/refresh", methods=["POST"])
 @auth.require_user
+@auth.require_org_member_with_permission("admin_permissions")
 def refresh_summary():
     """
     Endpoint to force a new summary generation for a given application,
@@ -67,6 +68,7 @@ def get_similarity_reasoning():
 
 @bp.route("/embedding-map/populate", methods=["POST"])
 @auth.require_user # In production, this should ideally be restricted to admin users.
+@auth.require_org_member_with_permission("admin_permissions")
 def populate_embedding_map_endpoint():
     """
     Triggers a background process to (re)generate embeddings for all NPO

@@ -61,23 +61,18 @@ def populate_embedding_map():
     and populates the 'npo_applications_embedding_maps' collection.
     """
     db = get_db()
-    print("LOG: Starting populate_embedding_map function.")
     
     try:
         # Use the specified function to get approved problem statements
-        print("LOG: Fetching approved problem statements...")
         approved_projects = get_problem_statements()
-        print(f"LOG: Successfully fetched {len(approved_projects)} approved projects.")
     except Exception as e:
         print(f"ERROR: Failed to fetch approved problem statements: {e}")
         return {"status": "error", "message": "Could not fetch approved problem statements."}
 
     if not approved_projects:
-        print("LOG: No approved projects found to process. Exiting.")
         return {"status": "success", "message": "No approved projects found.", "processed_count": 0}
 
     apps_to_embed = []
-    print("LOG: Preparing projects for embedding using title and description...")
     for project in approved_projects:
         try:
             # Use the specified format to create the text for embedding
@@ -95,7 +90,6 @@ def populate_embedding_map():
             print(f"ERROR: Failed to process project with ID '{getattr(project, 'id', 'UNKNOWN')}'. Reason: {e}")
             continue # Skip this project and continue with the next one
 
-    print(f"LOG: Prepared {len(apps_to_embed)} projects to be embedded. Starting batch processing.")
     BATCH_SIZE = 100
     total_processed = 0
     for app_batch in batched(apps_to_embed, BATCH_SIZE):
@@ -103,10 +97,8 @@ def populate_embedding_map():
         batch_ids = [app['id'] for app in app_batch]
         
         try:
-            print(f"LOG: Requesting embeddings for a batch of {len(texts_in_batch)} applications. IDs: {batch_ids}")
             response = client.embeddings.create(input=texts_in_batch, model=EMBEDDING_MODEL)
             embeddings_in_batch = [item.embedding for item in response.data]
-            print("LOG: Successfully received embeddings for the batch.")
 
             firestore_batch = db.batch()
             for i, app_data in enumerate(app_batch):
@@ -118,15 +110,12 @@ def populate_embedding_map():
                     'is_approved': app_data['is_approved']
                 })
             
-            print("LOG: Committing batch to Firestore...")
             firestore_batch.commit()
-            print(f"LOG: Successfully committed embeddings for {len(app_batch)} applications.")
             total_processed += len(app_batch)
         except Exception as e:
             print(f"ERROR: An error occurred during a batch update for IDs {batch_ids}. Reason: {e}")
             continue
             
-    print(f"LOG: Finished processing. Total applications updated: {total_processed}.")
     return {"status": "success", "message": f"Processed {total_processed} of {len(approved_projects)} applications.", "processed_count": total_processed}
 
 def find_similar_projects(application_data: dict, top_n=3):
@@ -155,7 +144,6 @@ def find_similar_projects(application_data: dict, top_n=3):
 
     # 2. If no embedding is cached, generate and persist it
     if not app_embedding:
-        print(f"LOG: No cached embedding found for {application_id}. Generating a new one.")
         app_text = f"Problem: {application_data.get('technicalProblem', '')}. Solution: {application_data.get('solutionBenefits', '')}"
         try:
             app_embedding = len_safe_get_embedding(app_text)
@@ -168,7 +156,6 @@ def find_similar_projects(application_data: dict, top_n=3):
                 'is_approved': False  # New applications are not approved by default
             }
             map_ref.set(new_map_entry)
-            print(f"LOG: Successfully generated and cached embedding for {application_id}.")
 
         except Exception as e:
             print(f"ERROR: OpenAI API embedding failed for new application {application_id}: {e}")
@@ -289,7 +276,7 @@ def generate_similarity_reasoning(application_data: dict, project_data: dict):
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful assistant. Your task is to verbosely explain, in one 35-40 words, why the following two items are similar. Focus on the core concepts."
+            "content": "You are a helpful assistant. Your task is to meaningfully explain, in 35-40 words, why the following two items are similar. Focus on the core concepts."
         },
         {
             "role": "user",
