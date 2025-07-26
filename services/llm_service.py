@@ -132,19 +132,49 @@ def populate_embedding_map():
 def find_similar_projects(application_data: dict, top_n=3):
     """
     Finds the top N most similar APPROVED projects for a new application by querying
-    the pre-populated embedding map.
+    the pre-populated embedding map. It caches the new application's embedding if not present.
     """
     db = get_db()
-    
-    # 1. Generate embedding for the new application
-    app_text = f"Problem: {application_data.get('technicalProblem', '')}. Solution: {application_data.get('solutionBenefits', '')}"
-    try:
-        app_embedding = len_safe_get_embedding(app_text)
-    except Exception as e:
-        print(f"OpenAI API embedding failed for new application: {e}")
-        return [{'id': 'error', 'title': 'Failed to generate embedding for this application.'}]
+    application_id = application_data.get('id')
+    if not application_id:
+        return [{'id': 'error', 'title': 'Application data must include an ID.'}]
 
-    # 2. Fetch all APPROVED projects from the embedding map
+    app_embedding = None
+    
+    # 1. Check for a cached embedding for the incoming application
+    try:
+        map_ref = db.collection(EMBEDDING_MAP_COLLECTION).document(application_id)
+        map_doc = map_ref.get()
+        if map_doc.exists:
+            app_embedding = map_doc.to_dict().get('embedding_vector')
+            if app_embedding:
+                print(f"LOG: Found cached embedding for application ID: {application_id}")
+
+    except Exception as e:
+        print(f"WARN: Could not check for cached embedding for {application_id}. Reason: {e}")
+
+    # 2. If no embedding is cached, generate and persist it
+    if not app_embedding:
+        print(f"LOG: No cached embedding found for {application_id}. Generating a new one.")
+        app_text = f"Problem: {application_data.get('technicalProblem', '')}. Solution: {application_data.get('solutionBenefits', '')}"
+        try:
+            app_embedding = len_safe_get_embedding(app_text)
+            
+            # Persist the new embedding to the map
+            new_map_entry = {
+                'embedding_vector': app_embedding,
+                'title': application_data.get('title', 'Untitled'),
+                'description': application_data.get('description', 'No description.'),
+                'is_approved': False  # New applications are not approved by default
+            }
+            map_ref.set(new_map_entry)
+            print(f"LOG: Successfully generated and cached embedding for {application_id}.")
+
+        except Exception as e:
+            print(f"ERROR: OpenAI API embedding failed for new application {application_id}: {e}")
+            return [{'id': 'error', 'title': 'Failed to generate embedding for this application.'}]
+
+    # 3. Fetch all APPROVED projects from the embedding map
     try:
         # Query the map for approved projects only
         map_query = db.collection(EMBEDDING_MAP_COLLECTION).where('is_approved', '==', True).stream()
@@ -152,12 +182,16 @@ def find_similar_projects(application_data: dict, top_n=3):
         if not approved_projects_map:
             return []
     except Exception as e:
-        print(f"Failed to fetch from embedding map: {e}")
+        print(f"ERROR: Failed to fetch from embedding map: {e}")
         return []
 
-    # 3. Compute similarities against approved projects
+    # 4. Compute similarities against approved projects
     similarities = []
     for project_id, project_data in approved_projects_map.items():
+        # Ensure we don't compare the application with itself if it happens to be in the approved list
+        if project_id == application_id:
+            continue
+            
         vector = project_data.get('embedding_vector')
         if vector:
             similarity = cosine_similarity(np.array(app_embedding), np.array(vector))
@@ -168,7 +202,7 @@ def find_similar_projects(application_data: dict, top_n=3):
                 'similarity': similarity
             })
 
-    # 4. Sort and return the top N results
+    # 5. Sort and return the top N results
     similarities.sort(key=lambda x: x['similarity'], reverse=True)
     return similarities[:top_n]
 
