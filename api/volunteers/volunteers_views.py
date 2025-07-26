@@ -343,6 +343,26 @@ def get_volunteer_application(event_id):
         logger.error(f"Error retrieving volunteer application: {str(e)}")
         return _error_response(f"Failed to retrieve application: {str(e)}")
 
+@bp.route('/volunteer/application_count_by_availability_timeslot/<event_id>', methods=['GET'])
+def get_volunteer_application_count_by_timeslot(event_id):
+    """Get the count of volunteer applications by availability time slot for a specific event."""
+    if not event_id:
+        return _error_response("Event ID is required", 400)
+    
+    try:
+        # Get the count of volunteer applications by availability time slot
+        from services.volunteers_service import get_volunteer_application_count_by_availability_timeslot
+        counts = get_volunteer_application_count_by_availability_timeslot(event_id)
+        
+        return _success_response(counts, "Volunteer application counts by time slot retrieved successfully")
+    except Exception as e:
+        logger.error(f"Error retrieving volunteer application counts: {str(e)}")
+        # Log stack trace for debugging
+        logger.exception(e)
+        return _error_response(f"Failed to retrieve application counts: {str(e)}")
+
+
+
 @bp.route('/admin/volunteers/<event_id>', methods=['GET'])
 @auth.require_org_member_with_permission("all") #TODO
 def admin_list_volunteers(user, org, event_id):

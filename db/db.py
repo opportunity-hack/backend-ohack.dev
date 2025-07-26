@@ -3,6 +3,9 @@ from model.hackathon import Hackathon
 from model.nonprofit import Nonprofit
 from model.problem_statement import ProblemStatement
 from model.user import User
+from model.judge_assignment import JudgeAssignment
+from model.judge_score import JudgeScore
+from model.judge_panel import JudgePanel
 
 from db.interface import DatabaseInterface
 
@@ -115,3 +118,48 @@ def delete_nonprofit(nonprofit_id):
 #TODO: Kill with fire. Leaky abstraction
 def get_user_doc_reference(user_id):
     return db.get_user_doc_reference(user_id)
+
+# Judge Assignments
+def fetch_judge_assignments_by_judge_id(judge_id):
+    return db.fetch_judge_assignments_by_judge_id(judge_id)
+
+def fetch_judge_assignments_by_event_and_judge(event_id, judge_id):
+    return db.fetch_judge_assignments_by_event_and_judge(event_id, judge_id)
+
+def insert_judge_assignment(assignment: JudgeAssignment):
+    return db.insert_judge_assignment(assignment)
+
+def update_judge_assignment(assignment: JudgeAssignment):
+    return db.update_judge_assignment(assignment)
+
+def delete_judge_assignment(assignment_id):
+    return db.delete_judge_assignment(assignment_id)
+
+# Judge Scores
+def fetch_judge_score(judge_id, team_id, event_id, round_name, is_draft=False):
+    return db.fetch_judge_score(judge_id, team_id, event_id, round_name, is_draft)
+
+def fetch_judge_scores_by_judge_and_event(judge_id, event_id):
+    return db.fetch_judge_scores_by_judge_and_event(judge_id, event_id)
+
+def insert_judge_score(score: JudgeScore):
+    return db.insert_judge_score(score)
+
+def update_judge_score(score: JudgeScore):
+    return db.update_judge_score(score)
+
+def upsert_judge_score(score: JudgeScore):
+    return db.upsert_judge_score(score)
+
+# Judge Panels
+def fetch_judge_panels_by_event(event_id):
+    return db.fetch_judge_panels_by_event(event_id)
+
+def insert_judge_panel(panel: JudgePanel):
+    return db.insert_judge_panel(panel)
+
+def update_judge_panel(panel: JudgePanel):
+    return db.update_judge_panel(panel)
+
+def delete_judge_panel(panel_id):
+    return db.delete_judge_panel(panel_id)

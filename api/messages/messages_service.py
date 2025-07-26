@@ -510,12 +510,73 @@ def get_team(id):
     finally:
         logger.debug(f"get_team operation completed for id={id}")
 
+
+def get_teams_by_event_id(event_id):
+    """Get teams for a specific hackathon event (for admin judging assignment)"""
+    logger.debug(f"Getting teams for event_id={event_id}")
+    db = get_db()
+    
+    try:
+        # Query teams by hackathon_event_id field
+        docs = db.collection('teams').where('hackathon_event_id', '==', event_id).stream()
+        
+        results = []
+        for doc in docs:
+            team_data = doc_to_json(docid=doc.id, doc=doc)
+            
+            # Format team data for admin judging assignment interface
+            formatted_team = {
+                "id": team_data.get("id"),
+                "name": team_data.get("name", ""),
+                "members": team_data.get("members", []),
+                "problem_statement": {
+                    "title": team_data.get("problem_statement", {}).get("title", ""),
+                    "nonprofit": team_data.get("problem_statement", {}).get("nonprofit", "")
+                }
+            }
+            results.append(formatted_team)
+        
+        logger.debug(f"Found {len(results)} teams for event {event_id}")
+        return {"teams": results}
+        
+    except Exception as e:
+        logger.error(f"Error fetching teams for event {event_id}: {str(e)}")
+        return {"teams": [], "error": "Failed to fetch teams"}
+
+
 def get_teams_batch(json):
     # Handle json["team_ids"] will have a list of teamids
 
     if "team_ids" not in json:
-        logger.info(json["team_ids"])
+        logger.error("get_teams_batch called without team_ids in json")
         # TODO: Return for a batch of team ids to speed up the frontend
+        return []
+    team_ids = json["team_ids"]
+    logger.debug(f"get_teams_batch start team_ids={team_ids}")
+    db = get_db()
+    if not team_ids:
+        logger.warning("get_teams_batch end (no team_ids provided)")
+        return []
+    # Get all teams by team_ids, using correct Firestore Python syntax and where FieldPath doesn't exist also make sure the id works for id fields
+    try:
+        docs = db.collection('teams').where(
+            '__name__', 'in', [db.collection('teams').document(team_id) for team_id in team_ids]).stream()
+        
+        results = []
+        for doc in docs:
+            team_data = doc_to_json(docid=doc.id, doc=doc)
+            results.append(team_data)
+        
+        logger.debug(f"get_teams_batch end (with {len(results)} results)")
+        return results
+    except Exception as e:
+        logger.error(f"Error in get_teams_batch: {str(e)}")
+        # print stack trace
+        import traceback
+        traceback.print_exc()
+        return []
+
+
 
 @limits(calls=40, period=ONE_MINUTE)
 def get_npos_by_hackathon_id(id):

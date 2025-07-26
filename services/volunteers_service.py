@@ -37,6 +37,34 @@ def get_volunteer_by_user_id(user_id: str, event_id: str, volunteer_type: str) -
         return volunteer.to_dict()
     return None
 
+def get_volunteer_application_count_by_availability_timeslot(event_id: str) -> Dict[str, int]:
+    """
+    Get the count of volunteer applications grouped by availability timeslot.
+    
+    Args:
+        event_id: The event ID
+        
+    Returns:
+        Dictionary with timeslot as key and count as value
+    """
+    db = get_db()
+    query = db.collection('volunteers').where('event_id', '==', event_id).where('volunteer_type', '==', 'volunteer')
+    
+    logger.info(f"Querying volunteer applications by availability timeslot {event_id}")
+    # Aggregate by availability timeslot
+    results = query.stream()
+    timeslot_counts = {}
+    for doc in results:
+        data = doc.to_dict()
+        availability = data.get('availableDays', '')
+        if availability:            
+            for slot in availability:
+                if slot not in timeslot_counts:
+                    timeslot_counts[slot] = 0
+                timeslot_counts[slot] += 1
+    logger.info(f"Counted {len(timeslot_counts)} unique availability timeslots for event {event_id}")
+    return timeslot_counts
+
 @redis_cached(prefix="volunteer:by_email", ttl=10)
 def get_volunteer_by_email(email: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
     """Get volunteer by email, event ID, and volunteer type."""

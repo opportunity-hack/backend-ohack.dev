@@ -62,6 +62,7 @@ logging.config.dictConfig(dict_config)
 
 print("Starting Flask")
 
+
 def create_app():
     ##########################################
     # Environment Variables
@@ -169,6 +170,7 @@ def create_app():
     from api.leaderboard import leaderboard_views
     from api.github import github_views
     from api.slack import slack_views
+    from api.judging import judging_views
     from api.llm import llm_views
 
     app.register_blueprint(messages_views.bp)
@@ -187,5 +189,6 @@ def create_app():
     app.register_blueprint(github_views.bp)
     app.register_blueprint(slack_views.bp)
     app.register_blueprint(llm_views.bp)
+    app.register_blueprint(judging_views.bp)
 
     return app

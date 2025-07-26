@@ -9,6 +9,9 @@ from model.problem_statement import ProblemStatement
 from model.user import User
 from model.hackathon import Hackathon
 from model.nonprofit import Nonprofit
+from model.judge_assignment import JudgeAssignment
+from model.judge_score import JudgeScore
+from model.judge_panel import JudgePanel
 from db.interface import DatabaseInterface
 import logging
 import uuid
@@ -628,6 +631,140 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             doc.reference.delete()
 
         return n
+
+    # Judge Assignments
+    def fetch_judge_assignments_by_judge_id(self, judge_id):
+        db = self.get_db()
+        assignments = []
+        docs = db.collection('judge_assignments').where('judge_id', '==', judge_id).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            assignments.append(JudgeAssignment.deserialize(d))
+        return assignments
+
+    def fetch_judge_assignments_by_event_and_judge(self, event_id, judge_id):
+        db = self.get_db()
+        assignments = []
+        docs = db.collection('judge_assignments').where('event_id', '==', event_id).where('judge_id', '==', judge_id).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            assignments.append(JudgeAssignment.deserialize(d))
+        return assignments
+
+    def insert_judge_assignment(self, assignment: JudgeAssignment):
+        db = self.get_db()
+        from datetime import datetime
+        
+        assignment.created_at = datetime.now()
+        assignment.updated_at = datetime.now()
+        
+        doc_ref = db.collection('judge_assignments').document()
+        assignment.id = doc_ref.id
+        
+        doc_ref.set(assignment.serialize())
+        return assignment
+
+    def update_judge_assignment(self, assignment: JudgeAssignment):
+        db = self.get_db()
+        from datetime import datetime
+        
+        assignment.updated_at = datetime.now()
+        db.collection('judge_assignments').document(assignment.id).update(assignment.serialize())
+        return assignment
+
+    def delete_judge_assignment(self, assignment_id):
+        db = self.get_db()
+        db.collection('judge_assignments').document(assignment_id).delete()
+        return True
+
+    # Judge Scores
+    def fetch_judge_score(self, judge_id, team_id, event_id, round_name, is_draft=False):
+        db = self.get_db()
+        docs = db.collection('judge_scores').where('judge_id', '==', judge_id).where('team_id', '==', team_id).where('event_id', '==', event_id).where('round', '==', round_name).where('is_draft', '==', is_draft).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            return JudgeScore.deserialize(d)
+        return None
+
+    def fetch_judge_scores_by_judge_and_event(self, judge_id, event_id):
+        db = self.get_db()
+        scores = []
+        docs = db.collection('judge_scores').where('judge_id', '==', judge_id).where('event_id', '==', event_id).where('is_draft', '==', False).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            scores.append(JudgeScore.deserialize(d))
+        return scores
+
+    def insert_judge_score(self, score: JudgeScore):
+        db = self.get_db()
+        from datetime import datetime
+        
+        score.created_at = datetime.now()
+        score.updated_at = datetime.now()
+        
+        doc_ref = db.collection('judge_scores').document()
+        score.id = doc_ref.id
+        
+        doc_ref.set(score.serialize())
+        return score
+
+    def update_judge_score(self, score: JudgeScore):
+        db = self.get_db()
+        from datetime import datetime
+        
+        score.updated_at = datetime.now()
+        db.collection('judge_scores').document(score.id).update(score.serialize())
+        return score
+
+    def upsert_judge_score(self, score: JudgeScore):
+        # Check if a score already exists for this combination
+        existing_score = self.fetch_judge_score(score.judge_id, score.team_id, score.event_id, score.round, score.is_draft)
+        
+        if existing_score:
+            # Update existing score
+            score.id = existing_score.id
+            score.created_at = existing_score.created_at
+            return self.update_judge_score(score)
+        else:
+            # Insert new score
+            return self.insert_judge_score(score)
+
+    # Judge Panels
+    def fetch_judge_panels_by_event(self, event_id):
+        db = self.get_db()
+        panels = []
+        docs = db.collection('judge_panels').where('event_id', '==', event_id).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            panels.append(JudgePanel.deserialize(d))
+        return panels
+
+    def insert_judge_panel(self, panel: JudgePanel):
+        db = self.get_db()
+        from datetime import datetime
+        
+        panel.created_at = datetime.now()
+        
+        doc_ref = db.collection('judge_panels').document()
+        panel.id = doc_ref.id
+        
+        doc_ref.set(panel.serialize())
+        return panel
+
+    def update_judge_panel(self, panel: JudgePanel):
+        db = self.get_db()
+        db.collection('judge_panels').document(panel.id).update(panel.serialize())
+        return panel
+
+    def delete_judge_panel(self, panel_id):
+        db = self.get_db()
+        db.collection('judge_panels').document(panel_id).delete()
+        return True
         
 
 DatabaseInterface.register(FirestoreDatabaseInterface)
