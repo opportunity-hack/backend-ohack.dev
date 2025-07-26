@@ -64,3 +64,17 @@ def get_similarity_reasoning():
 
     reasoning = llm_service.generate_similarity_reasoning(application_data, project_data)
     return jsonify({"reasoning": reasoning})
+
+@bp.route("/embedding-map/populate", methods=["POST"])
+@auth.require_user # In production, this should ideally be restricted to admin users.
+def populate_embedding_map_endpoint():
+    """
+    Triggers a background process to (re)generate embeddings for all NPO
+    applications and populate the embedding map collection.
+    """
+    try:
+        result = llm_service.populate_embedding_map()
+        return jsonify(result), 200
+    except Exception as e:
+        # Log the exception e
+        return jsonify({"status": "error", "message": "An unexpected error occurred."}), 500

@@ -13,10 +13,10 @@ client = openai.OpenAI()
 EMBEDDING_MODEL = 'text-embedding-3-small'
 EMBEDDING_CTX_LENGTH = 8191
 EMBEDDING_ENCODING = 'cl100k_base'
+EMBEDDING_MAP_COLLECTION = 'npo_applications_embedding_maps'
 
 def batched(iterable, n):
     """Batch data into tuples of length n. The last batch may be shorter."""
-    # batched('ABCDEFG', 3) --> ABC DEF G
     if n < 1:
         raise ValueError('n must be at least one')
     it = iter(iterable)
@@ -32,25 +32,11 @@ def chunked_tokens(text, encoding_name, chunk_length):
 
 def get_single_embedding(text_or_tokens, model=EMBEDDING_MODEL):
     """Get embedding for a single text or token sequence."""
-    if isinstance(text_or_tokens, str):
-        return client.embeddings.create(input=[text_or_tokens], model=model).data[0].embedding
-    else:
-        return client.embeddings.create(input=[text_or_tokens], model=model).data[0].embedding
+    response = client.embeddings.create(input=[text_or_tokens], model=model)
+    return response.data[0].embedding
 
 def len_safe_get_embedding(text, model=EMBEDDING_MODEL, max_tokens=EMBEDDING_CTX_LENGTH, encoding_name=EMBEDDING_ENCODING, average=True):
-    """
-    Safely get embeddings for text of any length by chunking if necessary.
-    
-    Args:
-        text: Input text to embed
-        model: OpenAI embedding model to use
-        max_tokens: Maximum tokens per chunk
-        encoding_name: Tokenizer encoding name
-        average: If True, return weighted average of chunk embeddings. If False, return list of embeddings.
-    
-    Returns:
-        Single embedding vector (if average=True) or list of embedding vectors (if average=False)
-    """
+    """Safely get embeddings for text of any length by chunking if necessary."""
     chunk_embeddings = []
     chunk_lens = []
     
@@ -60,7 +46,7 @@ def len_safe_get_embedding(text, model=EMBEDDING_MODEL, max_tokens=EMBEDDING_CTX
 
     if average:
         chunk_embeddings = np.average(chunk_embeddings, axis=0, weights=chunk_lens)
-        chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)  # normalizes length to 1
+        chunk_embeddings = chunk_embeddings / np.linalg.norm(chunk_embeddings)
         chunk_embeddings = chunk_embeddings.tolist()
     
     return chunk_embeddings
@@ -68,6 +54,123 @@ def len_safe_get_embedding(text, model=EMBEDDING_MODEL, max_tokens=EMBEDDING_CTX
 def cosine_similarity(vec_a, vec_b):
     """Calculates cosine similarity between two vectors."""
     return np.dot(vec_a, vec_b) / (np.linalg.norm(vec_a) * np.linalg.norm(vec_b))
+
+def populate_embedding_map():
+    """
+    Generates embeddings for all approved NPO applications (problem statements)
+    and populates the 'npo_applications_embedding_maps' collection.
+    """
+    db = get_db()
+    print("LOG: Starting populate_embedding_map function.")
+    
+    try:
+        # Use the specified function to get approved problem statements
+        print("LOG: Fetching approved problem statements...")
+        approved_projects = get_problem_statements()
+        print(f"LOG: Successfully fetched {len(approved_projects)} approved projects.")
+    except Exception as e:
+        print(f"ERROR: Failed to fetch approved problem statements: {e}")
+        return {"status": "error", "message": "Could not fetch approved problem statements."}
+
+    if not approved_projects:
+        print("LOG: No approved projects found to process. Exiting.")
+        return {"status": "success", "message": "No approved projects found.", "processed_count": 0}
+
+    apps_to_embed = []
+    print("LOG: Preparing projects for embedding using title and description...")
+    for project in approved_projects:
+        try:
+            # Use the specified format to create the text for embedding
+            text = f"Title: {project.title or 'Untitled'}. Description: {project.description or 'No description.'}"
+            
+            apps_to_embed.append({
+                'id': project.id,
+                'text': text,
+                'title': project.title or 'Untitled',
+                'description': project.description or 'No description.',
+                'is_approved': True
+            })
+        except Exception as e:
+            # This will catch errors if a project object is malformed
+            print(f"ERROR: Failed to process project with ID '{getattr(project, 'id', 'UNKNOWN')}'. Reason: {e}")
+            continue # Skip this project and continue with the next one
+
+    print(f"LOG: Prepared {len(apps_to_embed)} projects to be embedded. Starting batch processing.")
+    BATCH_SIZE = 100
+    total_processed = 0
+    for app_batch in batched(apps_to_embed, BATCH_SIZE):
+        texts_in_batch = [app['text'] for app in app_batch]
+        batch_ids = [app['id'] for app in app_batch]
+        
+        try:
+            print(f"LOG: Requesting embeddings for a batch of {len(texts_in_batch)} applications. IDs: {batch_ids}")
+            response = client.embeddings.create(input=texts_in_batch, model=EMBEDDING_MODEL)
+            embeddings_in_batch = [item.embedding for item in response.data]
+            print("LOG: Successfully received embeddings for the batch.")
+
+            firestore_batch = db.batch()
+            for i, app_data in enumerate(app_batch):
+                map_ref = db.collection(EMBEDDING_MAP_COLLECTION).document(app_data['id'])
+                firestore_batch.set(map_ref, {
+                    'embedding_vector': embeddings_in_batch[i],
+                    'title': app_data['title'],
+                    'description': app_data['description'],
+                    'is_approved': app_data['is_approved']
+                })
+            
+            print("LOG: Committing batch to Firestore...")
+            firestore_batch.commit()
+            print(f"LOG: Successfully committed embeddings for {len(app_batch)} applications.")
+            total_processed += len(app_batch)
+        except Exception as e:
+            print(f"ERROR: An error occurred during a batch update for IDs {batch_ids}. Reason: {e}")
+            continue
+            
+    print(f"LOG: Finished processing. Total applications updated: {total_processed}.")
+    return {"status": "success", "message": f"Processed {total_processed} of {len(approved_projects)} applications.", "processed_count": total_processed}
+
+def find_similar_projects(application_data: dict, top_n=3):
+    """
+    Finds the top N most similar APPROVED projects for a new application by querying
+    the pre-populated embedding map.
+    """
+    db = get_db()
+    
+    # 1. Generate embedding for the new application
+    app_text = f"Problem: {application_data.get('technicalProblem', '')}. Solution: {application_data.get('solutionBenefits', '')}"
+    try:
+        app_embedding = len_safe_get_embedding(app_text)
+    except Exception as e:
+        print(f"OpenAI API embedding failed for new application: {e}")
+        return [{'id': 'error', 'title': 'Failed to generate embedding for this application.'}]
+
+    # 2. Fetch all APPROVED projects from the embedding map
+    try:
+        # Query the map for approved projects only
+        map_query = db.collection(EMBEDDING_MAP_COLLECTION).where('is_approved', '==', True).stream()
+        approved_projects_map = {doc.id: doc.to_dict() for doc in map_query}
+        if not approved_projects_map:
+            return []
+    except Exception as e:
+        print(f"Failed to fetch from embedding map: {e}")
+        return []
+
+    # 3. Compute similarities against approved projects
+    similarities = []
+    for project_id, project_data in approved_projects_map.items():
+        vector = project_data.get('embedding_vector')
+        if vector:
+            similarity = cosine_similarity(np.array(app_embedding), np.array(vector))
+            similarities.append({
+                'id': project_id,
+                'title': project_data.get('title', 'Untitled'),
+                'description': project_data.get('description', 'No description.'),
+                'similarity': similarity
+            })
+
+    # 4. Sort and return the top N results
+    similarities.sort(key=lambda x: x['similarity'], reverse=True)
+    return similarities[:top_n]
 
 def generate_summary(application_data: dict, force_refresh: bool = False):
     """
@@ -140,98 +243,6 @@ def generate_summary(application_data: dict, force_refresh: bool = False):
         print(f"OpenAI API summary generation failed: {e}")
         return "Error: Could not generate summary."
 
-def find_similar_projects(application_data: dict, top_n=5):
-    """
-    Finds existing problem statements similar to a new application using OpenAI embeddings.
-    Now handles long texts by chunking them safely and uses batch embedding requests for efficiency.
-    """
-    # Combine the structured problem and solution for embedding.
-    problem = application_data.get('technicalProblem', '')
-    solution = application_data.get('solutionBenefits', '')
-    app_text = f"Problem: {problem}. Solution: {solution}"
-    
-    existing_projects = get_problem_statements()
-    
-    if not existing_projects:
-        return []
-
-    # Prepare project texts with safe defaults
-    project_texts = [f"Title: {p.title or 'Untitled'}. Description: {p.description or 'No description.'}" for p in existing_projects]
-    
-    # --- THIS IS THE KEY OPTIMIZATION ---
-    # Combine application text and all project texts into one batch request
-    all_texts = [app_text] + project_texts
-    
-    try:
-        print(f"Generating embeddings for {len(all_texts)} texts in a single batch request...")
-        
-        # Check if any text might exceed token limits and needs chunking
-        texts_to_embed = []
-        chunk_indices = []  # Track which texts were chunked
-        
-        for i, text in enumerate(all_texts):
-            # Estimate tokens (rough approximation: 1 token ≈ 4 characters)
-            estimated_tokens = len(text) // 4
-            
-            if estimated_tokens > EMBEDDING_CTX_LENGTH:
-                print(f"Text {i} is too long ({estimated_tokens} estimated tokens), using chunking...")
-                # For very long texts, we'll still need individual processing
-                embedding = len_safe_get_embedding(text, average=True)
-                texts_to_embed.append(None)  # Placeholder
-                chunk_indices.append((i, embedding))
-            else:
-                texts_to_embed.append(text)
-        
-        # Make single batch API call for all non-chunked texts
-        batch_texts = [text for text in texts_to_embed if text is not None]
-        
-        if batch_texts:
-            print(f"Making single API call for {len(batch_texts)} texts...")
-            response = client.embeddings.create(
-                model=EMBEDDING_MODEL,
-                input=batch_texts
-            )
-            batch_embeddings = [data.embedding for data in response.data]
-        else:
-            batch_embeddings = []
-        
-        # Reconstruct the full embeddings list
-        all_embeddings = []
-        batch_idx = 0
-        chunk_dict = dict(chunk_indices)
-        
-        for i, text in enumerate(texts_to_embed):
-            if i in chunk_dict:
-                # Use the chunked embedding
-                all_embeddings.append(chunk_dict[i])
-            else:
-                # Use the batch embedding
-                all_embeddings.append(batch_embeddings[batch_idx])
-                batch_idx += 1
-                
-    except Exception as e:
-        print(f"OpenAI API embedding failed: {e}")
-        return [{'id': 'error', 'title': 'Failed to generate embeddings.'}]
-
-    # The first embedding is for the application, the rest are for projects
-    app_embedding = all_embeddings[0]
-    project_embeddings = all_embeddings[1:]
-    
-    similarities = []
-    for i, proj_embedding in enumerate(project_embeddings):
-        similarity = cosine_similarity(np.array(app_embedding), np.array(proj_embedding))
-        
-        project = existing_projects[i]
-        similarities.append({
-            'id': project.id,
-            'title': project.title,
-            'description': project.description,
-            'similarity': similarity
-        })
-
-    similarities.sort(key=lambda x: x['similarity'], reverse=True)
-    return similarities[:top_n]
-
 def generate_similarity_reasoning(application_data: dict, project_data: dict):
     """
     Generates a brief reason why an application and a project are similar using the OpenAI API.
@@ -244,7 +255,7 @@ def generate_similarity_reasoning(application_data: dict, project_data: dict):
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful assistant. Your task is to briefly explain, in one sentence, why the following two items are similar. Focus on the core concepts."
+            "content": "You are a helpful assistant. Your task is to verbosely explain, in one 35-40 words, why the following two items are similar. Focus on the core concepts."
         },
         {
             "role": "user",
