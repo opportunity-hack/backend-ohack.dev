@@ -79,12 +79,13 @@ def get_teams(judge_id, event_id):
     if "error" in result:
         return result, 500
 
+    logger.debug(f"Result: {result}")
     return result
 
 
 @bp.route("/team/<team_id>", methods=["GET"])
 @auth.require_user
-def get_team(team_id):
+def get_team_api(team_id):
     """Get detailed information about a specific team for judging."""
     user_id = get_authenticated_user_id()
     if not user_id:
@@ -103,6 +104,7 @@ def get_team(team_id):
     if "error" in result:
         return result, 404 if result["error"] == "Team not found" else 500
 
+    logger.debug(f"Result: {result}")
     return result
 
 
@@ -189,6 +191,8 @@ def save_draft():
     data = request.get_json()
     if not data:
         return {"error": "Missing request body"}, 400
+
+    logger.debug(f"Data: {data}")
 
     # Validate required fields
     required_fields = ['judge_id', 'team_id', 'event_id', 'round', 'scores']

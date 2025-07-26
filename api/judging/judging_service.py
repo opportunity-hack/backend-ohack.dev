@@ -180,6 +180,43 @@ def get_team_details(team_id: str) -> Dict:
         team_data = get_team(team_id)
         if not team_data:
             return {"error": "Team not found"}
+        if "team" not in team_data:
+            error(logger, "Invalid team data format", team_id=team_id,
+                  data=team_data)
+            return {"error": "Invalid team data format"}
+        
+        team_data = team_data["team"]
+
+        logger.debug(f"Fetched team data: {team_data}")
+
+        # Resolve team members from user IDs
+        members = []
+        user_ids = team_data.get('users', [])
+        if user_ids:
+            # Import here to avoid circular imports
+            from common.utils.firebase import get_user_by_id
+            
+            for user_id in user_ids:
+                try:
+                    user_data = get_user_by_id(user_id)
+                    if user_data:
+                        member = {
+                            "id": user_data.get('id'),
+                            "name": user_data.get('name', ''),
+                            "email": user_data.get('email_address', ''),
+                            "profile_image": user_data.get('profile_image', '')
+                        }
+                        members.append(member)
+                except Exception as e:
+                    warning(logger, "Error fetching user details", 
+                           user_id=user_id, error=str(e))
+                    continue
+
+        # Extract GitHub URL from github_links array
+        github_url = ""
+        github_links = team_data.get('github_links', [])
+        if github_links and len(github_links) > 0:
+            github_url = github_links[0].get('link', '')
 
         # Format team data according to API specification
         formatted_team = {
@@ -196,14 +233,16 @@ def get_team_details(team_id: str) -> Dict:
                 "nonprofit_contact": team_data.get(
                     'problem_statement', {}).get('nonprofit_contact', '')
             },
-            "members": team_data.get('members', []),
-            "github_url": team_data.get('github_url', ''),
-            "devpost_url": team_data.get('devpost_url', ''),
+            "members": members,  # Now populated with actual member data
+            "github_url": github_url,
+            "devpost_url": team_data.get('devpost_link', ''),
             "video_url": team_data.get('video_url', ''),
             "demo_url": team_data.get('demo_url', ''),
             "technologies": team_data.get('technologies', []),
             "features": team_data.get('features', [])
         }
+
+        logger.debug(f"Formatted team data: {formatted_team}")
 
         return {"team": formatted_team}
 
@@ -316,7 +355,7 @@ def is_judge_assigned_to_team(judge_id: str, team_id: str) -> bool:
 
 
 def save_draft_score(judge_id: str, team_id: str, event_id: str,
-                     round_name: str, scores_data: Dict) -> Dict:
+                     round_name: str, scores_data: Dict, updated_at: str) -> Dict:
     """Save draft scores (auto-save functionality)."""
     try:
         debug(logger, "Saving draft score", judge_id=judge_id,
@@ -330,6 +369,12 @@ def save_draft_score(judge_id: str, team_id: str, event_id: str,
         score.round = round_name
         score.is_draft = True
         score.submitted_at = None
+        # Handle updated_at, example: 2025-07-25T15:49:24.680Z
+        if updated_at:
+            score.updated_at = datetime.fromisoformat(
+                updated_at.replace('Z', '+00:00'))
+        else:
+            score.updated_at = datetime.now()
 
         # Only calculate total if all scores are present
         required_fields = ['scope_impact', 'scope_complexity',
@@ -357,6 +402,35 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None) -> Dict:
 
     team_id = team.get('id')
 
+    # Resolve team members from user IDs if present
+    members = []
+    user_ids = team.get('users', [])
+    if user_ids:
+        # Import here to avoid circular imports
+        from common.utils.firebase import get_user_by_id
+        
+        for user_id in user_ids:
+            try:
+                user_data = get_user_by_id(user_id)
+                if user_data:
+                    member = {
+                        "id": user_data.get('id'),
+                        "name": user_data.get('name', ''),
+                        "email": user_data.get('email_address', ''),
+                        "profile_image": user_data.get('profile_image', '')
+                    }
+                    members.append(member)
+            except Exception as e:
+                warning(logger, "Error fetching user details for team formatting", 
+                       user_id=user_id, error=str(e))
+                continue
+
+    # Extract GitHub URL from github_links array
+    github_url = ""
+    github_links = team.get('github_links', [])
+    if github_links and len(github_links) > 0:
+        github_url = github_links[0].get('link', '')
+
     return {
         "id": team_id,
         "name": team.get('name', ''),
@@ -365,9 +439,9 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None) -> Dict:
             "nonprofit": team.get('problem_statement', {}).get(
                 'nonprofit', '')
         },
-        "members": team.get('members', []),
-        "github_url": team.get('github_url', ''),
-        "devpost_url": team.get('devpost_url', ''),
+        "members": members,  # Now populated with actual member data
+        "github_url": github_url,
+        "devpost_url": team.get('devpost_link', ''),
         "video_url": team.get('video_url', ''),
         "demo_time": None,  # Will be overridden for round2
         "judged": f"{team_id}_round1" in score_lookup,
