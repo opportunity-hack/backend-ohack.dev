@@ -230,7 +230,7 @@ def generate_summary(application_data: dict, force_refresh: bool = False):
     # 3. Fail-safe: If critical data is missing, return and cache a default summary
     if not (problem and problem.strip()) and not (solution and solution.strip()):
         print(f"Application {app_id} has insufficient data. Returning default summary.")
-        default_summary = "A summary could not be generated because the project's problem and solution details were not provided."
+        default_summary = "No technical problem or solution stated in the application."
         try:
             # Cache the default summary to prevent re-processing
             app_ref.set({'llm_summary': default_summary}, merge=True)
