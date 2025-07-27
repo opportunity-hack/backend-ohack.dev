@@ -78,15 +78,11 @@ def populate_embedding_map():
             title = getattr(project, 'title', None) or 'Untitled'
             description = getattr(project, 'description', None) or 'No description.'
             areasOfFocus = getattr(project, 'areasOfFocus', None) or []
-            charityLocation = getattr(project, 'charityLocation', None) or 'Unknown location'
-            chartityName = getattr(project, 'charityName', None) or 'Unknown charity'
-            contactName = getattr(project, 'contactName', None) or 'Unknown contact'
-            contactPhone = getattr(project, 'contactPhone', None) or 'No phone provided'
             servedPopulations = getattr(project, 'servedPopulations', None) or []
             solutionBenefits = getattr(project, 'solutionBenefits', None) or ''
             technicalProblem = getattr(project, 'technicalProblem', None) or ''
             idea = getattr(project, 'idea', None) or ''
-            text = f"Title: {title}. Description: {description}. Areas of Focus: {', '.join(areasOfFocus)}. Charity Location: {charityLocation}. Charity Name: {chartityName}. Contact Name: {contactName}. Contact Phone: {contactPhone}. Served Populations: {', '.join(servedPopulations)}. Solution Benefits: {solutionBenefits}. Technical Problem: {technicalProblem}. Idea: {idea}"            
+            text = f"{title}. {description}. Areas of Focus: {', '.join(areasOfFocus)}. Served Populations: {', '.join(servedPopulations)}. {solutionBenefits}. {technicalProblem}. {idea}"            
             apps_to_embed.append({
                 'id': project.id,
                 'text': text,
@@ -103,7 +99,6 @@ def populate_embedding_map():
     # A smaller batch size ensures the total payload of each transaction is under the 10MiB limit.
     BATCH_SIZE = 20
     total_processed = 0
-    print(f"LOG: Starting to process {len(apps_to_embed)} applications in batches of {BATCH_SIZE}.")
     for app_batch in batched(apps_to_embed, BATCH_SIZE):
         texts_in_batch = [app['text'] for app in app_batch]
         batch_ids = [app['id'] for app in app_batch]
@@ -116,9 +111,7 @@ def populate_embedding_map():
             for i, app_data in enumerate(app_batch):
                 # --- LOGGING ADDED HERE ---
                 # Log the title and the first 5 values of the embedding vector before setting it.
-                embedding_vector = embeddings_in_batch[i]
-                print(f"LOG: Updating embedding for '{app_data['title']}' (ID: {app_data['id']}). Embedding (first 5): {embedding_vector[:5]}")
-                
+                embedding_vector = embeddings_in_batch[i]                
                 map_ref = db.collection(EMBEDDING_MAP_COLLECTION).document(app_data['id'])
                 firestore_batch.set(map_ref, {
                     'embedding_vector': embedding_vector,
@@ -127,7 +120,6 @@ def populate_embedding_map():
                     'is_approved': app_data['is_approved']
                 })
             
-            print(f"LOG: Committing batch for IDs: {batch_ids}")
             firestore_batch.commit()
             total_processed += len(app_batch)
         except Exception as e:
@@ -143,11 +135,7 @@ def find_similar_projects(application_data: dict, top_n=3):
     """
     db = get_db()
     application_id = application_data.get('id')
-    #  print all key value pairs of application_data for debugging
-    if application_data:
-        for key, value in application_data.items():
-            print(f"LOG: Application data key: {key}, value: {value}")
-    print(f"LOG: Finding similar project for application: {application_data.get('title', 'Unknown')} (ID: {application_id})")
+    
     if not application_id:
         return [{'id': 'error', 'title': 'Application data must include an ID.'}]
 
@@ -159,22 +147,20 @@ def find_similar_projects(application_data: dict, top_n=3):
         map_doc = map_ref.get()
         if map_doc.exists:
             app_embedding = map_doc.to_dict().get('embedding_vector')
-            if app_embedding:
-                print(f"LOG: Found cached embedding for application ID: {application_id}")
-                print(f"LOG: Cached embedding vector (first 5 values): {app_embedding[:5]}")
 
     except Exception as e:
         print(f"WARN: Could not check for cached embedding for {application_id}. Reason: {e}")
 
     # 2. If no embedding is cached, generate and persist it
-    if not app_embedding:
-        print(f"LOG: No cached embedding found for {application_id}. Generating a new one.")
-        
-        # FIX: Use the correct keys ('title', 'description') from the application data
-        title = application_data.get('title', 'Untitled')
-        description = application_data.get('description', 'No description.')
-        app_text = f"Title: {title}. Description: {description}"
+    if not app_embedding:        
+        title = application_data.get('charityName', 'Untitled Project')
+        problem = application_data.get('technicalProblem', '')
+        solution = application_data.get('solutionBenefits', '')
+        idea = application_data.get('idea', '')
+        description = f"Title: {title}. Problem: {problem}. Solution: {solution}. Idea: {idea}"
 
+        app_text = f"Title: {title}. Problem: {problem}. Solution: {solution}. Idea: {idea}"
+        
         try:
             app_embedding = len_safe_get_embedding(app_text)
             
@@ -186,7 +172,6 @@ def find_similar_projects(application_data: dict, top_n=3):
                 'is_approved': False  # New applications are not approved by default
             }
             map_ref.set(new_map_entry)
-            print(f"LOG: Successfully generated and cached embedding for {application_id}.")
 
         except Exception as e:
             print(f"ERROR: OpenAI API embedding failed for new application {application_id}: {e}")
@@ -223,7 +208,6 @@ def find_similar_projects(application_data: dict, top_n=3):
     # 5. Sort and return the top N results
     similarities.sort(key=lambda x: x['similarity'], reverse=True)
     top_similarities = similarities[:top_n]
-    print("--- LOG: Completed find_similar_projects ---")
     return top_similarities
 
 def refresh_embedding_and_find_similar(application_data: dict, top_n=3):
@@ -236,17 +220,20 @@ def refresh_embedding_and_find_similar(application_data: dict, top_n=3):
     if not application_id:
         return [{'id': 'error', 'title': 'Application data must include an ID.'}]
 
-    print(f"--- LOG: Starting refresh_embedding_and_find_similar for ID: {application_id} ---")
-
-    # 1. Generate a new embedding from the provided application data.
+    # 1. Generate a new embedding from the full application data.
     try:
-        title = application_data.get('title', 'Untitled')
-        description = application_data.get('description', 'No description.')
-        app_text = f"Title: {title}. Description: {description}"
+        # FIX: Use the correct fields from the application document.
+        # 'charityName' will serve as the title.
+        # 'technicalProblem' and 'solutionBenefits' will form the description.
+        title = application_data.get('charityName', 'Untitled Project')
+        problem = application_data.get('technicalProblem', '')
+        solution = application_data.get('solutionBenefits', '')
+        idea = application_data.get('idea', '')
+        description = f"Title: {title}. Problem: {problem}. Solution: {solution}. Idea: {idea}"
+
+        app_text = f"Title: {title}. Problem: {problem}. Solution: {solution}. Idea: {idea}"
         
-        print(f"LOG: Generating new embedding with text: '{app_text}'")
         new_embedding = len_safe_get_embedding(app_text)
-        print(f"LOG: New embedding generated (first 5 values): {new_embedding[:5]}")
 
     except Exception as e:
         print(f"ERROR: OpenAI API embedding failed for {application_id}: {e}")
@@ -257,12 +244,11 @@ def refresh_embedding_and_find_similar(application_data: dict, top_n=3):
         map_ref = db.collection(EMBEDDING_MAP_COLLECTION).document(application_id)
         map_entry_data = {
             'embedding_vector': new_embedding,
-            'title': application_data.get('title', 'Untitled'),
-            'description': application_data.get('description', 'No description.'),
+            'title': title, # Use the corrected title
+            'description': description, # Use the corrected description
             'is_approved': False  # This is for an unapproved application
         }
         map_ref.set(map_entry_data)
-        print(f"LOG: Successfully updated (refreshed) embedding map for {application_id}.")
     except Exception as e:
         print(f"ERROR: Failed to save refreshed embedding for {application_id}. Reason: {e}")
         # We can still proceed, but the cache won't be fixed.
@@ -291,8 +277,6 @@ def refresh_embedding_and_find_similar(application_data: dict, top_n=3):
     similarities.sort(key=lambda x: x['similarity'], reverse=True)
     top_results = similarities[:top_n]
     
-    print(f"LOG: Found new similar projects: {top_results}")
-    print("--- LOG: Finished refresh_embedding_and_find_similar ---")
     return top_results
 
 
@@ -301,7 +285,6 @@ def refresh_single_embedding(application_id: str):
     Force-regenerates and updates the embedding for a single NPO application.
     """
     db = get_db()
-    print(f"LOG: Starting embedding refresh for application ID: {application_id}")
 
     # 1. Fetch the full, original application data
     try:
@@ -319,21 +302,15 @@ def refresh_single_embedding(application_id: str):
     title = application_data.get('title', 'Untitled')
     description = application_data.get('description', 'No description.')
     areasOfFocus = application_data.get('areasOfFocus', [])
-    charityLocation = application_data.get('charityLocation', 'Unknown location')
-    chartityName = application_data.get('charityName', 'Unknown charity')
-    contactName = application_data.get('contactName', 'Unknown contact')
-    contactPhone = application_data.get('contactPhone', 'No phone provided')
     servedPopulations = application_data.get('servedPopulations', [])
     solutionBenefits = application_data.get('solutionBenefits', '')
     technicalProblem = application_data.get('technicalProblem', '')
     idea = application_data.get('idea', '')
 
-    app_text = f"Title: {title}. Description: {description}. Areas of Focus: {', '.join(areasOfFocus)}. Charity Location: {charityLocation}. Charity Name: {chartityName}. Contact Name: {contactName}. Contact Phone: {contactPhone}. Served Populations: {', '.join(servedPopulations)}. Solution Benefits: {solutionBenefits}. Technical Problem: {technicalProblem}. Idea: {idea}"
-    print(f"LOG: Generating new embedding with text: '{app_text}'")
+    app_text = f"{title}. {description}. Areas of Focus: {', '.join(areasOfFocus)}. Served Populations: {', '.join(servedPopulations)}. {solutionBenefits}. {technicalProblem}. {idea}"
 
     try:
         new_embedding = len_safe_get_embedding(app_text)
-        print(f"LOG: Successfully generated new embedding (first 5 values): {new_embedding[:5]}")
     except Exception as e:
         print(f"ERROR: OpenAI API embedding generation failed for {application_id}: {e}")
         return {"status": "error", "message": "Failed to generate new embedding."}
@@ -350,7 +327,6 @@ def refresh_single_embedding(application_id: str):
     try:
         map_ref = db.collection(EMBEDDING_MAP_COLLECTION).document(application_id)
         map_ref.set(map_entry_data)
-        print(f"LOG: Successfully updated embedding map for {application_id}.")
         return {"status": "success", "message": f"Successfully refreshed embedding for {title}."}
     except Exception as e:
         print(f"ERROR: Failed to save new embedding for {application_id}. Reason: {e}")
@@ -455,7 +431,7 @@ def generate_similarity_reasoning(application_data: dict, project_data: dict):
     messages = [
         {
             "role": "system",
-            "content": "You are a helpful assistant. Your task is to meaningfully explain, in 35-40 words, why the following two items are similar."
+            "content": "You are a helpful assistant. Your task is to explain technically, in 35-40 words, why the following two items are similar."
         },
         {
             "role": "user",

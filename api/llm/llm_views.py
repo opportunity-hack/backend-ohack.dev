@@ -7,7 +7,7 @@ bp = Blueprint("llm", __name__, url_prefix="/api/llm")
 
 @bp.route("/summary", methods=["POST"])
 @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("admin_permissions")
 def get_summary():
     """
     Endpoint to generate a summary for a given application.
@@ -22,7 +22,7 @@ def get_summary():
 
 @bp.route("/summary/refresh", methods=["POST"])
 @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("admin_permissions")
 def refresh_summary():
     """
     Endpoint to force a new summary generation for a given application,
@@ -39,7 +39,7 @@ def refresh_summary():
 
 @bp.route("/similar-projects", methods=["POST"])
 @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("admin_permissions")
 def get_similar_projects():
     """
     Endpoint to find similar projects for a given application.
@@ -54,7 +54,7 @@ def get_similar_projects():
 
 @bp.route("/similarity-reasoning", methods=["POST"])
 @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("admin_permissions")
 def get_similarity_reasoning():
     """
     Endpoint to generate a reason for similarity between an application and a project.
@@ -72,7 +72,7 @@ def get_similarity_reasoning():
 
 @bp.route("/embedding/refresh", methods=["POST"])
 @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("admin_permissions")
 def refresh_embedding_endpoint():
     """
     Endpoint to force-refresh an application's embedding AND re-compute
@@ -93,8 +93,8 @@ def refresh_embedding_endpoint():
     return jsonify({"similar_projects": new_similar_projects}), 200
 
 @bp.route("/embedding-map/populate", methods=["POST"])
-@auth.require_user # In production, this should ideally be restricted to admin users.
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_user 
+@auth.require_org_member_with_permission("admin_permissions")
 def populate_embedding_map_endpoint():
     """
     Triggers a background process to (re)generate embeddings for all NPO
