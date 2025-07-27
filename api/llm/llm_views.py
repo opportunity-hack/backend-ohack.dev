@@ -1,12 +1,13 @@
 from flask import Blueprint, request, jsonify
 from common.auth import auth 
 from services import llm_service
+import threading
 
 bp = Blueprint("llm", __name__, url_prefix="/api/llm")
 
 @bp.route("/summary", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+# @auth.require_org_member_with_permission("admin_permissions")
 def get_summary():
     """
     Endpoint to generate a summary for a given application.
@@ -21,7 +22,7 @@ def get_summary():
 
 @bp.route("/summary/refresh", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+# @auth.require_org_member_with_permission("admin_permissions")
 def refresh_summary():
     """
     Endpoint to force a new summary generation for a given application,
@@ -38,7 +39,7 @@ def refresh_summary():
 
 @bp.route("/similar-projects", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+# @auth.require_org_member_with_permission("admin_permissions")
 def get_similar_projects():
     """
     Endpoint to find similar projects for a given application.
@@ -53,7 +54,7 @@ def get_similar_projects():
 
 @bp.route("/similarity-reasoning", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+# @auth.require_org_member_with_permission("admin_permissions")
 def get_similarity_reasoning():
     """
     Endpoint to generate a reason for similarity between an application and a project.
@@ -69,17 +70,44 @@ def get_similarity_reasoning():
     reasoning = llm_service.generate_similarity_reasoning(application_data, project_data)
     return jsonify({"reasoning": reasoning})
 
+@bp.route("/embedding/refresh", methods=["POST"])
+@auth.require_user
+# @auth.require_org_member_with_permission("admin_permissions")
+def refresh_embedding_endpoint():
+    """
+    Endpoint to force-refresh an application's embedding AND re-compute
+    similar projects, returning the new list.
+    Expects the full application object in the request body.
+    """
+    application_data = request.get_json()
+    if not application_data or not application_data.get('id'):
+        return jsonify({"error": "Request must include application data with an ID."}), 400
+
+    # Call the new service function that does both refresh and search
+    new_similar_projects = llm_service.refresh_embedding_and_find_similar(application_data)
+    
+    # Check if the service function returned an error structure
+    if new_similar_projects and isinstance(new_similar_projects, list) and new_similar_projects[0].get('id') == 'error':
+        return jsonify({"error": new_similar_projects[0].get('title')}), 500
+    
+    return jsonify({"similar_projects": new_similar_projects}), 200
+
 @bp.route("/embedding-map/populate", methods=["POST"])
 @auth.require_user # In production, this should ideally be restricted to admin users.
-@auth.require_org_member_with_permission("admin_permissions")
+# @auth.require_org_member_with_permission("admin_permissions")
 def populate_embedding_map_endpoint():
     """
     Triggers a background process to (re)generate embeddings for all NPO
     applications and populate the embedding map collection.
     """
     try:
-        result = llm_service.populate_embedding_map()
-        return jsonify(result), 200
+        thread = threading.Thread(target=llm_service.populate_embedding_map)
+        thread.start()
+        return jsonify({
+            "status": "processing",
+            "message": "Embedding map population process has been started in the background. Check server logs for progress. Please wait for a minute or two for this to complete and then proceed with opening the applications."
+        })
     except Exception as e:
         # Log the exception e
+        print(f"ERROR: Failed to start embedding population thread. Reason: {e}")
         return jsonify({"status": "error", "message": "An unexpected error occurred."}), 500
