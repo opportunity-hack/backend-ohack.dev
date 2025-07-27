@@ -5,6 +5,10 @@ import threading
 
 bp = Blueprint("llm", __name__, url_prefix="/api/llm")
 
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
+
 @bp.route("/summary", methods=["POST"])
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
