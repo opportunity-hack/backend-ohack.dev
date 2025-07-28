@@ -155,6 +155,12 @@ def upsert_judge_score(score: JudgeScore):
 def fetch_judge_panels_by_event(event_id):
     return db.fetch_judge_panels_by_event(event_id)
 
+def fetch_judge_panel(panel_id):
+    return db.fetch_judge_panel(panel_id)
+
+def fetch_judge_assignments_by_panel_id(panel_id):
+    return db.fetch_judge_assignments_by_panel_id(panel_id)
+
 def insert_judge_panel(panel: JudgePanel):
     return db.insert_judge_panel(panel)
 
@@ -163,3 +169,6 @@ def update_judge_panel(panel: JudgePanel):
 
 def delete_judge_panel(panel_id):
     return db.delete_judge_panel(panel_id)
+
+def get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(user_id, volunteer_type, event_id):
+    return db.get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(user_id, volunteer_type, event_id)

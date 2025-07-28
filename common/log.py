@@ -42,10 +42,23 @@ class JsonFormatter(logging.Formatter):
                 'message': str(record.exc_info[1]),
                 'traceback': traceback.format_exception(*record.exc_info)
             }
-            
-        # Add extra attributes if available
-        if hasattr(record, 'extra'):
-            log_entry['extra'] = record.extra
+        
+        # Extract extra attributes from the record
+        # Skip standard LogRecord attributes to get only the custom ones
+        standard_attrs = {
+            'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 'filename',
+            'module', 'exc_info', 'exc_text', 'stack_info', 'lineno', 'funcName',
+            'created', 'msecs', 'relativeCreated', 'thread', 'threadName',
+            'processName', 'process', 'getMessage', 'extra'
+        }
+        
+        extra_data = {}
+        for key, value in record.__dict__.items():
+            if key not in standard_attrs:
+                extra_data[key] = value
+        
+        if extra_data:
+            log_entry['extra'] = extra_data
             
         return json.dumps(log_entry)
 
@@ -104,8 +117,13 @@ def log_structured(logger: logging.Logger, level: int, message: str, **kwargs) -
     # Extract exc_info if present in kwargs
     exc_info = kwargs.pop('exc_info', None)
     
-    extra = {'extra': kwargs} if kwargs else None
-    logger.log(level, message, extra=extra, exc_info=exc_info)
+    # For non-JSON logging, include structured data in the message
+    if not use_json_logging and kwargs:
+        extra_info = ', '.join(f"{k}={v}" for k, v in kwargs.items())
+        message = f"{message} [{extra_info}]"
+    
+    # Pass kwargs as extra - they will become attributes on the LogRecord
+    logger.log(level, message, extra=kwargs, exc_info=exc_info)
 
 # Define helpers for structured logging
 def debug(logger: logging.Logger, message: str, **kwargs) -> None:

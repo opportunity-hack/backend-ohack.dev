@@ -633,6 +633,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         return n
 
     # Judge Assignments
+    def fetch_judge_assignments_by_panel_id(self, panel_id):
+        db = self.get_db()
+        assignments = []
+        docs = db.collection('judge_assignments').where('panel_id', '==', panel_id).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            assignments.append(JudgeAssignment.deserialize(d))
+        return assignments
+
     def fetch_judge_assignments_by_judge_id(self, judge_id):
         db = self.get_db()
         assignments = []
@@ -756,6 +766,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         doc_ref.set(panel.serialize())
         return panel
 
+    def fetch_judge_panel(self, panel_id):
+        db = self.get_db()
+        doc = db.collection('judge_panels').document(panel_id).get()
+        if doc.exists:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            return JudgePanel.deserialize(d)
+        else:
+            return None
+
     def update_judge_panel(self, panel: JudgePanel):
         db = self.get_db()
         db.collection('judge_panels').document(panel.id).update(panel.serialize())
@@ -765,6 +785,18 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         db = self.get_db()
         db.collection('judge_panels').document(panel_id).delete()
         return True
+
+    # Volunteers
+    def get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(self, user_id, volunteer_type, event_id):
+        db = self.get_db()
+        volunteers = db.collection('volunteers').where('id', '==', user_id) \
+                                              .where('volunteer_type', '==', volunteer_type) \
+                                              .where('event_id', '==', event_id) \
+                                              .limit(1).stream()
+        
+        for volunteer in volunteers:
+            return volunteer.to_dict()
+        return None
         
 
 DatabaseInterface.register(FirestoreDatabaseInterface)
