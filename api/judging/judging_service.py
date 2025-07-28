@@ -617,8 +617,7 @@ def get_event_judge_panels(event_id: str) -> Dict:
 
         panels = fetch_judge_panels_by_event(event_id)
 
-        logger.debug(f"Fetched {len(panels)} panels for event {event_id}")
-        
+        logger.debug(f"Fetched {len(panels)} panels for event {event_id}")        
 
         formatted_panels = []
         for panel in panels:
@@ -626,8 +625,8 @@ def get_event_judge_panels(event_id: str) -> Dict:
                 "id": panel.id,
                 "event_id": panel.event_id,
                 "panel_name": panel.panel_name,
-                "room": panel.room,
-                "judge_ids": panel.judge_ids,
+                "panel_id": panel.panel_id,
+                "room": panel.room,                
                 "created_at": panel.created_at.isoformat() if panel.created_at else None
             }
             formatted_panels.append(formatted_panel)

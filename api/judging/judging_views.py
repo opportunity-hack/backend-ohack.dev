@@ -19,8 +19,7 @@ from api.judging.judging_service import (
     update_judge_panel_details,
     remove_judge_panel,
     get_judge_assignments_for_panel,
-    get_judge_event_details,
-    get_round2_average_scores,
+    get_judge_event_details    
 )
 
 logger = get_logger("judging_views")

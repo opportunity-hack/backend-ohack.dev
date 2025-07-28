@@ -6,13 +6,15 @@ class JudgePanel:
         self.id = None
         self.event_id = ''
         self.panel_name = ''
+        self.panel_id = None
         self.room = None
         self.created_at = None
 
     @classmethod
     def deserialize(cls, d):
         panel = JudgePanel()
-        panel.id = d.get('id')
+        panel.id = d.get('id')        
+        panel.panel_id = d.get('panel_id')
         panel.event_id = d.get('event_id', '')
         panel.panel_name = d.get('panel_name', '')
         panel.room = d.get('room')
