@@ -17,7 +17,9 @@ from api.judging.judging_service import (
     get_event_judge_panels,
     create_judge_panel,
     update_judge_panel_details,
-    remove_judge_panel
+    remove_judge_panel,
+    get_judge_assignments_for_panel,
+    get_judge_event_details    
 )
 
 logger = get_logger("judging_views")
@@ -56,6 +58,7 @@ def get_assignments(judge_id):
         return result, 500
 
     return result
+
 
 
 @bp.route("/teams/<judge_id>/<event_id>", methods=["GET"])
@@ -119,6 +122,8 @@ def submit_score():
     data = request.get_json()
     if not data:
         return {"error": "Missing request body"}, 400
+    
+    logger.debug(f"Judging submit_score Data: {data}")
 
     # Validate required fields
     required_fields = ['judge_id', 'team_id', 'event_id', 'round', 'scores']
@@ -147,11 +152,30 @@ def submit_score():
         event_id=data['event_id'],
         round_name=data['round'],
         scores_data=data['scores'],
-        submitted_at=data.get('submitted_at')
+        submitted_at=data.get('submitted_at'),
+        feedback=data.get('feedback', '')
     )
 
     if not result.get('success', False):
         return result, 400
+
+    return result
+
+@bp.route("/judge/<judge_id>/event/<event_id>", methods=["GET"])
+@auth.require_user
+def get_judge_event_api(judge_id, event_id):
+    """Get all information about a specific judge's event."""
+    user_id = get_authenticated_user_id()
+    if not user_id:
+        return {"error": "Unauthorized"}, 401
+
+
+    debug(logger, "Getting judge event",
+          judge_id=judge_id, event_id=event_id)
+    result = get_judge_event_details(judge_id, event_id)
+
+    if "error" in result:
+        return result, 500
 
     return result
 
@@ -221,7 +245,8 @@ def save_draft():
         event_id=data['event_id'],
         round_name=data['round'],
         scores_data=data['scores'],
-        updated_at=data.get('updated_at')
+        updated_at=data.get('updated_at'),
+        feedback=data.get('feedback', '')
     )
 
     if not result.get('success', False):
@@ -231,6 +256,22 @@ def save_draft():
 
 
 # Judge Assignment Management Endpoints
+@bp.route("/panel/<panel_id>/assignments", methods=["GET"])
+@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
+@auth.require_user
+def get_panel_assignments(panel_id):
+    """Get all judge assignments for a specific panel."""
+    user_id = get_authenticated_user_id()
+    if not user_id:
+        return {"error": "Unauthorized"}, 401
+
+    logger.debug(f"Getting judge assignments for panel {panel_id}")
+    result = get_judge_assignments_for_panel(panel_id)
+    logger.debug(f"Result: {result}")
+   
+
+    return result
+
 
 @bp.route("/assignments", methods=["POST"])
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
@@ -245,15 +286,14 @@ def create_assignment():
         if field not in data:
             return {"error": f"Missing required field: {field}"}, 400
 
-    debug(logger, "Creating judge assignment",
-          judge_id=data['judge_id'], event_id=data['event_id'],
-          team_id=data['team_id'], round=data['round'])
+    logger.debug(f"Creating judge assignment with data: {data}")
 
     result = create_judge_assignment(
         judge_id=data['judge_id'],
         event_id=data['event_id'],
         team_id=data['team_id'],
         round_name=data['round'],
+        panel_id=data.get('panel_id'),
         demo_time=data.get('demo_time'),
         room=data.get('room')
     )
@@ -366,9 +406,6 @@ def create_panel():
         if field not in data:
             return {"error": f"Missing required field: {field}"}, 400
 
-    if 'judge_ids' in data and not isinstance(data['judge_ids'], list):
-        return {"error": "judge_ids must be a list"}, 400
-
     debug(logger, "Creating judge panel",
           event_id=data['event_id'], panel_name=data['panel_name'],
           room=data['room'])
@@ -377,7 +414,7 @@ def create_panel():
         event_id=data['event_id'],
         panel_name=data['panel_name'],
         room=data['room'],
-        judge_ids=data.get('judge_ids', [])
+        panel_id = data.get('panel_id', None)
     )
 
     if not result.get('success', False):
@@ -392,18 +429,14 @@ def update_panel(panel_id):
     """Update judge panel details."""
     data = request.get_json()
     if not data:
-        return {"error": "Missing request body"}, 400
+        return {"error": "Missing request body"}, 400    
 
-    if 'judge_ids' in data and not isinstance(data['judge_ids'], list):
-        return {"error": "judge_ids must be a list"}, 400
-
-    debug(logger, "Updating judge panel", panel_id=panel_id)
+    logger.debug(f"Updating judge panel {panel_id} with data: {data}")
 
     result = update_judge_panel_details(
         panel_id=panel_id,
         panel_name=data.get('panel_name'),
-        room=data.get('room'),
-        judge_ids=data.get('judge_ids')
+        room=data.get('room')        
     )
 
     if not result.get('success', False):

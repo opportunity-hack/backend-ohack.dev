@@ -647,7 +647,7 @@ def get_teams_by_hackathon_id(hackathon_id):
                 team_data.pop(field, None)
             
             team_data["team_members"] = users
-            logger.debug("Team data: %s", team_data)
+            #logger.debug("Team data: %s", team_data)
             teams.append(team_data)
         
         logger.info(f"Retrieved {len(teams)} teams for hackathon {hackathon_id}")

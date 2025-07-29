@@ -17,6 +17,7 @@ class JudgeScore:
         self.security_data = None  # 1-5 points
         self.security_role = None  # 1-5 points
         self.total_score = None  # Calculated from individual scores
+        self.feedback = ''  # Optional feedback from judge
         self.is_draft = False
         self.submitted_at = None
         self.created_at = None
@@ -40,6 +41,7 @@ class JudgeScore:
         score.security_role = d.get('security_role')
         score.total_score = d.get('total_score')
         score.is_draft = d.get('is_draft', False)
+        score.feedback = d.get('feedback', '')
         score.submitted_at = d.get('submitted_at')
         score.created_at = d.get('created_at')
         score.updated_at = d.get('updated_at')

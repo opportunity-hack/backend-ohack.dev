@@ -11,10 +11,13 @@ from db.db import (
     update_judge_assignment,
     delete_judge_assignment,
     fetch_judge_panels_by_event,
+    fetch_judge_panel,
     insert_judge_panel,
     update_judge_panel,
     delete_judge_panel,
-    upsert_judge_score
+    upsert_judge_score,
+    fetch_judge_assignments_by_panel_id,
+    get_volunteer_from_db_by_user_id_volunteer_type_and_event_id
 )
 from model.judge_assignment import JudgeAssignment
 from model.judge_score import JudgeScore
@@ -236,6 +239,11 @@ def get_team_details(team_id: str) -> Dict:
             "members": members,  # Now populated with actual member data
             "github_url": github_url,
             "devpost_url": team_data.get('devpost_link', ''),
+            "slack_channel": team_data.get('slack_channel', ''),            
+            
+            
+            
+            # Not used
             "video_url": team_data.get('video_url', ''),
             "demo_url": team_data.get('demo_url', ''),
             "technologies": team_data.get('technologies', []),
@@ -254,7 +262,7 @@ def get_team_details(team_id: str) -> Dict:
 
 def submit_judge_score(judge_id: str, team_id: str, event_id: str,
                        round_name: str, scores_data: Dict,
-                       submitted_at: str = None) -> Dict:
+                       submitted_at: str = None, feedback: str = None) -> Dict:
     """Submit or update a team score."""
     try:
         debug(logger, "Submitting judge score", judge_id=judge_id,
@@ -284,6 +292,7 @@ def submit_judge_score(judge_id: str, team_id: str, event_id: str,
         score.event_id = event_id
         score.round = round_name
         score.is_draft = False
+        score.feedback = feedback
         score.submitted_at = (datetime.fromisoformat(
             submitted_at.replace('Z', '+00:00'))
             if submitted_at else datetime.now())
@@ -319,6 +328,7 @@ def get_judge_scores(judge_id: str, event_id: str) -> Dict:
             formatted_score = {
                 "team_id": score.team_id,
                 "round": score.round,
+                "feedback": score.feedback,
                 "scores": score.to_api_format(),
                 "submitted_at": (score.submitted_at.isoformat()
                                  if score.submitted_at else None)
@@ -355,7 +365,7 @@ def is_judge_assigned_to_team(judge_id: str, team_id: str) -> bool:
 
 
 def save_draft_score(judge_id: str, team_id: str, event_id: str,
-                     round_name: str, scores_data: Dict, updated_at: str) -> Dict:
+                     round_name: str, scores_data: Dict, updated_at: str, feedback: str) -> Dict:
     """Save draft scores (auto-save functionality)."""
     try:
         debug(logger, "Saving draft score", judge_id=judge_id,
@@ -368,6 +378,7 @@ def save_draft_score(judge_id: str, team_id: str, event_id: str,
         score.event_id = event_id
         score.round = round_name
         score.is_draft = True
+        score.feedback = feedback
         score.submitted_at = None
         # Handle updated_at, example: 2025-07-25T15:49:24.680Z
         if updated_at:
@@ -442,6 +453,7 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None) -> Dict:
         "members": members,  # Now populated with actual member data
         "github_url": github_url,
         "devpost_url": team.get('devpost_link', ''),
+        "slack_channel": team.get('slack_channel', ''),
         "video_url": team.get('video_url', ''),
         "demo_time": None,  # Will be overridden for round2
         "judged": f"{team_id}_round1" in score_lookup,
@@ -454,7 +466,7 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None) -> Dict:
 
 def create_judge_assignment(judge_id: str, event_id: str, team_id: str,
                            round_name: str, demo_time: str = None,
-                           room: str = None) -> Dict:
+                           room: str = None, panel_id: str = None) -> Dict:
     """Create a new judge assignment."""
     try:
         debug(logger, "Creating judge assignment",
@@ -464,6 +476,7 @@ def create_judge_assignment(judge_id: str, event_id: str, team_id: str,
         assignment = JudgeAssignment()
         assignment.judge_id = judge_id
         assignment.event_id = event_id
+        assignment.panel_id = panel_id
         assignment.team_id = team_id
         assignment.round = round_name
         assignment.demo_time = demo_time
@@ -481,6 +494,7 @@ def create_judge_assignment(judge_id: str, event_id: str, team_id: str,
                 "round": saved_assignment.round,
                 "demo_time": saved_assignment.demo_time,
                 "room": saved_assignment.room,
+                "panel_id": saved_assignment.panel_id,
                 "created_at": (saved_assignment.created_at.isoformat()
                                if saved_assignment.created_at else None)
             }
@@ -580,6 +594,7 @@ def get_individual_judge_score(judge_id: str, team_id: str, event_id: str,
                 "scores": score.to_api_format(),
                 "total_score": score.total_score,
                 "is_draft": score.is_draft,
+                "feedback": score.feedback,
                 "submitted_at": score.submitted_at.isoformat() if score.submitted_at else None,
                 "created_at": score.created_at.isoformat() if score.created_at else None,
                 "updated_at": score.updated_at.isoformat() if score.updated_at else None
@@ -602,28 +617,87 @@ def get_event_judge_panels(event_id: str) -> Dict:
 
         panels = fetch_judge_panels_by_event(event_id)
 
+        logger.debug(f"Fetched {len(panels)} panels for event {event_id}")        
+
         formatted_panels = []
         for panel in panels:
             formatted_panel = {
                 "id": panel.id,
                 "event_id": panel.event_id,
                 "panel_name": panel.panel_name,
-                "room": panel.room,
-                "judge_ids": panel.judge_ids,
+                "panel_id": panel.panel_id,
+                "room": panel.room,                
                 "created_at": panel.created_at.isoformat() if panel.created_at else None
             }
             formatted_panels.append(formatted_panel)
 
+        logger.debug(f"Formatted {len(formatted_panels)} panels for event {event_id}")
+        logger.debug(f"Formatted panels: {formatted_panels}")
         return {"panels": formatted_panels}
 
     except Exception as e:
         error(logger, "Error fetching judge panels",
               event_id=event_id, error=str(e))
+        # print stack trace
+        import traceback
+        traceback.print_exc()
         return {"panels": [], "error": "Failed to fetch panels"}
 
 
+def get_judge_event_details(judge_id: str, event_id: str) -> Dict:
+    # Use get_volunteer_from_db_by_user_id_volunteer_type_and_event_id
+    """Get all information about a specific judge's event."""
+    volunteer = get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(
+        user_id=judge_id, volunteer_type="judge", event_id=event_id
+    )
+    if not volunteer:
+        return {"error": "Judge not found"}, 404
+
+    logger.debug(f"Fetched judge details: {volunteer}")
+    return {
+        "judge": {
+            "id": volunteer["id"],
+            "name": volunteer["name"],
+            "event_id": volunteer["event_id"],            
+            "slack_user_id": volunteer["slack_user_id"]            
+        }
+    }
+
+
+def get_judge_assignments_for_panel(panel_id: str) -> Dict:
+    """Get all judge assignments for a specific panel."""
+    try:
+        logger.debug(f"Fetching judge assignments for panel {panel_id}")
+        # Use fetch_judge_assignments_by_panel_id
+        assignments = fetch_judge_assignments_by_panel_id(panel_id)
+        if not assignments:
+            return {"assignments": [], "error": "No assignments found for this panel"}
+        formatted_assignments = []
+        for assignment in assignments:
+            formatted_assignment = {
+                "id": assignment.id,
+                "judge_id": assignment.judge_id,
+                "event_id": assignment.event_id,
+                "team_id": assignment.team_id,
+                "round": assignment.round,
+                "demo_time": assignment.demo_time,
+                "room": assignment.room,
+                "created_at": assignment.created_at.isoformat() if assignment.created_at else None
+            }
+            formatted_assignments.append(formatted_assignment)
+        return {"assignments": formatted_assignments}
+    except Exception as e:
+        error(logger, "Error fetching judge assignments for panel",
+              panel_id=panel_id, error=str(e))
+        # print stack trace
+        import traceback
+        traceback.print_exc()
+
+        return {"assignments": [], "error": "Failed to fetch assignments for panel"}       
+
+
 def create_judge_panel(event_id: str, panel_name: str, room: str,
-                      judge_ids: list) -> Dict:
+                      panel_id: str) -> Dict:
     """Create a new judge panel."""
     try:
         debug(logger, "Creating judge panel",
@@ -633,7 +707,7 @@ def create_judge_panel(event_id: str, panel_name: str, room: str,
         panel.event_id = event_id
         panel.panel_name = panel_name
         panel.room = room
-        panel.judge_ids = judge_ids
+        panel.panel_id = panel_id
 
         saved_panel = insert_judge_panel(panel)
 
@@ -643,8 +717,8 @@ def create_judge_panel(event_id: str, panel_name: str, room: str,
                 "id": saved_panel.id,
                 "event_id": saved_panel.event_id,
                 "panel_name": saved_panel.panel_name,
-                "room": saved_panel.room,
-                "judge_ids": saved_panel.judge_ids,
+                "panel_id": saved_panel.panel_id,
+                "room": saved_panel.room,                
                 "created_at": saved_panel.created_at.isoformat() if saved_panel.created_at else None
             }
         }
@@ -656,19 +730,14 @@ def create_judge_panel(event_id: str, panel_name: str, room: str,
 
 
 def update_judge_panel_details(panel_id: str, panel_name: str = None,
-                              room: str = None, judge_ids: list = None) -> Dict:
+                              room: str = None) -> Dict:
     """Update judge panel details."""
     try:
         debug(logger, "Updating judge panel", panel_id=panel_id)
 
         # Get existing panel (this is inefficient but works with current interface)
-        panels = fetch_judge_panels_by_event("")  # Would need event_id in real implementation
-        panel = None
-        for p in panels:
-            if p.id == panel_id:
-                panel = p
-                break
-
+        panel = fetch_judge_panel(panel_id)  # Would need event_id in real implementation
+        
         if not panel:
             return {"success": False, "error": "Panel not found"}
 
@@ -676,9 +745,7 @@ def update_judge_panel_details(panel_id: str, panel_name: str = None,
         if panel_name is not None:
             panel.panel_name = panel_name
         if room is not None:
-            panel.room = room
-        if judge_ids is not None:
-            panel.judge_ids = judge_ids
+            panel.room = room        
 
         updated_panel = update_judge_panel(panel)
 
@@ -688,8 +755,7 @@ def update_judge_panel_details(panel_id: str, panel_name: str = None,
                 "id": updated_panel.id,
                 "event_id": updated_panel.event_id,
                 "panel_name": updated_panel.panel_name,
-                "room": updated_panel.room,
-                "judge_ids": updated_panel.judge_ids
+                "room": updated_panel.room                
             }
         }
 
