@@ -2,12 +2,16 @@ from flask import Blueprint, jsonify, request
 from api.slack.slack_service import (
     get_active_users, get_user_details, clear_slack_cache
 )
+from common.utils.slack import invite_user_to_channel
+
 from common.auth import auth
 from common.exceptions import AuthorizationError, ValidationError
 from common.log import get_logger
 from common.utils.slack import send_slack
+import logging
 
-logger = get_logger(__name__)
+logger = get_logger("slack_views")
+logger.setLevel(logging.DEBUG)
 bp = Blueprint('slack', __name__, url_prefix='/api')
 
 @bp.route("/slack/users/active", methods=["GET"])
@@ -201,4 +205,75 @@ def send_message():
         return jsonify({
             "success": False,
             "error": "Failed to send message"
+        }), 500
+
+
+@bp.route("/slack/invite-to-channel", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def invite_to_channel_api():
+    """
+    API endpoint to add a user to a Slack channel.
+    Requires admin scope.
+
+    Request body:
+        user_id: The ID of the user to add (required)
+        channel: The channel name or ID to add the user to (required)
+
+    Returns:
+        JSON response with operation status
+    """
+    logger.info("Received request to invite user to Slack channel")
+    
+    try:
+        request_data = request.get_json()
+        if not request_data:
+            logger.warning("Request missing JSON body")
+            return jsonify({
+                "success": False,
+                "error": "Missing request body"
+            }), 400
+
+        user_id = request_data.get('user_id')
+        channel = request_data.get('channel')
+
+        if not user_id:
+            logger.warning("Request missing user_id parameter")
+            return jsonify({
+                "success": False,
+                "error": "User ID is required"
+            }), 400
+
+        if not channel:
+            logger.warning("Request missing channel parameter")
+            return jsonify({
+                "success": False,
+                "error": "Channel is required"
+            }), 400
+
+        logger.info("Attempting to invite user %s to channel %s", user_id, channel)
+
+        # Use invite_user_to_channel function to add user to channel
+        invite_user_to_channel(user_id=user_id, channel_name=channel)
+        
+        logger.info("Successfully invited user %s to channel %s", user_id, channel)
+        
+        return jsonify({
+            "success": True,
+            "message": f"User {user_id} added to channel {channel}"
+        })
+    except AuthorizationError as e:
+        logger.warning("Authorization error when inviting user to channel: %s", str(e))
+        return jsonify({
+            "success": False,
+            "error": str(e)
+        }), 403
+    except Exception as e:
+        logger.error("Error adding user to Slack channel - user_id: %s, channel: %s, error: %s", 
+                    request_data.get('user_id', 'unknown') if 'request_data' in locals() else 'unknown',
+                    request_data.get('channel', 'unknown') if 'request_data' in locals() else 'unknown',
+                    str(e))
+        return jsonify({
+            "success": False,
+            "error": "Failed to add user to channel"
         }), 500

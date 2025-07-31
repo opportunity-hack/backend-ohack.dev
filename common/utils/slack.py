@@ -142,17 +142,50 @@ def get_slack_user_by_email(email):
         return None
     
     
+@cached(cache=TTLCache(maxsize=100, ttl=300))  # Cache for 5 minutes
+@sleep_and_retry
+@limits(calls=20, period=60)  # Rate limiting
 def get_channel_id_from_channel_name(channel_name):
-    # Get channel name
+    """
+    Get channel ID from channel name with caching and pagination support.
+    
+    :param channel_name: Name of the channel to find
+    :return: Channel ID if found, None otherwise
+    """
     client = get_client()
-    result = client.conversations_list(exclude_archived=True, limit=1000)
-
+    
     logger.info(f"Looking for slack channel {channel_name}...")
-    for c in result["channels"]:
-        if c["name"] == channel_name:
-            logger.info(f"Found Channel! {channel_name}")
-            return c["id"]
-    return None
+    
+    try:
+        cursor = None
+        while True:
+            # Use pagination to handle workspaces with many channels
+            result = client.conversations_list(
+                exclude_archived=True, 
+                limit=1000,
+                cursor=cursor,
+                types="public_channel,private_channel"  # Specify channel types
+            )
+            
+            logger.debug(f"Found {len(result['channels'])} channels in this batch")
+            
+            # Search through current batch
+            for channel in result["channels"]:
+                if channel["name"] == channel_name:
+                    logger.info(f"Found Channel! {channel_name} -> {channel['id']}")
+                    return channel["id"]
+            
+            # Check if there are more pages
+            cursor = result.get("response_metadata", {}).get("next_cursor")
+            if not cursor:
+                break
+                
+        logger.warning(f"Channel {channel_name} not found")
+        return None
+        
+    except SlackApiError as e:
+        logger.error(f"Error fetching channels: {e}")
+        return None
 
 
 def invite_user_to_channel(user_id, channel_name):
@@ -163,16 +196,20 @@ def invite_user_to_channel(user_id, channel_name):
 
     # If user_id has a - in it, use split to get the last part
     if "-" in user_id:
-        user_id = user_id.split("-")[1]        
+        user_id = user_id.split("-")[1]    
+
+    if channel_id is None:
+        logger.error(f"Channel {channel_name} not found, cannot invite user {user_id}")
+        return    
 
     try:
-        client.conversations_join(channel=channel_id)
-        result = client.conversations_invite(channel=channel_id, users=user_id)        
+        #client.conversations_join(channel=channel_id)
+        client.conversations_invite(channel=channel_id, users=user_id)        
     except Exception as e:
         logger.error(
             "Caught exception - this might be okay if the user is already in the channel.")
         #log error
-        logger.error(e)
+        logger.error(e)        
 
     logger.debug("invite_user_to_channel end")
 
