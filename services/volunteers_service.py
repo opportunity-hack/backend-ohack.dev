@@ -12,6 +12,7 @@ from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern
 import os
 import requests
 import resend
+import markdown
 
 logger = get_logger("services.volunteers_service")
 
@@ -1235,6 +1236,7 @@ Thanks for your support!
 def send_volunteer_message(
     volunteer_id: str, 
     message: str, 
+    subject: str,
     admin_user_id: str,
     admin_user: Any = None,
     recipient_type: str = 'volunteer',
@@ -1310,19 +1312,17 @@ def send_volunteer_message(
             # Configure resend
             resend.api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
             
-            # Escape HTML characters and convert newlines to <br> tags
-            escaped_message = html.escape(message)
-            formatted_message = escaped_message.replace('\n', '<br>')
+            # Convert markdown to HTML first, then handle any remaining newlines
+            try:
+                # Convert markdown to HTML
+                formatted_message = markdown.markdown(message, extensions=['nl2br', 'fenced_code'])
+            except Exception as markdown_error:
+                # Fallback to basic HTML escaping and newline conversion if markdown fails
+                warning(logger, "Failed to convert markdown, falling back to basic formatting", exc_info=markdown_error)
+                escaped_message = html.escape(message)
+                formatted_message = escaped_message.replace('\n', '<br>')
             
-            # Enhanced subject line based on recipient type
-            subject_map = {
-                'mentor': 'Message for Mentors - Opportunity Hack',
-                'sponsor': 'Message for Sponsors - Opportunity Hack',
-                'judge': 'Message for Judges - Opportunity Hack',
-                'hacker': 'Message for Participants - Opportunity Hack',
-                'volunteer': 'Message from Opportunity Hack Team'
-            }
-            email_subject = subject_map.get(recipient_type.lower(), 'Message from Opportunity Hack Team')
+            email_subject = f"{subject} - Message from Opportunity Hack Team"
             
             # Enhanced greeting based on recipient type
             greeting_map = {
@@ -1354,7 +1354,7 @@ def send_volunteer_message(
                         <a href="https://www.threads.net/@opportunityhack" style="text-decoration: none; margin: 0 8px; color: #000;">🧵 Threads</a>
                     </div>
                     <div style="margin: 10px 0;">
-                        <a href="https://opportunity-hack.slack.com" style="text-decoration: none; margin: 0 8px; color: #4A154B;">💬 Join Slack</a> |
+                        <a href="https://slack.ohack.dev" style="text-decoration: none; margin: 0 8px; color: #4A154B;">💬 Join Slack</a> |
                         <a href="https://twitter.com/opportunityhack" style="text-decoration: none; margin: 0 8px; color: #1DA1F2;">🐦 Twitter</a> |
                         <a href="https://github.com/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #333;">💻 GitHub</a>
                     </div>

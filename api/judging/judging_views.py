@@ -375,6 +375,27 @@ def get_individual_score(judge_id, team_id, event_id, round_name):
 
     return result
 
+@bp.route("/admin/score/<judge_id>/<team_id>/<event_id>/<round_name>", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
+def get_individual_score_admin_api(judge_id, team_id, event_id, round_name):
+    """Get a specific judge score."""
+    user_id = get_authenticated_user_id()
+    if not user_id:
+        return {"error": "Unauthorized"}, 401
+
+    is_draft = request.args.get('draft', 'false').lower() == 'true'
+
+    debug(logger, "Getting individual judge score",
+          judge_id=judge_id, team_id=team_id, event_id=event_id,
+          round_name=round_name, is_draft=is_draft)
+
+    result = get_individual_judge_score(judge_id, team_id, event_id, round_name, is_draft)
+
+    if "error" in result:
+        return result, 500
+
+    return result
 
 # Judge Panel Management Endpoints
 
