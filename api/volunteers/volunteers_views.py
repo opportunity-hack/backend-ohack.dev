@@ -545,6 +545,7 @@ def admin_send_volunteer_message(volunteer_id):
         # Process request data
         request_data = _process_request()
         message = request_data.get('message')
+        subject = request_data.get('subject', 'Message from Opportunity Hack Team')
         recipient_type = request_data.get('recipient_type', 'volunteer')
         recipient_id = request_data.get('recipient_id', volunteer_id)
 
@@ -556,6 +557,7 @@ def admin_send_volunteer_message(volunteer_id):
             result = send_volunteer_message(
                 volunteer_id=volunteer_id, 
                 message=message, 
+                subject=subject,
                 admin_user_id=auth_user.user_id,
                 admin_user=auth_user,
                 recipient_type=recipient_type,
