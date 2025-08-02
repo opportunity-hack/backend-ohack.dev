@@ -117,13 +117,23 @@ def log_structured(logger: logging.Logger, level: int, message: str, **kwargs) -
     # Extract exc_info if present in kwargs
     exc_info = kwargs.pop('exc_info', None)
     
+    # Filter out kwargs that would conflict with standard LogRecord attributes
+    standard_attrs = {
+        'name', 'msg', 'args', 'levelname', 'levelno', 'pathname', 'filename',
+        'module', 'exc_info', 'exc_text', 'stack_info', 'lineno', 'funcName',
+        'created', 'msecs', 'relativeCreated', 'thread', 'threadName',
+        'processName', 'process', 'getMessage', 'extra'
+    }
+    
+    safe_kwargs = {k: v for k, v in kwargs.items() if k not in standard_attrs}
+    
     # For non-JSON logging, include structured data in the message
-    if not use_json_logging and kwargs:
-        extra_info = ', '.join(f"{k}={v}" for k, v in kwargs.items())
+    if not use_json_logging and safe_kwargs:
+        extra_info = ', '.join(f"{k}={v}" for k, v in safe_kwargs.items())
         message = f"{message} [{extra_info}]"
     
-    # Pass kwargs as extra - they will become attributes on the LogRecord
-    logger.log(level, message, extra=kwargs, exc_info=exc_info)
+    # Pass safe_kwargs as extra - they will become attributes on the LogRecord
+    logger.log(level, message, extra=safe_kwargs, exc_info=exc_info)
 
 # Define helpers for structured logging
 def debug(logger: logging.Logger, message: str, **kwargs) -> None:
