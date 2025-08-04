@@ -2882,14 +2882,106 @@ def _is_image_file(filename):
     logger.debug(f"File extension check for {filename}: {'valid' if is_image else 'invalid'} image file")
     return is_image
 
+@limits(calls=50, period=ONE_MINUTE)
 def save_onboarding_feedback(json_data):
     """
-    Save onboarding feedback to Firestore.
+    Save or update onboarding feedback to Firestore.
+    
+    The function handles the new data format and implements logic to either:
+    1. Create new feedback if no existing feedback is found
+    2. Update existing feedback if found based on contact info or client info
+    
+    Expected json_data format:
+    {
+        "overallRating": int,
+        "usefulTopics": [str],
+        "missingTopics": str,
+        "easeOfUnderstanding": str,
+        "improvements": str,
+        "additionalFeedback": str,
+        "contactForFollowup": {
+            "willing": bool,
+            "name": str (optional),
+            "email": str (optional)
+        },
+        "clientInfo": {
+            "userAgent": str,
+            "ipAddress": str
+        }
+    }
     """
     db = get_db()
+    logger.info("Processing onboarding feedback submission")
+    debug(logger, "Onboarding feedback data", data=json_data)
     
-    # Add timestamp and user_id to the feedback data
-    json_data["timestamp"] = datetime.now(pytz.utc)
-
-    db.collection('onboarding_feedbacks').add(json_data)
-    return Message("Onboarding feedback submitted successfully")
+    try:
+        # Extract contact information
+        contact_info = json_data.get("contactForFollowup", {})
+        client_info = json_data.get("clientInfo", {})
+        
+        # Check if user provided contact information
+        has_contact_info = (
+            contact_info.get("name") and 
+            contact_info.get("email") and 
+            contact_info.get("name").strip() and 
+            contact_info.get("email").strip()
+        )
+        
+        existing_feedback = None
+        
+        if has_contact_info:
+            # Search for existing feedback by name and email
+            logger.info("Searching for existing feedback by contact info")
+            existing_docs = db.collection('onboarding_feedbacks').where(
+                "contactForFollowup.name", "==", contact_info["name"]
+            ).where(
+                "contactForFollowup.email", "==", contact_info["email"]
+            ).limit(1).stream()
+            
+            for doc in existing_docs:
+                existing_feedback = doc
+                logger.info(f"Found existing feedback by contact info: {doc.id}")
+                break
+        else:
+            # Search for existing feedback by client info (anonymous user)
+            logger.info("Searching for existing feedback by client info")
+            existing_docs = db.collection('onboarding_feedbacks').where(
+                "clientInfo.userAgent", "==", client_info.get("userAgent", "")
+            ).where(
+                "clientInfo.ipAddress", "==", client_info.get("ipAddress", "")
+            ).limit(1).stream()
+            
+            for doc in existing_docs:
+                existing_feedback = doc
+                logger.info(f"Found existing feedback by client info: {doc.id}")
+                break
+        
+        # Prepare the feedback data
+        feedback_data = {
+            "overallRating": json_data.get("overallRating"),
+            "usefulTopics": json_data.get("usefulTopics", []),
+            "missingTopics": json_data.get("missingTopics", ""),
+            "easeOfUnderstanding": json_data.get("easeOfUnderstanding", ""),
+            "improvements": json_data.get("improvements", ""),
+            "additionalFeedback": json_data.get("additionalFeedback", ""),
+            "contactForFollowup": contact_info,
+            "clientInfo": client_info,
+            "timestamp": datetime.now(pytz.utc)
+        }
+        
+        if existing_feedback:
+            # Update existing feedback
+            logger.info(f"Updating existing feedback: {existing_feedback.id}")
+            existing_feedback.reference.update(feedback_data)
+            message = "Onboarding feedback updated successfully"
+        else:
+            # Create new feedback
+            logger.info("Creating new onboarding feedback")
+            db.collection('onboarding_feedbacks').add(feedback_data)
+            message = "Onboarding feedback submitted successfully"
+        
+        return Message(message)
+        
+    except Exception as e:
+        error(logger, f"Error saving onboarding feedback: {str(e)}", exc_info=True)
+        return Message("Failed to save onboarding feedback", status="error")
