@@ -17,6 +17,7 @@ from db.db import (
     delete_judge_panel,
     upsert_judge_score,
     fetch_judge_assignments_by_panel_id,
+    fetch_judge_assignment,
     get_volunteer_from_db_by_user_id_volunteer_type_and_event_id
 )
 from model.judge_assignment import JudgeAssignment
@@ -406,6 +407,38 @@ def save_draft_score(judge_id: str, team_id: str, event_id: str,
         return {"success": False, "error": "Failed to save draft"}
 
 
+def get_draft_score(judge_id: str, team_id: str, event_id: str, round_name: str) -> Dict:
+    """Get draft scores for a specific judge, team, event, and round."""
+    try:
+        logger.debug(f"Fetching draft score for judge {judge_id}, team {team_id}, event {event_id}, round {round_name}")
+
+        score = fetch_judge_score(judge_id, team_id, event_id, round_name, is_draft=True)
+
+        if not score:
+            return {"draft": None}
+
+        return {
+            "draft": {
+                "id": score.id,
+                "judge_id": score.judge_id,
+                "team_id": score.team_id,
+                "event_id": score.event_id,
+                "round": score.round,
+                "scores": score.to_api_format(),
+                "total_score": score.total_score,
+                "feedback": score.feedback,
+                "updated_at": score.updated_at.isoformat() if score.updated_at else None,
+                "created_at": score.created_at.isoformat() if score.created_at else None
+            }
+        }
+
+    except Exception as e:
+        error(logger, "Error fetching draft score",
+              judge_id=judge_id, team_id=team_id, event_id=event_id,
+              error=str(e))
+        return {"draft": None, "error": "Failed to fetch draft"}
+
+
 def format_team_for_judge(team: Dict, score_lookup: Dict = None) -> Dict:
     """Format team data for judge API response."""
     if score_lookup is None:
@@ -481,6 +514,14 @@ def create_judge_assignment(judge_id: str, event_id: str, team_id: str,
         assignment.round = round_name
         assignment.demo_time = demo_time
         assignment.room = room
+
+        # Don't insert if already exists for a given panel_id, event_id, judge_id, round, and team_id
+        current_assignment = fetch_judge_assignment(panel_id, event_id, judge_id, round_name, team_id)
+        if current_assignment:
+            warning(logger, "Judge assignment already exists",
+                    judge_id=judge_id, event_id=event_id, team_id=team_id,
+                    round_name=round_name)
+            return {"success": False, "error": "Assignment already exists"}
 
         saved_assignment = insert_judge_assignment(assignment)
 

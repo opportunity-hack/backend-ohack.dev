@@ -169,6 +169,53 @@ Same as submit score, but saves as draft.
 
 ---
 
+### Get Draft Score
+**GET** `/api/judge/draft`
+
+Get draft scores for a judge, team, event, and round.
+
+#### Authentication
+- User must be authenticated
+- Judge must be assigned to the team
+
+#### Query Parameters
+- `judge_id` (string, required): Judge user ID
+- `team_id` (string, required): Team ID
+- `event_id` (string, required): Event ID
+- `round` (string, required): Round name
+
+#### Response
+```json
+{
+  "draft": {
+    "id": "draft_id",
+    "judge_id": "judge_id",
+    "team_id": "team_id",
+    "event_id": "event_id",
+    "round": "semifinal",
+    "scores": {
+      "technical_execution": 8,
+      "innovation": 9,
+      "presentation": null,
+      "market_potential": null
+    },
+    "total_score": null,
+    "feedback": "Work in progress...",
+    "updated_at": "2024-01-15T15:30:00Z",
+    "created_at": "2024-01-15T15:25:00Z"
+  }
+}
+```
+
+If no draft exists:
+```json
+{
+  "draft": null
+}
+```
+
+---
+
 ### Get Judge Scores
 **GET** `/api/judge/scores/{judge_id}/{event_id}`
 
