@@ -68,11 +68,36 @@ def get_hearts_for_all_users():
 
 
 def save_hearts(user_id, hearts_json):
-    return give_hearts_to_user(hearts_json["slackUsername"], hearts_json["amount"], hearts_json["reasons"], 
-                               create_certificate_image=True, 
-                               cleanup=True, 
+    slack_user_ids = hearts_json["slack_user_ids"]
+
+    response = {
+        "slack_user_ids": slack_user_ids,
+        "amount": hearts_json["amount"],
+        "reasons": hearts_json["reasons"]
+    }
+    if not slack_user_ids:
+        raise Exception("No slack user ids provided in request")
+    if not isinstance(slack_user_ids, list):
+        raise Exception("slack_user_ids must be a list")
+    if len(slack_user_ids) == 0:
+        raise Exception("slack_user_ids list cannot be empty")
+    if "amount" not in hearts_json:
+        raise Exception("amount not provided in request")
+    if "reasons" not in hearts_json:
+        raise Exception("reasons not provided in request")
+    
+    for slack_user_id in slack_user_ids:
+        if not isinstance(slack_user_id, str):
+            raise Exception(f"slack_user_id {slack_user_id} is not a string")
+        if len(slack_user_id) == 0:
+            raise Exception("slack_user_id cannot be empty")
+
+        give_hearts_to_user(slack_user_id, hearts_json["amount"], hearts_json["reasons"],
+                               create_certificate_image=True,
+                               cleanup=True,
                                generate_backround_image=True)
 
+    return response
 
 
 def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image=False, cleanup=True, generate_backround_image=False):
