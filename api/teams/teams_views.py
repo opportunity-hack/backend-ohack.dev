@@ -34,6 +34,7 @@ def get_teams_by_hackathon_id_api(hackathon_id):
     """
     Get all teams for a specific hackathon ID.
     """
+    logger.info(f"GET /team/{hackathon_id} called")
     if auth_user and auth_user.user_id:
         return get_teams_by_hackathon_id(hackathon_id)
     
@@ -46,6 +47,7 @@ def get_my_teams_by_event_if_api(event_id):
     """
     Get teams for user with hackathon event id.
     """
+    logger.info(f"GET /team/{event_id}/me called")
     if auth_user and auth_user.user_id:
         return get_my_teams_by_event_id(auth_user.user_id, event_id)
     
@@ -60,6 +62,7 @@ def edit_team_api():
     Admin endpoint to edit a team.
     Requires user to be an org member with volunteer.admin permission.
     """
+    logger.info("PATCH /team/edit called")
     logger.info("Editing team")
 
     if auth_user and auth_user.user_id:
@@ -76,6 +79,7 @@ def add_devpost_to_team_api(teamid):
     Add a Devpost link to a team.
     Requires user to be authenticated.
     """
+    logger.info(f"POST /team/{teamid}/devpost called")
     if auth_user and auth_user.user_id:
         # Get the Devpost link from the request
         logger.info(f"Adding Devpost link to team {teamid}")
@@ -97,6 +101,7 @@ def add_member_to_team_api(teamid):
     Admin endpoint to add a member to a team.
     Requires user to be an org member with volunteer.admin permission.
     """
+    logger.info(f"POST /team/{teamid}/member called")
     if auth_user and auth_user.user_id:
         # Get the user_id from the request
         user_id = request.get_json().get("id")
@@ -113,6 +118,7 @@ def delete_team_api(teamid):
     Admin endpoint to delete a team.
     Requires user to be an org member with volunteer.admin permission.
     """
+    logger.info(f"DELETE /team/{teamid} called")
     if auth_user and auth_user.user_id:
         return remove_team(teamid)
     
@@ -128,6 +134,7 @@ def remove_member_from_team_api(teamid):
     Admin endpoint to remove a member from a team.
     Requires user to be an org member with volunteer.admin permission.
     """
+    logger.info(f"DELETE /team/{teamid}/member called")
     if auth_user and auth_user.user_id:
         # Get the user_id from the request
         user_id = request.get_json().get("id")
@@ -144,6 +151,7 @@ def add_team_to_queue():
     Team will be saved with status IN_REVIEW and active=False.
     Team members will be notified via Slack about the queue status.
     """
+    logger.info("POST /team/queue called")
     if auth_user and auth_user.user_id:
         return queue_team(auth_user.user_id, request.get_json())
     
@@ -159,6 +167,7 @@ def approve_team_assignment():
     Sets status to APPROVED, active=True, creates GitHub repo,
     and sends notification to the team.
     """
+    logger.info("POST /team/approve called")
     if auth_user and auth_user.user_id:
         return approve_team(auth_user.user_id, request.get_json())
     
@@ -173,12 +182,12 @@ def send_team_message_api(teamid):
     Admin endpoint to send a message to a team.
     Requires user to be an org member with volunteer.admin permission.
     """
+    logger.info(f"POST /team/admin/{teamid}/message called")
     if auth_user and auth_user.user_id:
         return send_team_message(auth_user, teamid, request.get_json())
     
     logger.error("Could not obtain user details for POST /team/admin/message")
     return {"error": "Unauthorized"}, 401
-
 
 @bp.route("/queue", methods=["GET"])
 @auth.require_user
@@ -187,4 +196,5 @@ def get_queued_teams_api():
     """
     Admin endpoint to get all teams in the queue (status IN_REVIEW)
     """
+    logger.info("GET /team/queue called")
     return get_queued_teams()
