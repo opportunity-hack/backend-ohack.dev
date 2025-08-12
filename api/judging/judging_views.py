@@ -9,6 +9,7 @@ from api.judging.judging_service import (
     submit_judge_score,
     get_judge_scores,
     save_draft_score,
+    get_draft_score,
     is_judge_assigned_to_team,
     create_judge_assignment,
     update_judge_assignment_details,
@@ -126,7 +127,8 @@ def submit_score():
     logger.debug(f"Judging submit_score Data: {data}")
 
     # Validate required fields
-    required_fields = ['judge_id', 'team_id', 'event_id', 'round', 'scores']
+    required_fields = ['judge_id', 'team_id', 'event_id', 'round', 'scores'
+    ]
     for field in required_fields:
         if field not in data:
             return {"error": f"Missing required field: {field}"}, 400
@@ -254,6 +256,36 @@ def save_draft():
 
     return result
 
+
+@bp.route("/draft/<judge_id>/<team_id>/<event_id>/<round_name>", methods=["GET"])
+@auth.require_user
+def get_draft_by_path(judge_id, team_id, event_id, round_name):
+    """Get draft scores for a judge, team, event, and round using path parameters."""
+    user_id = get_authenticated_user_id()
+    if not user_id:
+        return {"error": "Unauthorized"}, 401
+
+    # Verify judge can only access their own drafts
+    if user_id != judge_id:
+        error(logger, "Judge attempting to access another judge's draft",
+              user_id=user_id, requested_judge_id=judge_id)
+        return {"error": "Forbidden"}, 403
+
+    # Verify judge is assigned to this team
+    if not is_judge_assigned_to_team(user_id, team_id):
+        error(logger, "Judge attempting to access draft for unassigned team",
+              judge_id=user_id, team_id=team_id)
+        return {"error": "Forbidden: Judge not assigned to this team"}, 403
+
+    debug(logger, "Getting draft score", judge_id=judge_id,
+          team_id=team_id, event_id=event_id, round_name=round_name)
+
+    result = get_draft_score(judge_id, team_id, event_id, round_name)
+
+    if "error" in result:
+        return result, 500
+
+    return result
 
 # Judge Assignment Management Endpoints
 @bp.route("/panel/<panel_id>/assignments", methods=["GET"])

@@ -126,6 +126,10 @@ def fetch_judge_assignments_by_judge_id(judge_id):
 def fetch_judge_assignments_by_event_and_judge(event_id, judge_id):
     return db.fetch_judge_assignments_by_event_and_judge(event_id, judge_id)
 
+# Get assignment by panel_id, event_id, judge_id, round, and team_id
+def fetch_judge_assignment(panel_id, event_id, judge_id, round_name, team_id):
+    return db.fetch_judge_assignment(panel_id, event_id, judge_id, round_name, team_id)
+
 def insert_judge_assignment(assignment: JudgeAssignment):
     return db.insert_judge_assignment(assignment)
 

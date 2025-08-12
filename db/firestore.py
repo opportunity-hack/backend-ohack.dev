@@ -663,6 +663,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             assignments.append(JudgeAssignment.deserialize(d))
         return assignments
 
+    # Get assignment by panel_id, event_id, judge_id, round, and team_id
+    def fetch_judge_assignment(self, panel_id, event_id, judge_id, round_name, team_id):
+        db = self.get_db()
+        docs = db.collection('judge_assignments').where('panel_id', '==', panel_id).where('event_id', '==', event_id).where('judge_id', '==', judge_id).where('round', '==', round_name).where('team_id', '==', team_id).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            return JudgeAssignment.deserialize(d)
+        return None
+
     def insert_judge_assignment(self, assignment: JudgeAssignment):
         db = self.get_db()
         from datetime import datetime
