@@ -105,6 +105,10 @@ def generate_certificate_for_all_authors(repositoryURL: str) -> str:
    
    print(f"gitFameData: {gitFameData}")
    print(f"gitFameData.authors: {gitFameData.authors}")
+
+    # Remove gregv from authors
+   gitFameData.authors = [row for row in gitFameData.authors if row.author != "gregv"]
+
    return [generate_certificate(repositoryURL, row.author) for row in gitFameData.authors]
 
 def generate_hash(data: str) -> str:

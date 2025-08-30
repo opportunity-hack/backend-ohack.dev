@@ -13,6 +13,10 @@ import os
 import requests
 import resend
 import markdown
+import re
+import base64
+import qrcode
+import io
 
 logger = get_logger("services.volunteers_service")
 
@@ -740,6 +744,7 @@ def create_or_update_volunteer(
         update_data['created_by'] = existing.get('created_by')
         update_data['created_timestamp'] = existing.get('created_timestamp')
         update_data['timestamp'] = existing.get('timestamp')
+        update_data['status'] = existing.get('status', 'active')
         
         # Keep existing isSelected status if not explicitly provided
         if 'isSelected' not in volunteer_data:
@@ -1232,6 +1237,133 @@ Thanks for your support!
         logger.error(f"Error sending Slack notification: {str(e)}")
         return False
 
+def generate_qr_code(content: str) -> bytes:
+    """
+    Generate a QR code image for the given content.
+    
+    Args:
+        content: The text content to encode in the QR code
+        
+    Returns:
+        QR code image as PNG bytes
+    """
+    try:
+        # Create QR code instance with appropriate settings
+        qr = qrcode.QRCode(
+            version=1,  # Controls the size of the QR Code
+            error_correction=qrcode.constants.ERROR_CORRECT_L,
+            box_size=10,
+            border=4,
+        )
+        
+        # Add data to the QR code
+        qr.add_data(content)
+        qr.make(fit=True)
+        
+        # Create QR code image
+        img = qr.make_image(fill_color="black", back_color="white")
+        
+        # Convert PIL image to bytes
+        img_byte_arr = io.BytesIO()
+        img.save(img_byte_arr, format='PNG')
+        img_byte_arr = img_byte_arr.getvalue()
+        
+        info(logger, "Generated QR code", content_length=len(content))
+        return img_byte_arr
+        
+    except Exception as e:
+        exception(logger, "Error generating QR code", exc_info=e, content=content)
+        raise
+
+
+def _convert_markdown_to_slack_format(message: str) -> str:
+    """
+    Convert standard markdown to Slack-compatible format using available libraries.
+    
+    Args:
+        message: Message with standard markdown formatting
+        
+    Returns:
+        Message formatted for Slack
+    """
+    if not message or not isinstance(message, str):
+        return message or ""
+    
+    try:
+        # Try slackify library (most reliable for markdown to Slack conversion)
+        try:
+            from slackify import slackify
+            return slackify(message)
+        except ImportError:
+            pass
+        
+        # Try slack-sdk with markdown utilities
+        try:
+            from slack_sdk.web.slack_response import SlackResponse
+            # This library doesn't have markdown conversion, skip
+            pass
+        except ImportError:
+            pass
+        
+        # Manual conversion as fallback (improved version)
+        warning(logger, "No slack markdown library found, using manual conversion. Install 'slackify' for better results.")
+        
+        import re
+        slack_message = message
+        
+        # Convert markdown links [text](url) to Slack format <url|text>
+        # This pattern handles most standard markdown links
+        link_pattern = r'\[([^\]]*)\]\(([^)]+)\)'
+        
+        def link_replacer(match):
+            text = match.group(1).strip()
+            url = match.group(2).strip()
+            
+            # Clean up the URL
+            url = url.strip('\'"')
+            
+            if text and url:
+                # Escape pipe character in link text for Slack
+                text = text.replace('|', '\\|')
+                return f'<{url}|{text}>'
+            elif url:
+                return f'<{url}>'
+            else:
+                return match.group(0)  # Return original if malformed
+        
+        slack_message = re.sub(link_pattern, link_replacer, slack_message)
+        
+        # Convert **bold** to *bold* (Slack uses single asterisks for bold)
+        slack_message = re.sub(r'\*\*([^*\n]+?)\*\*', r'*\1*', slack_message)
+        
+        # Convert *italic* to _italic_ (single asterisks that aren't bold)
+        # Use negative lookbehind/lookahead to avoid conflicts with bold
+        slack_message = re.sub(r'(?<!\*)\*([^*\n]+?)\*(?!\*)', r'_\1_', slack_message)
+        
+        # Convert strikethrough ~~text~~ to ~text~
+        slack_message = re.sub(r'~~([^~\n]+?)~~', r'~\1~', slack_message)
+        
+        # Convert headers to bold text
+        slack_message = re.sub(r'^#{1,6}\s*(.+)$', r'*\1*', slack_message, flags=re.MULTILINE)
+        
+        # Convert bullet points to Slack format
+        slack_message = re.sub(r'^(\s*)[-*+]\s+', r'\1• ', slack_message, flags=re.MULTILINE)
+        
+        # Convert numbered lists to bullet points (Slack doesn't have great numbered list support)
+        slack_message = re.sub(r'^(\s*)\d+\.\s+', r'\1• ', slack_message, flags=re.MULTILINE)
+        
+        # Convert blockquotes
+        slack_message = re.sub(r'^>\s*(.+)$', r'┃ \1', slack_message, flags=re.MULTILINE)
+        
+        # Clean up excessive whitespace
+        slack_message = re.sub(r'\n{3,}', '\n\n', slack_message)
+        slack_message = slack_message.strip()
+        
+        return slack_message
+        
+    except Exception as e:
+        exception(logger, "Error converting markdown to Slack format", exc_info=e)
+        return message  # Return original message if conversion fails
 
 def send_volunteer_message(
     volunteer_id: str, 
@@ -1256,8 +1388,7 @@ def send_volunteer_message(
         Dict containing delivery status and volunteer information
     """
     from db.db import get_db
-    import html
-    
+    import html            
     try:
         # Get volunteer by ID from the volunteers collection
         db = get_db()
@@ -1277,7 +1408,36 @@ def send_volunteer_message(
         slack_user_id = volunteer.get('slack_user_id')
         name = volunteer.get('name', 'Volunteer')
         volunteer_type = volunteer.get('volunteer_type', recipient_type)
+
+        # If the message contains [QRCode:<content>] then extract the QR code content
+        message_for_slack = _convert_markdown_to_slack_format(message)
+        message_for_email = message
+        qr_code_attachments = []
         
+        qr_code_content = None
+        qr_code_pattern = r'\[QRCode:(.*?)\]'
+        match = re.search(qr_code_pattern, message)
+        if match:
+            qr_code_content = match.group(1)
+            # Remove [QRCode:] from the message for message_for_slack
+            message_for_slack = re.sub(qr_code_pattern, '', message_for_slack).strip()
+
+            # Generate the QR code for email using Resend's inline image approach
+            qr_code_image = generate_qr_code(qr_code_content)
+            qr_code_base64 = base64.b64encode(qr_code_image).decode('utf-8')
+            
+            # Create inline image attachment with content_id
+            qr_code_attachments.append({
+                "content": qr_code_base64,
+                "filename": "qr_code.png",
+                "content_type": "image/png",
+                "content_id": "qr-code-image"
+            })
+            
+            # Replace placeholder with cid reference
+            qr_code_placeholder = f'[QRCode:{qr_code_content}]'
+            message_for_email = message.replace(qr_code_placeholder, f'<img src="cid:qr-code-image" alt="QR Code" style="max-width: 200px; height: auto;" />')
+
         if not email:
             return {
                 'success': False,
@@ -1296,8 +1456,8 @@ def send_volunteer_message(
         # Send Slack message if slack_user_id is available
         if slack_user_id:
             try:
-                # Enhanced Slack message with context
-                slack_message = f"📧 *Message from Opportunity Hack Team*\n\n{message}\n\n_This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack._"
+                # Enhanced Slack message with context - message_for_slack is already converted to Slack format
+                slack_message = f"📧 *Message from Opportunity Hack Team*\n\n{message_for_slack}\n\n_This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack._"
                 send_slack(message=slack_message, channel=slack_user_id)
                 delivery_status['slack_sent'] = True
                 info(logger, "Slack message sent to volunteer", 
@@ -1313,13 +1473,15 @@ def send_volunteer_message(
             resend.api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
             
             # Convert markdown to HTML first, then handle any remaining newlines
+            # Use message_for_email which may contain the QR code image
+            email_message = message_for_email if message_for_email else message
             try:
                 # Convert markdown to HTML
-                formatted_message = markdown.markdown(message, extensions=['nl2br', 'fenced_code'])
+                formatted_message = markdown.markdown(email_message, extensions=['nl2br', 'fenced_code'])
             except Exception as markdown_error:
                 # Fallback to basic HTML escaping and newline conversion if markdown fails
                 warning(logger, "Failed to convert markdown, falling back to basic formatting", exc_info=markdown_error)
-                escaped_message = html.escape(message)
+                escaped_message = html.escape(email_message)
                 formatted_message = escaped_message.replace('\n', '<br>')
             
             email_subject = f"{subject} - Message from Opportunity Hack Team"
@@ -1375,6 +1537,10 @@ def send_volunteer_message(
                 "subject": email_subject,
                 "html": html_content,
             }
+            
+            # Add QR code attachments if they exist
+            if qr_code_attachments:
+                params["attachments"] = qr_code_attachments
             
             email_result = resend.Emails.send(params)
             delivery_status['email_sent'] = True
