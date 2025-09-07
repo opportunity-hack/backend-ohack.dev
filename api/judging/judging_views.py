@@ -551,21 +551,3 @@ def get_bulk_scores_admin(event_id, round_name):
         return result, 500
 
     return result
-
-
-@bp.route("/admin/all/<event_id>", methods=["GET"])
-@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
-def get_bulk_judge_details_api(event_id):
-    """Get all judge details for a specific event in one request."""
-    info(logger, "API called: GET /bulk-details/{event_id}", event_id=event_id)
-    # user_id = get_authenticated_user_id()
-    # if not user_id:
-    #     return {"error": "Unauthorized"}, 401
-
-    debug(logger, "Getting bulk judge details for event", event_id=event_id)
-    result = get_bulk_judge_details(event_id)
-
-    if "error" in result:
-        return result, 500
-
-    return result
