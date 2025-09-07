@@ -881,6 +881,7 @@ def get_bulk_judge_scores(event_id: str, round_name: str) -> Dict:
         # Format the scores
         formatted_scores = []
         for score in scores:
+            logger.info(f"Processing score: {score.id} for team {score.team_id} by judge {score.judge_id}")
             formatted_score = {
                 "id": score.id,
                 "judge_id": score.judge_id,
