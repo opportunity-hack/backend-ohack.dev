@@ -32,4 +32,4 @@ class JudgePanel:
         return d
 
     def __str__(self):
-        return f"JudgePanel(id={self.id}, event_id={self.event_id}, panel_name={self.panel_name}, room={self.room})"
+        return f"JudgePanel(id={self.id}, panel_id={self.panel_id}, event_id={self.event_id}, panel_name={self.panel_name}, room={self.room})"

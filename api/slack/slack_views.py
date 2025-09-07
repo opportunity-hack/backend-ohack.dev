@@ -31,8 +31,8 @@ def active_users():
     try:
         # Parse query parameters
         days = request.args.get('active_days', default=30, type=int)
-        if days < 1 or days > 365:
-            raise ValidationError("active_days parameter must be between 1 and 365")
+        if days < 1 or days > 10000:
+            raise ValidationError("active_days parameter must be between 1 and 10000")
         
         include_presence = request.args.get('include_presence', default='false', type=str).lower() == 'true'
         minimum_presence = request.args.get('minimum_presence', default=None, type=str)
