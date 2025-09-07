@@ -533,7 +533,7 @@ def delete_panel(panel_id):
 
 
 @bp.route("/admin/scores/<event_id>/<round_name>", methods=["GET"])
-
+@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def get_bulk_scores_admin(event_id, round_name):
     """Get all judge scores for a specific event and round (admin only)."""
     info(logger, "API called: GET /admin/scores/{event_id}/{round_name}", 
@@ -554,7 +554,7 @@ def get_bulk_scores_admin(event_id, round_name):
 
 
 @bp.route("/admin/all/<event_id>", methods=["GET"])
-#@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
+@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def get_bulk_judge_details_api(event_id):
     """Get all judge details for a specific event in one request."""
     info(logger, "API called: GET /bulk-details/{event_id}", event_id=event_id)
