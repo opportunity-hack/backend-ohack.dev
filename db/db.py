@@ -146,6 +146,9 @@ def fetch_judge_score(judge_id, team_id, event_id, round_name, is_draft=False):
 def fetch_judge_scores_by_judge_and_event(judge_id, event_id):
     return db.fetch_judge_scores_by_judge_and_event(judge_id, event_id)
 
+def fetch_judge_scores_by_event_and_round(event_id, round_name):
+    return db.fetch_judge_scores_by_event_and_round(event_id, round_name)
+
 def insert_judge_score(score: JudgeScore):
     return db.insert_judge_score(score)
 
@@ -176,3 +179,12 @@ def delete_judge_panel(panel_id):
 
 def get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(user_id, volunteer_type, event_id):
     return db.get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(user_id, volunteer_type, event_id)
+
+def fetch_judge_panels_by_event_id(event_id):
+    return db.fetch_judge_panels_by_event_id(event_id)
+
+def fetch_judge_scores_by_event_id(event_id):
+    return db.fetch_judge_scores_by_event_id(event_id)
+
+def fetch_judge_assignments_by_event_id(event_id):
+    return db.fetch_judge_assignments_by_event_id(event_id)

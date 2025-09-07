@@ -18,7 +18,11 @@ from db.db import (
     upsert_judge_score,
     fetch_judge_assignments_by_panel_id,
     fetch_judge_assignment,
-    get_volunteer_from_db_by_user_id_volunteer_type_and_event_id
+    get_volunteer_from_db_by_user_id_volunteer_type_and_event_id,
+    fetch_judge_scores_by_event_and_round,
+    fetch_judge_assignments_by_event_id,
+    fetch_judge_scores_by_event_id,
+    fetch_judge_assignments_by_event_id
 )
 from model.judge_assignment import JudgeAssignment
 from model.judge_score import JudgeScore
@@ -28,6 +32,7 @@ from api.messages.messages_service import (
     get_team,
     get_teams_batch
 )
+from common.utils.firebase import get_volunteer_from_db_by_event
 
 logger = get_logger("judging_service")
 
@@ -517,13 +522,15 @@ def create_judge_assignment(judge_id: str, event_id: str, team_id: str,
 
         # Don't insert if already exists for a given panel_id, event_id, judge_id, round, and team_id
         current_assignment = fetch_judge_assignment(panel_id, event_id, judge_id, round_name, team_id)
+        
+        saved_assignment = None
         if current_assignment:
             warning(logger, "Judge assignment already exists",
                     judge_id=judge_id, event_id=event_id, team_id=team_id,
                     round_name=round_name)
-            return {"success": False, "error": "Assignment already exists"}
-
-        saved_assignment = insert_judge_assignment(assignment)
+            saved_assignment = update_judge_assignment(current_assignment)            
+        else:
+            saved_assignment = insert_judge_assignment(assignment)
 
         return {
             "success": True,
@@ -692,6 +699,7 @@ def get_judge_event_details(judge_id: str, event_id: str) -> Dict:
         user_id=judge_id, volunteer_type="judge", event_id=event_id
     )
     if not volunteer:
+        logger.error(f"Judge not found for user_id {judge_id} and event_id {event_id}")
         return {"error": "Judge not found"}, 404
 
     logger.debug(f"Fetched judge details: {volunteer}")
@@ -700,7 +708,7 @@ def get_judge_event_details(judge_id: str, event_id: str) -> Dict:
             "id": volunteer["id"],
             "name": volunteer["name"],
             "event_id": volunteer["event_id"],            
-            "slack_user_id": volunteer["slack_user_id"]            
+            "slack_user_id": volunteer["slack_user_id"] if "slack_user_id" in volunteer else None,           
         }
     }
 
@@ -821,3 +829,153 @@ def remove_judge_panel(panel_id: str) -> Dict:
         error(logger, "Error removing judge panel",
               panel_id=panel_id, error=str(e))
         return {"success": False, "error": "Failed to remove panel"}
+
+
+def get_bulk_judge_scores(event_id: str, round_name: str) -> Dict:
+    """Get all judge scores for a specific event and round."""
+    try:
+        debug(logger, "Fetching bulk judge scores",
+              event_id=event_id, round_name=round_name)
+
+        scores = fetch_judge_scores_by_event_and_round(event_id, round_name)
+
+        # Get unique team IDs and judge IDs for batch processing
+        team_ids = list(set([score.team_id for score in scores]))
+        judge_ids = list(set([score.judge_id for score in scores]))
+
+        debug(logger, "Found scores for bulk retrieval",
+              total_scores=len(scores), 
+              unique_teams=len(team_ids), 
+              unique_judges=len(judge_ids))
+
+        # Get team details in batch if needed
+        teams_data = {}
+        if team_ids:
+            try:
+                teams_batch = get_teams_batch({"team_ids": team_ids})
+                for team in teams_batch:
+                    teams_data[team.get('id')] = {
+                        "name": team.get('name', ''),
+                        "team_number": team.get('team_number', '')
+                    }
+            except Exception as e:
+                warning(logger, "Error fetching teams batch", error=str(e))
+
+        # Get judge details in batch
+        judges_data = {}
+        for judge_id in judge_ids:
+            try:
+                # Get basic judge info
+                judge_info = get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(
+                    judge_id, "judge", event_id
+                )
+                if judge_info:
+                    judges_data[judge_id] = {
+                        "name": judge_info.get('name', ''),
+                        "id": judge_id
+                    }
+            except Exception as e:
+                warning(logger, "Error fetching judge details", 
+                       judge_id=judge_id, error=str(e))
+
+        # Format the scores
+        formatted_scores = []
+        for score in scores:
+            formatted_score = {
+                "id": score.id,
+                "judge_id": score.judge_id,
+                "judge_name": judges_data.get(score.judge_id, {}).get('name', 'Unknown'),
+                "team_id": score.team_id,
+                "team_name": teams_data.get(score.team_id, {}).get('name', 'Unknown'),
+                "team_number": teams_data.get(score.team_id, {}).get('team_number', ''),
+                "event_id": score.event_id,
+                "round": score.round,
+                "total_score": score.total_score,
+                "scores": score.to_api_format(),
+                "feedback": score.feedback,
+                "submitted_at": score.submitted_at.isoformat() if score.submitted_at else None,
+                "created_at": score.created_at.isoformat() if score.created_at else None
+            }
+            formatted_scores.append(formatted_score)
+
+        # Sort by team name, then judge name for consistent ordering
+        formatted_scores.sort(key=lambda x: (x['team_name'], x['judge_name']))
+
+        # Create summary statistics
+        summary = {
+            "total_scores": len(formatted_scores),
+            "unique_teams": len(team_ids),
+            "unique_judges": len(judge_ids),
+            "event_id": event_id,
+            "round": round_name,
+            "average_score": round(sum(s.total_score for s in scores) / len(scores), 2) if scores else 0
+        }
+
+        return {
+            "scores": formatted_scores,
+            "summary": summary
+        }
+
+    except Exception as e:
+        error(logger, "Error fetching bulk judge scores",
+              event_id=event_id, round_name=round_name, error=str(e))
+        import traceback
+        traceback.print_exc()
+        return {"scores": [], "summary": {}, "error": "Failed to fetch bulk scores"}
+
+
+def get_bulk_judge_details(event_id: str) -> Dict:
+    """Get all judge details for a specific event in one request."""
+    try:
+        logger.debug("Fetching bulk judge details for event %s", event_id)
+
+        # Get all judges for the event
+        judges_result = get_volunteer_from_db_by_event(event_id, "judge")
+
+        # Get all assignments for the event
+        assignments = fetch_judge_assignments_by_event_id(event_id)
+
+        # Get all of the scores for the event
+        scores = fetch_judge_scores_by_event(event_id)
+        
+
+        if "error" in judges_result:
+            error(logger, "Error fetching judges for event", event_id=event_id)
+            return {"judges": [], "error": "Failed to fetch judges for event"}
+
+        judges_data = judges_result.get("data", [])
+
+        if not judges_data:
+            logger.debug("No judges found for event %s", event_id)
+            return {"judges": [], "total_count": 0}
+
+        formatted_judges = []
+        for judge in judges_data:
+            formatted_judge = {
+                "id": judge.get("id", ""),
+                "user_id": judge.get("user_id", ""),
+                "name": judge.get("name", ""),
+                "email": judge.get("email", ""),
+                "event_id": judge.get("event_id", event_id),
+                "slack_user_id": judge.get("slack_user_id", ""),
+                "volunteer_type": judge.get("volunteer_type", "judge"),
+                "created_at": judge.get("created_at"),
+                "updated_at": judge.get("updated_at")
+            }
+            formatted_judges.append(formatted_judge)
+
+        logger.debug("Successfully fetched %d judges for event %s", 
+                    len(formatted_judges), event_id)
+
+        return {
+            "judges": formatted_judges,
+            "total_count": len(formatted_judges),
+            "event_id": event_id
+        }
+
+    except Exception as e:
+        error(logger, "Error fetching bulk judge details",
+              event_id=event_id, error=str(e))
+        import traceback
+        traceback.print_exc()
+        return {"judges": [], "total_count": 0, "error": "Failed to fetch judge details"}

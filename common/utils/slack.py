@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 from requests.exceptions import ConnectionError
 from cachetools import TTLCache, cached
 from ratelimit import limits, sleep_and_retry
+import threading
 
 load_dotenv()
 
@@ -288,6 +289,29 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
     except SlackApiError as e:
         logger.error(e.response["error"])
         assert e.response["error"]
+
+
+def async_send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"):
+    """
+    Send a Slack message asynchronously using threading.
+    This allows the calling function to return immediately without waiting for the Slack API call.
+    
+    :param message: The message to send
+    :param channel: The channel name or user ID to send to  
+    :param icon_emoji: Optional emoji icon
+    :param username: The username for the bot
+    """
+    def _send_slack_thread():
+        try:
+            send_slack(message=message, channel=channel, icon_emoji=icon_emoji, username=username)
+            logger.info(f"Async Slack message sent successfully to {channel}")
+        except Exception as e:
+            logger.error(f"Error sending async Slack message to {channel}: {e}")
+    
+    # Start the thread and let it run in background
+    thread = threading.Thread(target=_send_slack_thread, daemon=True)
+    thread.start()
+    logger.info(f"Started background thread to send Slack message to {channel}")
 
 
 

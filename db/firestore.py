@@ -719,6 +719,16 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             scores.append(JudgeScore.deserialize(d))
         return scores
 
+    def fetch_judge_scores_by_event_and_round(self, event_id, round_name):
+        db = self.get_db()
+        scores = []
+        docs = db.collection('judge_scores').where('event_id', '==', event_id).where('round', '==', round_name).where('is_draft', '==', False).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            scores.append(JudgeScore.deserialize(d))
+        return scores
+
     def insert_judge_score(self, score: JudgeScore):
         db = self.get_db()
         from datetime import datetime
@@ -799,7 +809,7 @@ class FirestoreDatabaseInterface(DatabaseInterface):
     # Volunteers
     def get_volunteer_from_db_by_user_id_volunteer_type_and_event_id(self, user_id, volunteer_type, event_id):
         db = self.get_db()
-        volunteers = db.collection('volunteers').where('id', '==', user_id) \
+        volunteers = db.collection('volunteers').where('user_id', '==', user_id) \
                                               .where('volunteer_type', '==', volunteer_type) \
                                               .where('event_id', '==', event_id) \
                                               .limit(1).stream()
@@ -807,6 +817,113 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         for volunteer in volunteers:
             return volunteer.to_dict()
         return None
+    
+    def fetch_judge_panels_by_event_id(self, event_id: str) -> dict:
+        """
+        Fetch judge panels for a specific event.
+
+        Args:
+            event_id (str): The ID of the event.
+
+        Returns:
+            dict: A dictionary containing a list of judge panels.
+        """
+        logger.debug(f"Fetching judge panels for event_id={event_id}")
+
+        if not event_id:
+            logger.warning("fetch_judge_panels end (no event_id provided)")
+            return {"data": []}
         
+        db = self.get_db()
+
+        try:
+            query = db.collection("judge_panels").where("event_id", "==", event_id)
+            panels = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]
+
+            if not panels:
+                logger.info(f"No judge panels found for event_id={event_id}")
+                logger.debug("fetch_judge_panels end (no results)")
+                return {"data": []}
+
+            logger.info(f"Retrieved {len(panels)} judge panels for event_id={event_id}")
+            logger.debug("fetch_judge_panels end (with results)")
+            
+            return {"data": panels}
+
+        except Exception as e:
+            logger.error(f"Error retrieving judge panels: {str(e)}")
+            return {"data": [], "error": str(e)}    
+
+    def fetch_judge_scores_by_event_id(self, event_id: str) -> dict:
+        """
+        Fetch judge scores for a specific event.
+
+        Args:
+            event_id (str): The ID of the event.
+
+        Returns:
+            dict: A dictionary containing a list of judge scores.
+        """
+        logger.debug(f"Fetching judge scores for event_id={event_id}")
+
+        if not event_id:
+            logger.warning("fetch_judge_scores end (no event_id provided)")
+            return {"data": []}
+        
+        db = self.get_db()
+
+        try:
+            query = db.collection("judge_scores").where("event_id", "==", event_id)
+            scores = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]
+
+            if not scores:
+                logger.info(f"No judge scores found for event_id={event_id}")
+                logger.debug("fetch_judge_scores end (no results)")
+                return {"data": []}
+
+            logger.info(f"Retrieved {len(scores)} judge scores for event_id={event_id}")
+            logger.debug("fetch_judge_scores end (with results)")
+            
+            return {"data": scores}
+
+        except Exception as e:
+            logger.error(f"Error retrieving judge scores: {str(e)}")
+            return {"data": [], "error": str(e)}
+
+    def fetch_judge_assignments_by_event_id(self, event_id: str) -> dict:
+        """
+        Fetch judge assignments for a specific event.
+
+        Args:
+            event_id (str): The ID of the event.
+
+        Returns:
+            dict: A dictionary containing a list of judge assignments.
+        """
+        logger.debug(f"Fetching judge assignments for event_id={event_id}")
+
+        if not event_id:
+            logger.warning("fetch_judge_assignments end (no event_id provided)")
+            return {"data": []}
+        
+        db = self.get_db()
+
+        try:
+            query = db.collection("judge_assignments").where("event_id", "==", event_id)
+            assignments = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]
+
+            if not assignments:
+                logger.info(f"No judge assignments found for event_id={event_id}")
+                logger.debug("fetch_judge_assignments end (no results)")
+                return {"data": []}
+
+            logger.info(f"Retrieved {len(assignments)} judge assignments for event_id={event_id}")
+            logger.debug("fetch_judge_assignments end (with results)")
+            
+            return {"data": assignments}
+
+        except Exception as e:
+            logger.error(f"Error retrieving judge assignments: {str(e)}")
+            return {"data": [], "error": str(e)}
 
 DatabaseInterface.register(FirestoreDatabaseInterface)
