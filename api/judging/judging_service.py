@@ -32,7 +32,7 @@ from api.messages.messages_service import (
     get_team,
     get_teams_batch
 )
-from common.utils.firebase import get_volunteer_from_db_by_event
+from common.utils.firebase import get_nonprofit_by_id, get_volunteer_from_db_by_event
 
 logger = get_logger("judging_service")
 
@@ -142,14 +142,26 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
         round1_teams = []
         round2_teams = []
 
+        # Get all of the nonprofit IDs for this event as a set, remove any that are empty strings
+        nonprofit_ids = {team.get('selected_nonprofit_id', '') for team in teams_data}
+        nonprofit_ids = {id for id in nonprofit_ids if id}
+
+        logger.info(f"Nonprofit IDs for event {event_id}: {nonprofit_ids}")
+
+        # For each id, call get_nonprofit_by_id, get the id/name mapping
+        nonprofit_mapping = {id: get_nonprofit_by_id(id) for id in nonprofit_ids}
+        logger.info(f"Fetched {len(nonprofit_mapping)} nonprofits for event {event_id}")
+
         for team in teams_data:
             team_id = team.get('id')
+            nonprofit_name = nonprofit_mapping.get(team.get('selected_nonprofit_id', ''), {}).get('name', '')
+            nonprofit_id = team.get('selected_nonprofit_id', '')
 
             # Get assignment details for demo scheduling
             assignment = next(
                 (a for a in assignments if a.team_id == team_id), None)
 
-            team_data = format_team_for_judge(team, score_lookup)
+            team_data = format_team_for_judge(team, score_lookup, nonprofit_id, nonprofit_name)
 
             if team_id in round1_team_ids:
                 round1_teams.append(team_data)
@@ -444,7 +456,7 @@ def get_draft_score(judge_id: str, team_id: str, event_id: str, round_name: str)
         return {"draft": None, "error": "Failed to fetch draft"}
 
 
-def format_team_for_judge(team: Dict, score_lookup: Dict = None) -> Dict:
+def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: str = None, nonprofit_name: str = None) -> Dict:
     """Format team data for judge API response."""
     if score_lookup is None:
         score_lookup = {}
@@ -483,10 +495,9 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None) -> Dict:
     return {
         "id": team_id,
         "name": team.get('name', ''),
-        "problem_statement": {
-            "title": team.get('problem_statement', {}).get('title', ''),
-            "nonprofit": team.get('problem_statement', {}).get(
-                'nonprofit', '')
+        "problem_statement": {            
+            "nonprofit": nonprofit_name,
+            "nonprofit_id": nonprofit_id
         },
         "members": members,  # Now populated with actual member data
         "github_url": github_url,
