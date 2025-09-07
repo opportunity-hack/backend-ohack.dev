@@ -1103,6 +1103,52 @@ def upsert_praise(praise):
     logger.info("praise successfully saved")
 
 
+def get_volunteer_checked_in_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
+    """
+    Retrieve checked-in volunteers for a specific event and type.
+
+    Args:
+        event_id (str): The ID of the event.
+        volunteer_type (str): The type of volunteer (e.g., 'mentor', 'judge', 'volunteer').
+
+    Returns:
+        dict: A dictionary containing a list of checked-in volunteer data.
+    """
+    logger.debug(f"Getting checked-in {volunteer_type}s for event_id={event_id}")
+
+    if not event_id:
+        logger.warning(f"get checked-in {volunteer_type}s end (no event_id provided)")
+        return {"data": []}
+
+    db = get_db()
+
+    try:
+        # Use FieldFilter for more explicit and type-safe queries
+        query = db.collection("volunteers").where(
+            filter=FieldFilter("event_id", "==", event_id)
+        ).where(
+            filter=FieldFilter("volunteer_type", "==", volunteer_type)
+        ).where(
+            filter=FieldFilter("checkedIn", "==", True)
+        )
+
+        # Stream the documents and convert to list of dicts also with their id from the database
+        volunteers = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]
+
+        if not volunteers:
+            logger.info(f"No checked-in {volunteer_type}s found for event_id={event_id}")
+            logger.debug(f"get checked-in {volunteer_type}s end (no results)")
+            return {"data": []}
+
+        logger.info(f"Retrieved {len(volunteers)} checked-in {volunteer_type}s for event_id={event_id}")
+        logger.debug(f"get checked-in {volunteer_type}s end (with results)")
+
+        return {"data": volunteers}
+
+    except Exception as e:
+        logger.error(f"Error retrieving checked-in {volunteer_type}s: {str(e)}")
+        return {"data": [], "error": str(e)}
+
 def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
     """
     Retrieve volunteers for a specific event and type.
