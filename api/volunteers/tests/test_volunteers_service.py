@@ -5,7 +5,8 @@ from typing import Dict, Any
 from services.volunteers_service import (
     create_or_update_volunteer,
     get_volunteer_by_user_id,
-    get_volunteers_by_event
+    get_volunteers_by_event,
+    generate_qr_code
 )
 
 # Mock data for tests
@@ -158,3 +159,44 @@ def test_get_volunteers_by_event(mock_get_db):
     mock_where1.where.assert_called_with('volunteer_type', '==', 'mentor')
     mock_where2.limit.assert_called_with(10)
     mock_limit.offset.assert_called_with(0)
+
+
+def test_generate_qr_code():
+    """Test QR code generation functionality."""
+    test_content = "https://www.ohack.dev/test-link"
+    
+    # Generate QR code
+    qr_image_bytes = generate_qr_code(test_content)
+    
+    # Assertions
+    assert qr_image_bytes is not None
+    assert isinstance(qr_image_bytes, bytes)
+    assert len(qr_image_bytes) > 0
+    
+    # Verify it's a valid PNG by checking the PNG header
+    png_header = b'\x89PNG\r\n\x1a\n'
+    assert qr_image_bytes.startswith(png_header)
+
+
+def test_generate_qr_code_empty_content():
+    """Test QR code generation with empty content."""
+    # Generate QR code with empty string
+    qr_image_bytes = generate_qr_code("")
+    
+    # Should still generate a valid QR code
+    assert qr_image_bytes is not None
+    assert isinstance(qr_image_bytes, bytes)
+    assert len(qr_image_bytes) > 0
+
+
+def test_generate_qr_code_special_characters():
+    """Test QR code generation with special characters."""
+    test_content = "Hello! 🌟 Special chars: @#$%^&*()_+{}|:<>?[];',./"
+    
+    # Generate QR code
+    qr_image_bytes = generate_qr_code(test_content)
+    
+    # Assertions
+    assert qr_image_bytes is not None
+    assert isinstance(qr_image_bytes, bytes)
+    assert len(qr_image_bytes) > 0
