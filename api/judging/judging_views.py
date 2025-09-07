@@ -1,6 +1,6 @@
 from flask import Blueprint, request
 from common.auth import auth, auth_user, getOrgId
-from common.log import get_logger, debug, error
+from common.log import get_logger, debug, error, info
 
 from api.judging.judging_service import (
     get_judge_assignments,
@@ -20,7 +20,9 @@ from api.judging.judging_service import (
     update_judge_panel_details,
     remove_judge_panel,
     get_judge_assignments_for_panel,
-    get_judge_event_details    
+    get_judge_event_details,    
+    get_bulk_judge_scores,
+    get_bulk_judge_details
 )
 
 logger = get_logger("judging_views")
@@ -42,6 +44,7 @@ def get_authenticated_user_id():
 @auth.require_user
 def get_assignments(judge_id):
     """Get all hackathon assignments for a specific judge."""
+    info(logger, "API called: GET /assignments/{judge_id}", judge_id=judge_id)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -66,6 +69,7 @@ def get_assignments(judge_id):
 @auth.require_user
 def get_teams(judge_id, event_id):
     """Get teams assigned to a judge for a specific hackathon."""
+    info(logger, "API called: GET /teams/{judge_id}/{event_id}", judge_id=judge_id, event_id=event_id)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -91,6 +95,7 @@ def get_teams(judge_id, event_id):
 @auth.require_user
 def get_team_api(team_id):
     """Get detailed information about a specific team for judging."""
+    info(logger, "API called: GET /team/{team_id}", team_id=team_id)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -116,6 +121,7 @@ def get_team_api(team_id):
 @auth.require_user
 def submit_score():
     """Submit or update a team score."""
+    info(logger, "API called: POST /score")
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -167,13 +173,11 @@ def submit_score():
 @auth.require_user
 def get_judge_event_api(judge_id, event_id):
     """Get all information about a specific judge's event."""
+    info(logger, "API called: GET /judge/{judge_id}/event/{event_id}", judge_id=judge_id, event_id=event_id)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
-
-
-    debug(logger, "Getting judge event",
-          judge_id=judge_id, event_id=event_id)
+    
     result = get_judge_event_details(judge_id, event_id)
 
     if "error" in result:
@@ -186,6 +190,7 @@ def get_judge_event_api(judge_id, event_id):
 @auth.require_user
 def get_scores(judge_id, event_id):
     """Get all scores submitted by a judge for a hackathon."""
+    info(logger, "API called: GET /scores/{judge_id}/{event_id}", judge_id=judge_id, event_id=event_id)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -210,6 +215,7 @@ def get_scores(judge_id, event_id):
 @auth.require_user
 def save_draft():
     """Save draft scores (auto-save functionality)."""
+    info(logger, "API called: POST /draft")
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -261,6 +267,8 @@ def save_draft():
 @auth.require_user
 def get_draft_by_path(judge_id, team_id, event_id, round_name):
     """Get draft scores for a judge, team, event, and round using path parameters."""
+    info(logger, "API called: GET /draft/{judge_id}/{team_id}/{event_id}/{round_name}", 
+         judge_id=judge_id, team_id=team_id, event_id=event_id, round_name=round_name)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -293,6 +301,7 @@ def get_draft_by_path(judge_id, team_id, event_id, round_name):
 @auth.require_user
 def get_panel_assignments(panel_id):
     """Get all judge assignments for a specific panel."""
+    info(logger, "API called: GET /panel/{panel_id}/assignments", panel_id=panel_id)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -309,6 +318,7 @@ def get_panel_assignments(panel_id):
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def create_assignment():
     """Create a new judge assignment."""
+    info(logger, "API called: POST /assignments")
     data = request.get_json()
     if not data:
         return {"error": "Missing request body"}, 400
@@ -340,6 +350,7 @@ def create_assignment():
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def update_assignment(assignment_id):
     """Update judge assignment details."""
+    info(logger, "API called: PUT /assignments/{assignment_id}", assignment_id=assignment_id)
     data = request.get_json()
     if not data:
         return {"error": "Missing request body"}, 400
@@ -362,6 +373,7 @@ def update_assignment(assignment_id):
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def delete_assignment(assignment_id):
     """Remove a judge assignment."""
+    info(logger, "API called: DELETE /assignments/{assignment_id}", assignment_id=assignment_id)
     debug(logger, "Removing judge assignment", assignment_id=assignment_id)
 
     result = remove_judge_assignment(assignment_id)
@@ -378,6 +390,8 @@ def delete_assignment(assignment_id):
 @auth.require_user
 def get_individual_score(judge_id, team_id, event_id, round_name):
     """Get a specific judge score."""
+    info(logger, "API called: GET /score/{judge_id}/{team_id}/{event_id}/{round_name}", 
+         judge_id=judge_id, team_id=team_id, event_id=event_id, round_name=round_name)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -412,6 +426,8 @@ def get_individual_score(judge_id, team_id, event_id, round_name):
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def get_individual_score_admin_api(judge_id, team_id, event_id, round_name):
     """Get a specific judge score."""
+    info(logger, "API called: GET /admin/score/{judge_id}/{team_id}/{event_id}/{round_name}", 
+         judge_id=judge_id, team_id=team_id, event_id=event_id, round_name=round_name)
     user_id = get_authenticated_user_id()
     if not user_id:
         return {"error": "Unauthorized"}, 401
@@ -435,6 +451,7 @@ def get_individual_score_admin_api(judge_id, team_id, event_id, round_name):
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def get_panels(event_id):
     """Get all judge panels for an event."""
+    info(logger, "API called: GET /panels/{event_id}", event_id=event_id)
     debug(logger, "Getting judge panels for event", event_id=event_id)
 
     result = get_event_judge_panels(event_id)
@@ -450,6 +467,7 @@ def get_panels(event_id):
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def create_panel():
     """Create a new judge panel."""
+    info(logger, "API called: POST /panels")
     data = request.get_json()
     if not data:
         return {"error": "Missing request body"}, 400
@@ -480,6 +498,7 @@ def create_panel():
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def update_panel(panel_id):
     """Update judge panel details."""
+    info(logger, "API called: PUT /panels/{panel_id}", panel_id=panel_id)
     data = request.get_json()
     if not data:
         return {"error": "Missing request body"}, 400    
@@ -502,11 +521,51 @@ def update_panel(panel_id):
 @auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
 def delete_panel(panel_id):
     """Remove a judge panel."""
+    info(logger, "API called: DELETE /panels/{panel_id}", panel_id=panel_id)
     debug(logger, "Removing judge panel", panel_id=panel_id)
 
     result = remove_judge_panel(panel_id)
 
     if not result.get('success', False):
         return result, 400
+
+    return result
+
+
+@bp.route("/admin/scores/<event_id>/<round_name>", methods=["GET"])
+
+def get_bulk_scores_admin(event_id, round_name):
+    """Get all judge scores for a specific event and round (admin only)."""
+    info(logger, "API called: GET /admin/scores/{event_id}/{round_name}", 
+         event_id=event_id, round_name=round_name)
+    # user_id = get_authenticated_user_id()
+    # if not user_id:
+    #     return {"error": "Unauthorized"}, 401
+
+    # debug(logger, "Getting bulk judge scores",
+    #       event_id=event_id, round_name=round_name, admin_user=user_id)
+
+    result = get_bulk_judge_scores(event_id, round_name)
+
+    if "error" in result:
+        return result, 500
+
+    return result
+
+
+@bp.route("/admin/all/<event_id>", methods=["GET"])
+#@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
+def get_bulk_judge_details_api(event_id):
+    """Get all judge details for a specific event in one request."""
+    info(logger, "API called: GET /bulk-details/{event_id}", event_id=event_id)
+    # user_id = get_authenticated_user_id()
+    # if not user_id:
+    #     return {"error": "Unauthorized"}, 401
+
+    debug(logger, "Getting bulk judge details for event", event_id=event_id)
+    result = get_bulk_judge_details(event_id)
+
+    if "error" in result:
+        return result, 500
 
     return result
