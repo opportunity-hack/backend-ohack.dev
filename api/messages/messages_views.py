@@ -17,6 +17,7 @@ from api.messages.messages_service import (
     get_admin_message,
     get_single_problem_statement_old,
     get_user_by_id_old,
+    get_volunteer_checked_in_by_event,
     save_helping_status_old,
     save_npo,
     save_profile_metadata_old,
@@ -263,8 +264,12 @@ def add_single_hacker(event_id):
     if auth_user and auth_user.user_id:
         return vars(single_add_volunteer(event_id, request.get_json(), "hacker", auth_user.user_id))
 
-
-
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+@bp.route("/hackathon/<event_id>/<volunteer_type>/checkins", methods=["GET"])
+def get_volunteers_checked_in_by_event_api(event_id, volunteer_type):
+    logger.info(f"GET /hackathon/{event_id}/{volunteer_type}/checked_in called")
+    return (get_volunteer_checked_in_by_event(event_id, volunteer_type))
 
 @bp.route("/hackathon/<event_id>", methods=["GET"])
 def get_single_hackathon_by_event(event_id):

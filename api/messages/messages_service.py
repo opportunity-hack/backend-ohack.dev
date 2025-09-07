@@ -1,6 +1,6 @@
 from common.utils import safe_get_env_var
-from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, invite_user_to_channel, get_user_info
-from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user,get_volunteer_from_db_by_event, get_user_by_user_id, get_recent_praises, get_praises_by_user_id
+from common.utils.slack import send_slack_audit, create_slack_channel, send_slack, async_send_slack, invite_user_to_channel, get_user_info
+from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user,get_volunteer_from_db_by_event, get_volunteer_checked_in_from_db_by_event, get_user_by_user_id, get_recent_praises, get_praises_by_user_id
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo, get_all_repos, validate_github_username
 from api.messages.message import Message
@@ -321,6 +321,22 @@ def get_volunteer_by_event(event_id, volunteer_type):
         logger.debug(f"get {volunteer_type} end (with result):{results}")        
         return results
 
+@cached(cache=TTLCache(maxsize=100, ttl=5))
+def get_volunteer_checked_in_by_event(event_id, volunteer_type):
+    logger.debug(f"get {volunteer_type} start event_id={event_id}")   
+
+    if event_id is None:
+        logger.warning(f"get {volunteer_type} end (no results)")
+        return []
+
+    results = get_volunteer_checked_in_from_db_by_event(event_id, volunteer_type)
+
+    if results is None:
+        logger.warning(f"get {volunteer_type} end (no results)")
+        return []
+    else:
+        logger.debug(f"get {volunteer_type} end (with result):{results}")
+        return results
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)
@@ -1371,11 +1387,14 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
     # Since we know this user is an admin, prefix all vars with admin_
     admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
 
-    # Query for event_id column
-    doc = db.collection("volunteers").document(volunteer_id)
+    # Query for event_id column    
+    doc_ref = db.collection("volunteers").document(volunteer_id)
+    doc = doc_ref.get()
+    doc_dict = doc.to_dict()
+    doc_volunteer_type = doc_dict.get("volunteer_type", "participant").lower()
 
     # If we don't find the event, return
-    if doc is None:
+    if doc_ref is None:
         return Message("No volunteer for Hackathon Found")
                         
     
@@ -1384,7 +1403,73 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
     json["updated_timestamp"] = datetime.now().isoformat()
 
     # Update the volunteer record with the new data
-    doc.update(json)
+    doc_ref.update(json)
+
+    slack_user_id = doc.get('slack_user_id')
+
+    hackathon_welcome_message = f"🎉 Welcome <@{slack_user_id}> [{doc_volunteer_type}]."
+
+    # Base welcome direct message
+    base_message = f"🎉 Welcome to Opportunity Hack {event_id}! You're checked in as a {doc_volunteer_type}.\n\n"
+    
+    # Role-specific guidance
+    if doc_volunteer_type == 'mentor':
+        role_guidance = """🧠 As a Mentor:
+• Help teams with technical challenges and project direction
+• Share your expertise either by staying with a specific team, looking at GitHub to find a team that matches your skills, or asking for who might need a mentor in #ask-a-mentor
+• Guide teams through problem-solving without doing the work for them
+• Connect with teams in their Slack channels or in-person"""
+    
+    elif doc_volunteer_type == 'judge':
+        role_guidance = """⚖️ As a Judge:
+• Review team presentations and evaluate projects
+• Focus on impact, technical implementation, and feasibility
+• Provide constructive feedback during judging sessions
+• Join the judges' briefing session for scoring criteria"""
+    
+    elif doc_volunteer_type == 'volunteer':
+        role_guidance = """🙋 As a Volunteer:
+• Help with event logistics and participant support
+• Assist with check-in, meals, and general questions
+• Support the organizing team throughout the event
+• Be a friendly face for participants who need help"""
+    
+    else:  # hacker/participant
+        role_guidance = """💻 As a Hacker:
+• Form or join a team to work on nonprofit challenges
+• Collaborate with your team to build meaningful tech solutions
+• Attend mentor sessions and utilize available resources
+• Prepare for final presentations and judging"""
+    
+    slack_message_content = f"""{base_message}{role_guidance}
+
+📅 Important Links:
+• Full schedule: https://www.ohack.dev/hack/{event_id}#countdown
+• Slack channels: Watch #general for updates
+• Need help? Ask in #help or find an organizer
+
+🚀 Ready to code for good? Let's build technology that makes a real difference for nonprofits and people in the world!
+"""
+
+    # If the incoming json has a value checkedIn that is true, and the doc from the db either doesn't have this field or it's false, we should send a Slack message to welcome this person to the hackathon giving them details about the event and their role.
+    # This should both be a DM to the person using their Slack ID and a message in the #hackathon-welcome channel.
+    if json.get("checkedIn") is True and "checkedIn" not in doc_dict.keys() and doc_dict.get("checkedIn") != True:
+        logger.info(f"Volunteer {volunteer_id} just checked in, sending welcome message to {slack_user_id}")
+        invite_user_to_channel(slack_user_id, "hackathon-welcome")
+        
+        logger.info(f"Sending Slack message to volunteer {volunteer_id} in channel #{slack_user_id} and #hackathon-welcome")
+        async_send_slack(
+            channel="#hackathon-welcome",
+            message=hackathon_welcome_message
+        )
+
+        logger.info(f"Sending Slack DM to volunteer {volunteer_id} in channel #{slack_user_id}")
+        async_send_slack(
+            channel=slack_user_id,
+            message=slack_message_content
+        )
+    else:
+        logger.info(f"Volunteer {volunteer_id} checked in again, no welcome message sent.")
 
     # Clear cache for get_volunteer_by_event
     get_volunteer_by_event.cache_clear()
