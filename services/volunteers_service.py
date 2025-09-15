@@ -29,7 +29,7 @@ def _get_current_timestamp() -> str:
     az_timezone = pytz.timezone('US/Arizona')
     return datetime.now(az_timezone).isoformat()
 
-@redis_cached(prefix="volunteer:by_user_id", ttl=10)
+@redis_cached(prefix="volunteer:by_user_id", ttl=2)
 def get_volunteer_by_user_id(user_id: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
     """Get volunteer by user ID, event ID, and volunteer type."""
     db = get_db()
@@ -70,7 +70,7 @@ def get_volunteer_application_count_by_availability_timeslot(event_id: str) -> D
     logger.info(f"Counted {len(timeslot_counts)} unique availability timeslots for event {event_id}")
     return timeslot_counts
 
-@redis_cached(prefix="volunteer:by_email", ttl=10)
+@redis_cached(prefix="volunteer:by_email", ttl=2)
 def get_volunteer_by_email(email: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
     """Get volunteer by email, event ID, and volunteer type."""
     db = get_db()
@@ -109,7 +109,7 @@ def _clear_volunteer_caches(user_id: str, email: str, event_id: str, volunteer_t
     
     debug(logger, f"Attempted to clear volunteer caches for user_id={user_id}, email={email}, event_id={event_id}, volunteer_type={volunteer_type}")
 
-@redis_cached(prefix="volunteer:by_event", ttl=120)
+@redis_cached(prefix="volunteer:by_event", ttl=2)
 def get_volunteers_by_event(
     event_id: str, 
     volunteer_type: str, 
