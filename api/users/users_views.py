@@ -125,3 +125,22 @@ def update_privacy_settings():
             }
         return {"error": "Failed to update privacy settings"}, 500
     return {"error": "Unauthorized"}, 401
+
+
+# Privacy-aware public profile endpoints
+@bp.route("/<user_id>/profile/public", methods=["GET"])
+def get_public_profile_by_db_id(user_id):
+    """Get privacy-filtered public profile by database ID"""
+    profile_data = users_service.get_privacy_filtered_profile_by_db_id(user_id)
+    if profile_data:
+        return profile_data
+    return {"error": "User not found"}, 404
+
+
+@bp.route("/<user_id>/profile/privacy", methods=["GET"])
+def get_public_privacy_settings_by_db_id(user_id):
+    """Get public privacy settings by database ID (for frontend to know what's public)"""
+    privacy_settings = users_service.get_public_privacy_settings_by_db_id(user_id)
+    if privacy_settings is not None:
+        return {"privacy_settings": privacy_settings}
+    return {"error": "User not found"}, 404

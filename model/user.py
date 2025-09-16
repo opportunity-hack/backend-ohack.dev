@@ -1,6 +1,12 @@
 metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "volunteering", "linkedin_url", "instagram_url", "propel_id"]
 privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url"]
 
+# Fields that should NEVER be shared publicly regardless of privacy settings
+pii_fields = ["email_address", "last_login", "propel_id", "volunteering"]
+
+# Fields that are always safe to share publicly (basic profile info)
+safe_public_fields = ["name", "nickname", "profile_image", "user_id"]
+
 class User:
     id = None
     email_address = ""
@@ -127,6 +133,31 @@ class User:
             self.privacy_settings[field] = is_public
             return True
         return False
+
+    def get_public_profile_data(self):
+        """Get profile data filtered by privacy settings, excluding PII"""
+        privacy_settings = self.get_privacy_settings()
+        public_data = {}
+
+        # Always include safe public fields
+        for field in safe_public_fields:
+            if hasattr(self, field) and getattr(self, field) is not None:
+                public_data[field] = getattr(self, field)
+
+        # Include privacy-controlled fields only if user made them public
+        for field in privacy_fields:
+            if field in pii_fields:
+                continue  # Never share PII fields
+
+            if hasattr(self, field) and privacy_settings.get(field, False):
+                field_value = getattr(self, field)
+                if field_value is not None and field_value != "":
+                    public_data[field] = field_value
+
+        # Include privacy settings themselves for the frontend to know what's public
+        public_data["privacy_settings"] = privacy_settings
+
+        return public_data
     
     def __str__(self):
         # Print all properties
