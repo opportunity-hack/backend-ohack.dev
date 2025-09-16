@@ -408,3 +408,47 @@ def get_all_volunteering_time(start_date=None, end_date=None):
         processed_volunteering.append(processed_session)
     
     return processed_volunteering, total_active_hours, total_commitment_hours
+
+
+def get_privacy_settings(propel_id):
+    """Get privacy settings for a user"""
+    logger.info(f"Get Privacy Settings for {propel_id}")
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
+
+    # Get the user
+    user = fetch_user_by_user_id(slack_user_id)
+    if user is None:
+        error(logger, "User not found", slack_user_id=slack_user_id)
+        return None
+
+    return user.get_privacy_settings()
+
+
+def update_privacy_settings(propel_id, data):
+    """Update privacy settings for a user"""
+    logger.info(f"Update Privacy Settings for {propel_id} {data}")
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
+
+    # Get the user
+    user = fetch_user_by_user_id(slack_user_id)
+    if user is None:
+        error(logger, "User not found", slack_user_id=slack_user_id)
+        return None
+
+    # Update the privacy settings
+    updated_settings = {}
+    for field, is_public in data.items():
+        if user.update_privacy_setting(field, is_public):
+            updated_settings[field] = is_public
+        else:
+            warning(logger, f"Invalid privacy field: {field}")
+
+    # Save to database
+    upsert_profile_metadata(user)
+
+    # Clear cache for get_profile_metadata
+    get_profile_metadata.cache_clear()
+
+    return user.get_privacy_settings()
