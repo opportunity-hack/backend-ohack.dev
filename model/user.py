@@ -1,4 +1,11 @@
 metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "volunteering", "linkedin_url", "instagram_url", "propel_id"]
+privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url"]
+
+# Fields that should NEVER be shared publicly regardless of privacy settings
+pii_fields = ["email_address", "last_login", "propel_id", "volunteering"]
+
+# Fields that are always safe to share publicly (basic profile info)
+safe_public_fields = ["name", "nickname", "profile_image", "user_id"]
 
 class User:
     id = None
@@ -21,6 +28,7 @@ class User:
     history = {}
     volunteering = []
     propel_id = None
+    privacy_settings = {}
 
     @classmethod
     def deserialize(cls, d):
@@ -44,6 +52,7 @@ class User:
         u.why = d['why'] if 'why' in d else ''
         u.volunteering = d['volunteering'] if 'volunteering' in d else []
         u.propel_id = d['propel_id'] if 'propel_id' in d else None
+        u.privacy_settings = d['privacy_settings'] if 'privacy_settings' in d else {}
 
         # Handle history in a generic way
         '''
@@ -95,18 +104,60 @@ class User:
     def serialize_profile_metadata(self):
         d = {}
         props = dir(self)
-        for m in metadata_list:        
+        for m in metadata_list:
             if m in props:
                 d[m] = getattr(self, m)
 
+        # Add privacy settings
+        d['privacy_settings'] = self.get_privacy_settings()
         return d
     
     def update_from_metadata(self, d):
         props = dir(self)
-        for m in metadata_list:        
+        for m in metadata_list:
             if m in d and m in props:
                 setattr(self, m, d[m])
         return
+
+    def get_privacy_settings(self):
+        """Get privacy settings, initializing defaults if needed"""
+        if not self.privacy_settings:
+            self.privacy_settings = {field: True for field in privacy_fields}
+        return self.privacy_settings
+
+    def update_privacy_setting(self, field, is_public):
+        """Update a specific privacy setting"""
+        if field in privacy_fields:
+            if not self.privacy_settings:
+                self.privacy_settings = {field: True for field in privacy_fields}
+            self.privacy_settings[field] = is_public
+            return True
+        return False
+
+    def get_public_profile_data(self):
+        """Get profile data filtered by privacy settings, excluding PII"""
+        privacy_settings = self.get_privacy_settings()
+        public_data = {}
+
+        # Always include safe public fields
+        for field in safe_public_fields:
+            if hasattr(self, field) and getattr(self, field) is not None:
+                public_data[field] = getattr(self, field)
+
+        # Include privacy-controlled fields only if user made them public
+        for field in privacy_fields:
+            if field in pii_fields:
+                continue  # Never share PII fields
+
+            if hasattr(self, field) and privacy_settings.get(field, False):
+                field_value = getattr(self, field)
+                if field_value is not None and field_value != "":
+                    public_data[field] = field_value
+
+        # Include privacy settings themselves for the frontend to know what's public
+        public_data["privacy_settings"] = privacy_settings
+
+        return public_data
     
     def __str__(self):
         # Print all properties

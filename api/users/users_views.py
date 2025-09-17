@@ -80,17 +80,67 @@ def get_volunteering_time():
 @bp.route("/admin/volunteering", methods=["GET"])
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-def get_all_volunteering_time():        
+def get_all_volunteering_time():
     # Get url params
     start_date = request.args.get('startDate')
     end_date = request.args.get('endDate')
-    
+
     if auth_user and auth_user.user_id:
         allVolunteering, totalActiveHours, totalCommitmentHours = users_service.get_all_volunteering_time(start_date, end_date)
         return {
             "totalActiveHours": totalActiveHours,
             "totalCommitmentHours": totalCommitmentHours,
-            "volunteerSessions": allVolunteering            
+            "volunteerSessions": allVolunteering
         }
     else:
         return None
+
+
+@bp.route("/privacy-settings", methods=["GET"])
+@auth.require_user
+def get_privacy_settings():
+    """Get user's privacy settings"""
+    if auth_user and auth_user.user_id:
+        privacy_settings = users_service.get_privacy_settings(auth_user.user_id)
+        if privacy_settings is not None:
+            return {"privacy_settings": privacy_settings}
+        return {"privacy_settings": {}}
+    return {"error": "Unauthorized"}, 401
+
+
+@bp.route("/privacy-settings", methods=["PATCH"])
+@auth.require_user
+def update_privacy_settings():
+    """Update user's privacy settings"""
+    if auth_user and auth_user.user_id:
+        data = request.get_json()
+        if not data:
+            return {"error": "No data provided"}, 400
+
+        result = users_service.update_privacy_settings(auth_user.user_id, data)
+        if result:
+            return {
+                "privacy_settings": result,
+                "message": "Privacy settings updated successfully"
+            }
+        return {"error": "Failed to update privacy settings"}, 500
+    return {"error": "Unauthorized"}, 401
+
+
+# Privacy-aware public profile endpoints
+@bp.route("/<user_id>/profile/public", methods=["GET"])
+def get_public_profile_by_db_id(user_id):
+    """Get privacy-filtered public profile by database ID"""
+    profile_data = users_service.get_privacy_filtered_profile_by_db_id(user_id)
+    if profile_data:
+        return profile_data
+    return {"error": "User not found"}, 404
+
+
+@bp.route("/<user_id>/profile/privacy", methods=["GET"])
+def get_public_privacy_settings_by_db_id(user_id):
+    """Get public privacy settings by database ID (for frontend to know what's public)"""
+    privacy_settings = users_service.get_public_privacy_settings_by_db_id(user_id)
+    if privacy_settings is not None:
+        return {"privacy_settings": privacy_settings}
+    return {"error": "User not found"}, 404

@@ -408,3 +408,77 @@ def get_all_volunteering_time(start_date=None, end_date=None):
         processed_volunteering.append(processed_session)
     
     return processed_volunteering, total_active_hours, total_commitment_hours
+
+
+def get_privacy_settings(propel_id):
+    """Get privacy settings for a user"""
+    logger.info(f"Get Privacy Settings for {propel_id}")
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
+
+    # Get the user
+    user = fetch_user_by_user_id(slack_user_id)
+    if user is None:
+        error(logger, "User not found", slack_user_id=slack_user_id)
+        return None
+
+    return user.get_privacy_settings()
+
+
+def update_privacy_settings(propel_id, data):
+    """Update privacy settings for a user"""
+    logger.info(f"Update Privacy Settings for {propel_id} {data}")
+    slack_user = get_slack_user_from_propel_user_id(propel_id)
+    slack_user_id = slack_user["sub"]
+
+    # Get the user
+    user = fetch_user_by_user_id(slack_user_id)
+    if user is None:
+        error(logger, "User not found", slack_user_id=slack_user_id)
+        return None
+
+    # Update the privacy settings
+    updated_settings = {}
+    for field, is_public in data.items():
+        if user.update_privacy_setting(field, is_public):
+            updated_settings[field] = is_public
+        else:
+            warning(logger, f"Invalid privacy field: {field}")
+
+    # Save to database
+    upsert_profile_metadata(user)
+
+    # Clear cache for get_profile_metadata
+    get_profile_metadata.cache_clear()
+
+    return user.get_privacy_settings()
+
+
+def get_privacy_filtered_profile_by_db_id(db_id):
+    """Get privacy-filtered profile data by database ID"""
+    logger.debug(f"Get Privacy-Filtered Profile By DB ID: {db_id}")
+    user = get_user_profile_by_db_id(db_id)
+
+    if user is None:
+        logger.debug("User not found")
+        return None
+
+    # Get privacy-filtered public data
+    public_data = user.get_public_profile_data()
+    logger.debug(f"Privacy-Filtered Profile Result: {public_data}")
+    return public_data
+
+
+def get_public_privacy_settings_by_db_id(db_id):
+    """Get only the privacy settings for a user by database ID (for public profile views)"""
+    logger.debug(f"Get Public Privacy Settings By DB ID: {db_id}")
+    user = get_user_profile_by_db_id(db_id)
+
+    if user is None:
+        logger.debug("User not found")
+        return None
+
+    # Return only the privacy settings - no user data
+    privacy_settings = user.get_privacy_settings()
+    logger.debug(f"Public Privacy Settings Result: {privacy_settings}")
+    return privacy_settings
