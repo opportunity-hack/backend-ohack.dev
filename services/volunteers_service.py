@@ -1014,7 +1014,9 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
     volunteer_ref = db.collection('volunteers').document(volunteer['id'])
     
     update_data = {
-        'isCheckedIn': True,
+        'isCheckedIn': True, # This is meant just to track mentor Check-in status TODO: change this to mentorIsCheckedIn
+        'checkedIn': True, # This field is meant for in-person check-in, we'll also set it here
+        # We support this because we have mentors that can check themselves in online
         'checkInTime': current_time,
         'updated_timestamp': current_time
     }
