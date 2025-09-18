@@ -50,6 +50,8 @@ class Hackathon:
                 d[m] = []
             elif m == 'links':
                 pass #TODO
+            elif m == 'teams':
+                pass
             elif m == 'nonprofits':
                 #TODO
                 d[m] = []

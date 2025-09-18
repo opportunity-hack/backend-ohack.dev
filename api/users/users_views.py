@@ -96,7 +96,7 @@ def get_all_volunteering_time():
         return None
 
 
-@bp.route("/privacy-settings", methods=["GET"])
+@bp.route("/profile/privacy-settings", methods=["GET"])
 @auth.require_user
 def get_privacy_settings():
     """Get user's privacy settings"""
@@ -108,7 +108,7 @@ def get_privacy_settings():
     return {"error": "Unauthorized"}, 401
 
 
-@bp.route("/privacy-settings", methods=["PATCH"])
+@bp.route("/profile/privacy-settings", methods=["PATCH"])
 @auth.require_user
 def update_privacy_settings():
     """Update user's privacy settings"""
@@ -137,7 +137,7 @@ def get_public_profile_by_db_id(user_id):
     return {"error": "User not found"}, 404
 
 
-@bp.route("/<user_id>/profile/privacy", methods=["GET"])
+@bp.route("/<user_id>/profile/privacy-settings", methods=["GET"])
 def get_public_privacy_settings_by_db_id(user_id):
     """Get public privacy settings by database ID (for frontend to know what's public)"""
     privacy_settings = users_service.get_public_privacy_settings_by_db_id(user_id)

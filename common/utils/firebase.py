@@ -1177,7 +1177,10 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
         )
 
         # Stream the documents and convert to list of dicts also with their id from the database
-        volunteers = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]
+        volunteers = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]     
+
+        # With this dict, remove the "email" and "ageRange" and "shirtSize" and "dietaryRestrictions" field if it exists for each record without using pop
+        volunteers = [{k: v for k, v in volunteer.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for volunteer in volunteers]
 
         if not volunteers:
             logger.info(f"No {volunteer_type}s found for event_id={event_id}")
@@ -1186,7 +1189,9 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
 
         logger.info(f"Retrieved {len(volunteers)} {volunteer_type}s for event_id={event_id}")
         logger.debug(f"get {volunteer_type}s end (with results)")
+
         
+
         return {"data": volunteers}
 
     except Exception as e:

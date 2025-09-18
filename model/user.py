@@ -1,5 +1,5 @@
 metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "volunteering", "linkedin_url", "instagram_url", "propel_id"]
-privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url"]
+privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback"]
 
 # Fields that should NEVER be shared publicly regardless of privacy settings
 pii_fields = ["email_address", "last_login", "propel_id", "volunteering"]
@@ -89,17 +89,22 @@ class User:
         props = dir(self)     
         for m in props:
             if m == 'teams':
-                pass #TODO
+                #TODO
+                d[m] = []
             elif m == 'badges':
                 pass #TODO
             elif m == 'hackathons':
-                pass #TODO
+                # Use serialize_hackathons
+                d[m] = []
             elif not m.startswith('__'): # No magic please
                 p = getattr(self, m)
                 if not callable(p):
                     d[m] = p
 
         return d
+
+    def serialize_hackathons(self):
+        return [h.serialize() for h in self.hackathons] if self.hackathons else []
 
     def serialize_profile_metadata(self):
         d = {}
@@ -149,8 +154,9 @@ class User:
             if field in pii_fields:
                 continue  # Never share PII fields
 
-            if hasattr(self, field) and privacy_settings.get(field, False):
+            if hasattr(self, field) and privacy_settings.get(field, False) == "public":
                 field_value = getattr(self, field)
+
                 if field_value is not None and field_value != "":
                     public_data[field] = field_value
 
