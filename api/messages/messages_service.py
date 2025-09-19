@@ -285,7 +285,7 @@ def remove_nonprofit_from_hackathon(json):
     }
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=20))
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
     logger.debug(f"get_single_hackathon_id start id={id}")    
@@ -303,16 +303,16 @@ def get_single_hackathon_id(id):
         return result
     return {}
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=10))
 @limits(calls=2000, period=ONE_MINUTE)
-def get_volunteer_by_event(event_id, volunteer_type):
+def get_volunteer_by_event(event_id, volunteer_type, admin=False):
     logger.debug(f"get {volunteer_type} start event_id={event_id}")   
 
     if event_id is None:
         logger.warning(f"get {volunteer_type} end (no results)")
         return []
      
-    results = get_volunteer_from_db_by_event(event_id, volunteer_type)
+    results = get_volunteer_from_db_by_event(event_id, volunteer_type, admin=admin)
 
     if results is None:
         logger.warning(f"get {volunteer_type} end (no results)")

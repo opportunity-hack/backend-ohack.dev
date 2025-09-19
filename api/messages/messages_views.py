@@ -271,11 +271,14 @@ def get_volunteers_checked_in_by_event_api(event_id, volunteer_type):
     logger.info(f"GET /hackathon/{event_id}/{volunteer_type}/checked_in called")
     return (get_volunteer_checked_in_by_event(event_id, volunteer_type))
 
+
+
 @bp.route("/hackathon/<event_id>", methods=["GET"])
 def get_single_hackathon_by_event(event_id):
     logger.info(f"GET /hackathon/{event_id} called")
     return (get_single_hackathon_event(event_id))
 
+# -- Public APIs that call get_volunteer_by_event with admin=False
 @bp.route("/hackathon/<event_id>/mentor", methods=["GET"])
 def get_volunteer_mentor_by_event_api(event_id):
     logger.info(f"GET /hackathon/{event_id}/mentor called")
@@ -300,6 +303,38 @@ def get_volunteer_hacker_by_event_api(event_id):
 def get_volunteer_sponsor_by_event_api(event_id):
     logger.info(f"GET /hackathon/{event_id}/sponsor called")
     return (get_volunteer_by_event(event_id, "sponsor"))
+
+# -- Admin APIs that call get_volunteer_by_event with admin=True
+@bp.route("/admin/hackathon/<event_id>/mentor", methods=["GET"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_volunteer_mentor_by_event_admin_api(event_id):
+    logger.info(f"GET /admin/hackathon/{event_id}/mentor called")
+    return (get_volunteer_by_event(event_id, "mentor", admin=True))
+
+@bp.route("/admin/hackathon/<event_id>/judge", methods=["GET"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_volunteer_judge_by_event_admin_api(event_id):
+    logger.info(f"GET /admin/hackathon/{event_id}/judge called")
+    return (get_volunteer_by_event(event_id, "judge", admin=True))
+
+@bp.route("/admin/hackathon/<event_id>/volunteer", methods=["GET"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_volunteer_volunteers_by_event_admin_api(event_id):
+    logger.info(f"GET /admin/hackathon/{event_id}/volunteer called")
+    return (get_volunteer_by_event(event_id, "volunteer", admin=True))
+
+@bp.route("/admin/hackathon/<event_id>/hacker", methods=["GET"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_volunteer_hacker_by_event_admin_api(event_id):
+    logger.info(f"GET /admin/hackathon/{event_id}/hacker called")
+    return (get_volunteer_by_event(event_id, "hacker", admin=True))
+
+@bp.route("/admin/hackathon/<event_id>/sponsor", methods=["GET"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_volunteer_sponsor_by_event_admin_api(event_id):
+    logger.info(f"GET /admin/hackathon/{event_id}/sponsor called")
+    return (get_volunteer_by_event(event_id, "sponsor", admin=True))
+
 
 # ------------------- PATCH ------------------- #
 @bp.route("/hackathon/<event_id>/mentor", methods=["PATCH"])
