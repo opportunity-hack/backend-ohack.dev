@@ -9,7 +9,7 @@ from common.utils.redis_cache import redis_cached, clear_pattern
 logger = get_logger(__name__)
 
 @redis_cached(prefix="slack:active_users", ttl=10)  # Cache for 10 seconds
-def get_active_users(days: int = 30, include_presence: bool = False, minimum_presence: str = None) -> List[Dict[str, Any]]:
+def get_active_users(days: int = 30, include_presence: bool = False, minimum_presence: str = None, admin: bool = False) -> List[Dict[str, Any]]:
     """
     Get active Slack users based on their activity within the specified time period.
     
@@ -54,13 +54,15 @@ def get_active_users(days: int = 30, include_presence: bool = False, minimum_pre
                 "name": member["name"],
                 "real_name": member.get("real_name", ""),
                 "display_name": member["profile"].get("display_name", ""),
-                # "email": member["profile"].get("email", ""),
                 "title": member["profile"].get("title", ""),
                 "last_active": updated_date.isoformat(),
                 "is_admin": member.get("is_admin", False),
                 "tz": member.get("tz", "")
             }
-            
+            # If admin, add email
+            if admin:
+                user_info["email"] = member["profile"].get("email", "")
+
             # Add presence information if requested
             if include_presence and not member.get("deleted", False):
                 try:
