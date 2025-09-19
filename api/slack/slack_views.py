@@ -14,20 +14,21 @@ logger = get_logger("slack_views")
 logger.setLevel(logging.DEBUG)
 bp = Blueprint('slack', __name__, url_prefix='/api')
 
-@bp.route("/slack/users/active", methods=["GET"])
+def getOrgId(req):
+    # Get the org_id from the req
+    return req.headers.get("X-Org-Id")
+
+@bp.route("/slack/admin/users/active", methods=["GET"])
 @auth.require_user
-def active_users():
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_active_users():
     """
     API endpoint to get active Slack users within a specified time period.
-    
-    Query parameters:
-        days: Number of days to look back for activity (default: 30)
-        include_presence: Whether to include current presence information (default: false)
-        minimum_presence: Filter by minimum presence status ('active' or 'away')
-        
-    Returns:
-        JSON response with list of active users
     """
+    return active_users_helper(admin=True)
+
+
+def active_users_helper(admin=False):
     try:
         # Parse query parameters
         days = request.args.get('active_days', default=30, type=int)
@@ -42,7 +43,7 @@ def active_users():
             raise ValidationError("Minimum presence must be either 'active' or 'away'")
         
         # Get active users
-        users = get_active_users(days=days, include_presence=include_presence, minimum_presence=minimum_presence)
+        users = get_active_users(days=days, include_presence=include_presence, minimum_presence=minimum_presence, admin=admin)
         
         return jsonify({
             "success": True,
@@ -63,6 +64,23 @@ def active_users():
             "success": False,
             "error": "Failed to retrieve active Slack users"
         }), 500
+
+@bp.route("/slack/users/active", methods=["GET"])
+@auth.require_user
+def active_users():
+    """
+    API endpoint to get active Slack users within a specified time period.
+    
+    Query parameters:
+        days: Number of days to look back for activity (default: 30)
+        include_presence: Whether to include current presence information (default: false)
+        minimum_presence: Filter by minimum presence status ('active' or 'away')
+        
+    Returns:
+        JSON response with list of active users
+    """
+    return active_users_helper(admin=False)
+
 
 @bp.route("/slack/users/<user_id>", methods=["GET"])
 @auth.require_user

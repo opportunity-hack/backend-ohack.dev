@@ -953,7 +953,7 @@ def get_mentor_checkin_status(user_id: str, event_id: str) -> Dict[str, Any]:
     return {
         'success': True,
         'isCheckedIn': volunteer.get('isCheckedIn', False),
-        'checkInTime': volunteer.get('checkInTime', None),
+        'checkInTime': volunteer.get('checkInTime', None),        
         'timeSlot': volunteer.get('timeSlot', None)
     }
 
@@ -1018,6 +1018,8 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
         'checkedIn': True, # This field is meant for in-person check-in, we'll also set it here
         # We support this because we have mentors that can check themselves in online
         'checkInTime': current_time,
+        # Also add this to checkInTimeList
+        'checkInTimeList': firestore.ArrayUnion([current_time]),
         'updated_timestamp': current_time
     }
     
@@ -1100,6 +1102,9 @@ def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
     update_data = {
         'isCheckedIn': False,
         'checkOutTime': current_time,
+        
+        # Also add to checkoutTimeList or add if it doesn't exist
+        'checkoutTimeList': firestore.ArrayUnion([current_time]),
         'updated_timestamp': current_time
     }
     
@@ -1178,7 +1183,7 @@ def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optio
 {f"*LinkedIn:* {linked_in}" if linked_in else ""}
 {f"*In-Person:* {in_person}" if in_person else ""}
 
-Teams needing help in these areas can reach out to directly or #ask-a-mentor so everyone can benefit from their expertise.
+If you're a hacker and need help, reach out to {name_mention} directly or #ask-a-mentor so everyone can benefit from their expertise and answers.
 """
     
     try:

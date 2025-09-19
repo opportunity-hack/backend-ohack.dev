@@ -1149,7 +1149,7 @@ def get_volunteer_checked_in_from_db_by_event(event_id: str, volunteer_type: str
         logger.error(f"Error retrieving checked-in {volunteer_type}s: {str(e)}")
         return {"data": [], "error": str(e)}
 
-def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
+def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str, admin: bool = False) -> dict:
     """
     Retrieve volunteers for a specific event and type.
 
@@ -1180,7 +1180,8 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str) -> dict:
         volunteers = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]     
 
         # With this dict, remove the "email" and "ageRange" and "shirtSize" and "dietaryRestrictions" field if it exists for each record without using pop
-        volunteers = [{k: v for k, v in volunteer.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for volunteer in volunteers]
+        if not admin:
+            volunteers = [{k: v for k, v in volunteer.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for volunteer in volunteers]
 
         if not volunteers:
             logger.info(f"No {volunteer_type}s found for event_id={event_id}")
