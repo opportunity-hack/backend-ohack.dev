@@ -1559,7 +1559,7 @@ def send_hackathon_request_email(contact_name, contact_email, request_id):
         contact_name = "Event Organizer"
 
     params = {
-        "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+        "from": "Opportunity Hack <welcome@notifs.ohack.org>",
         "to": f"{contact_name} <{contact_email}>",
         "cc": "questions@ohack.org",
         "reply_to": "questions@ohack.org",
@@ -2009,7 +2009,7 @@ def send_nonprofit_welcome_email(organization_name, contact_name, email):
         contact_name = "Nonprofit Friend"
 
     params = {
-        "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+        "from": "Opportunity Hack <welcome@notifs.ohack.org>",
         "to": f"{contact_name} <{email}>",
         "cc": "questions@ohack.org",
         "reply_to": "questions@ohack.org",
@@ -2085,7 +2085,7 @@ def send_welcome_email(name, email):
     
 
     params = {
-        "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+        "from": "Opportunity Hack <welcome@notifs.ohack.org>",
         "to": f"{name} <{email}>",
         "cc": "questions@ohack.org",
         "reply_to": "questions@ohack.org",
@@ -2648,7 +2648,7 @@ def notify_feedback_receiver(feedback_receiver_id):
             </html>
             """
             params = {
-                "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+                "from": "Opportunity Hack <welcome@notifs.ohack.org>",
                 "to": f"{user_data.get('name', 'User')} <{user_email}>",
                 "bcc": "greg@ohack.org",
                 "subject": subject,

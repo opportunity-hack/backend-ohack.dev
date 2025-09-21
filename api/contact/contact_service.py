@@ -156,7 +156,7 @@ def send_confirmation_email(contact_data) -> bool:
         }.get(contact_data.get('inquiryType', ''), contact_data.get('inquiryType', 'General Inquiry'))
         
         params = {
-            "from": "Opportunity Hack <welcome@apply.ohack.dev>",
+            "from": "Opportunity Hack <welcome@notifs.ohack.org>",
             "to": [email],
             "reply_to": "questions@ohack.org",
             "cc": ["questions@ohack.org"],
