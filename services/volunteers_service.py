@@ -926,8 +926,13 @@ def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:
     """
     db = get_db()
     hackers = db.collection('volunteers').where('event_id', '==', event_id).where('volunteer_type', '==', 'hacker').stream()
-    
-    return [hacker.to_dict() for hacker in hackers] if hackers else []
+    hacker_dict = [hacker.to_dict() for hacker in hackers] if hackers else []
+
+    # Remove sensitive info from the fields like: volunteers = [{k: v for k, v in volunteer.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for volunteer in volunteers]
+    hacker_dict = [{k: v for k, v in hacker.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for hacker in hacker_dict]
+    return hacker_dict
+
+
 
 
 def get_mentor_checkin_status(user_id: str, event_id: str) -> Dict[str, Any]:
