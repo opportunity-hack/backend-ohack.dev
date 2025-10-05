@@ -1,4 +1,4 @@
-from typing import Dict, List, Optional, Union, Any
+from typing import Dict, List, Optional, Union, Any, Tuple
 import uuid
 from datetime import datetime
 import pytz
@@ -1377,9 +1377,189 @@ def _convert_markdown_to_slack_format(message: str) -> str:
         exception(logger, "Error converting markdown to Slack format", exc_info=e)
         return message  # Return original message if conversion fails
 
+def _process_qr_code_in_message(message: str) -> Tuple[str, str, List[Dict[str, Any]]]:
+    """
+    Process QR code placeholders in message and generate attachments.
+
+    Args:
+        message: The original message content
+
+    Returns:
+        Tuple of (message_for_slack, message_for_email, qr_code_attachments)
+    """
+    message_for_slack = _convert_markdown_to_slack_format(message)
+    message_for_email = message
+    qr_code_attachments = []
+
+    qr_code_pattern = r'\[QRCode:(.*?)\]'
+    match = re.search(qr_code_pattern, message)
+    if match:
+        qr_code_content = match.group(1)
+        # Remove [QRCode:] from the message for Slack
+        message_for_slack = re.sub(qr_code_pattern, '', message_for_slack).strip()
+
+        # Generate the QR code for email using Resend's inline image approach
+        qr_code_image = generate_qr_code(qr_code_content)
+        qr_code_base64 = base64.b64encode(qr_code_image).decode('utf-8')
+
+        # Create inline image attachment with content_id
+        qr_code_attachments.append({
+            "content": qr_code_base64,
+            "filename": "qr_code.png",
+            "content_type": "image/png",
+            "content_id": "qr-code-image"
+        })
+
+        # Replace placeholder with cid reference
+        qr_code_placeholder = f'[QRCode:{qr_code_content}]'
+        message_for_email = message.replace(qr_code_placeholder, f'<img src="cid:qr-code-image" alt="QR Code" style="max-width: 200px; height: auto;" />')
+
+    return message_for_slack, message_for_email, qr_code_attachments
+
+
+def _send_slack_message_to_user(
+    slack_user_id: str,
+    message: str,
+    volunteer_type: str,
+    volunteer_id: Optional[str] = None,
+    recipient_type: Optional[str] = None
+) -> Tuple[bool, Optional[str]]:
+    """
+    Send a Slack message to a user.
+
+    Args:
+        slack_user_id: The Slack user ID
+        message: The message content (already converted to Slack format)
+        volunteer_type: Type of volunteer
+        volunteer_id: Optional volunteer ID for logging
+        recipient_type: Optional recipient type for logging
+
+    Returns:
+        Tuple of (success, error_message)
+    """
+    try:
+        slack_message = f"📧 *Message from Opportunity Hack Team*\n\n{message}\n\n_This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack._"
+        send_slack(message=slack_message, channel=slack_user_id)
+        info(logger, "Slack message sent to user",
+             volunteer_id=volunteer_id, slack_user_id=slack_user_id, recipient_type=recipient_type)
+        return True, None
+    except Exception as slack_error:
+        error(logger, "Failed to send Slack message to user",
+              volunteer_id=volunteer_id, exc_info=slack_error)
+        return False, str(slack_error)
+
+
+def _send_email_to_user(
+    email: str,
+    name: str,
+    subject: str,
+    message: str,
+    recipient_type: str,
+    volunteer_type: str,
+    qr_code_attachments: Optional[List[Dict[str, Any]]] = None,
+    volunteer_id: Optional[str] = None
+) -> Tuple[bool, Optional[str]]:
+    """
+    Send an email to a user.
+
+    Args:
+        email: The recipient email address
+        name: The recipient name
+        subject: The email subject
+        message: The message content (may contain HTML/markdown)
+        recipient_type: Type of recipient
+        volunteer_type: Type of volunteer
+        qr_code_attachments: Optional QR code attachments
+        volunteer_id: Optional volunteer ID for logging
+
+    Returns:
+        Tuple of (success, error_message)
+    """
+    import html
+    try:
+        # Configure resend
+        resend.api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
+
+        # Convert markdown to HTML
+        try:
+            formatted_message = markdown.markdown(message, extensions=['nl2br', 'fenced_code'])
+        except Exception as markdown_error:
+            warning(logger, "Failed to convert markdown, falling back to basic formatting", exc_info=markdown_error)
+            escaped_message = html.escape(message)
+            formatted_message = escaped_message.replace('\n', '<br>')
+
+        email_subject = f"{subject} - Message from Opportunity Hack Team"
+
+        # Enhanced greeting based on recipient type
+        greeting_map = {
+            'mentor': 'Dear Mentor',
+            'sponsor': 'Dear Sponsor',
+            'judge': 'Dear Judge',
+            'hacker': 'Dear Participant',
+            'volunteer': 'Dear Volunteer'
+        }
+        greeting = greeting_map.get(recipient_type.lower(), 'Dear Volunteer')
+
+        # Create HTML email content
+        html_content = f"""
+            <h2>{greeting} {html.escape(name)},</h2>
+            <p>You have received a message from the Opportunity Hack team:</p>
+            <div style="background-color: #f5f5f5; padding: 15px; border-left: 4px solid #007bff; margin: 15px 0; font-family: Arial, sans-serif;">
+                <p style="white-space: pre-wrap; margin: 0;">{formatted_message}</p>
+            </div>
+            <p>Best regards,<br>The Opportunity Hack Team</p>
+
+            <!-- Social Media Footer -->
+            <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 8px; text-align: center;">
+                <h3 style="color: #2c3e50; margin-bottom: 15px; font-size: 16px;">🌟 Stay Connected with Opportunity Hack!</h3>
+                <p style="margin-bottom: 15px; color: #34495e;">Follow us for updates, volunteer opportunities, and inspiring stories from our community:</p>
+                <div style="margin: 15px 0;">
+                    <a href="https://www.instagram.com/opportunityhack/" style="text-decoration: none; margin: 0 8px; color: #E4405F;">📸 Instagram</a> |
+                    <a href="https://www.facebook.com/OpportunityHack/" style="text-decoration: none; margin: 0 8px; color: #1877F2;">👥 Facebook</a> |
+                    <a href="https://www.linkedin.com/company/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #0A66C2;">💼 LinkedIn</a> |
+                    <a href="https://www.threads.net/@opportunityhack" style="text-decoration: none; margin: 0 8px; color: #000;">🧵 Threads</a>
+                </div>
+                <div style="margin: 10px 0;">
+                    <a href="https://slack.ohack.dev" style="text-decoration: none; margin: 0 8px; color: #4A154B;">💬 Join Slack</a> |
+                    <a href="https://twitter.com/opportunityhack" style="text-decoration: none; margin: 0 8px; color: #1DA1F2;">🐦 Twitter</a> |
+                    <a href="https://github.com/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #333;">💻 GitHub</a>
+                </div>
+                <p style="font-size: 12px; color: #666; margin-top: 15px;">Help us make a bigger impact - share our mission with your network! 🚀</p>
+            </div>
+
+            <hr>
+            <p style="font-size: 12px; color: #666;">
+                This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack.
+            </p>
+            """
+
+        # Send email
+        params = {
+            "from": "Opportunity Hack <welcome@notifs.ohack.org>",
+            "to": [email],
+            "reply_to": "Opportunity Hack Questions <questions@ohack.org>",
+            "subject": email_subject,
+            "html": html_content,
+        }
+
+        # Add QR code attachments if they exist
+        if qr_code_attachments:
+            params["attachments"] = qr_code_attachments
+
+        email_result = resend.Emails.send(params)
+        info(logger, "Email sent to user",
+             volunteer_id=volunteer_id, email=email, result=email_result, recipient_type=recipient_type)
+        return True, None
+
+    except Exception as email_error:
+        error(logger, "Failed to send email to user",
+              volunteer_id=volunteer_id, exc_info=email_error)
+        return False, str(email_error)
+
+
 def send_volunteer_message(
-    volunteer_id: str, 
-    message: str, 
+    volunteer_id: str,
+    message: str,
     subject: str,
     admin_user_id: str,
     admin_user: Any = None,
@@ -1388,67 +1568,40 @@ def send_volunteer_message(
 ) -> Dict[str, Any]:
     """
     Send a message to a volunteer via Slack and email.
-    
+
     Args:
         volunteer_id: The ID of the volunteer to message
         message: The message content to send
+        subject: The email subject
         admin_user_id: The user ID of the admin sending the message
+        admin_user: The admin user object
         recipient_type: Type of recipient (mentor, sponsor, judge, volunteer, hacker, etc.)
         recipient_id: Optional specific recipient ID for enhanced context
-        
+
     Returns:
         Dict containing delivery status and volunteer information
     """
     from db.db import get_db
-    import html            
+
     try:
         # Get volunteer by ID from the volunteers collection
         db = get_db()
         volunteer_doc = db.collection('volunteers').document(volunteer_id).get()
-        
+
         if not volunteer_doc.exists:
             return {
                 'success': False,
                 'error': 'Volunteer not found',
                 'volunteer_id': volunteer_id
             }
-        
+
         volunteer = volunteer_doc.to_dict()
-        
+
         # Extract contact information from volunteer data
         email = volunteer.get('email')
         slack_user_id = volunteer.get('slack_user_id')
         name = volunteer.get('name', 'Volunteer')
         volunteer_type = volunteer.get('volunteer_type', recipient_type)
-
-        # If the message contains [QRCode:<content>] then extract the QR code content
-        message_for_slack = _convert_markdown_to_slack_format(message)
-        message_for_email = message
-        qr_code_attachments = []
-        
-        qr_code_content = None
-        qr_code_pattern = r'\[QRCode:(.*?)\]'
-        match = re.search(qr_code_pattern, message)
-        if match:
-            qr_code_content = match.group(1)
-            # Remove [QRCode:] from the message for message_for_slack
-            message_for_slack = re.sub(qr_code_pattern, '', message_for_slack).strip()
-
-            # Generate the QR code for email using Resend's inline image approach
-            qr_code_image = generate_qr_code(qr_code_content)
-            qr_code_base64 = base64.b64encode(qr_code_image).decode('utf-8')
-            
-            # Create inline image attachment with content_id
-            qr_code_attachments.append({
-                "content": qr_code_base64,
-                "filename": "qr_code.png",
-                "content_type": "image/png",
-                "content_id": "qr-code-image"
-            })
-            
-            # Replace placeholder with cid reference
-            qr_code_placeholder = f'[QRCode:{qr_code_content}]'
-            message_for_email = message.replace(qr_code_placeholder, f'<img src="cid:qr-code-image" alt="QR Code" style="max-width: 200px; height: auto;" />')
 
         if not email:
             return {
@@ -1456,7 +1609,10 @@ def send_volunteer_message(
                 'error': 'Volunteer email not found',
                 'volunteer_id': volunteer_id
             }
-        
+
+        # Process QR code in message
+        message_for_slack, message_for_email, qr_code_attachments = _process_qr_code_in_message(message)
+
         # Track message delivery status
         delivery_status = {
             'slack_sent': False,
@@ -1464,142 +1620,69 @@ def send_volunteer_message(
             'slack_error': None,
             'email_error': None
         }
-        
+
         # Send Slack message if slack_user_id is available
         if slack_user_id:
-            try:
-                # Enhanced Slack message with context - message_for_slack is already converted to Slack format
-                slack_message = f"📧 *Message from Opportunity Hack Team*\n\n{message_for_slack}\n\n_This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack._"
-                send_slack(message=slack_message, channel=slack_user_id)
-                delivery_status['slack_sent'] = True
-                info(logger, "Slack message sent to volunteer", 
-                     volunteer_id=volunteer_id, slack_user_id=slack_user_id, recipient_type=recipient_type)
-            except Exception as slack_error:
-                delivery_status['slack_error'] = str(slack_error)
-                error(logger, "Failed to send Slack message to volunteer", 
-                      volunteer_id=volunteer_id, exc_info=slack_error)
-        
-        # Send email message using the resend service
-        try:
-            # Configure resend
-            resend.api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
-            
-            # Convert markdown to HTML first, then handle any remaining newlines
-            # Use message_for_email which may contain the QR code image
-            email_message = message_for_email if message_for_email else message
-            try:
-                # Convert markdown to HTML
-                formatted_message = markdown.markdown(email_message, extensions=['nl2br', 'fenced_code'])
-            except Exception as markdown_error:
-                # Fallback to basic HTML escaping and newline conversion if markdown fails
-                warning(logger, "Failed to convert markdown, falling back to basic formatting", exc_info=markdown_error)
-                escaped_message = html.escape(email_message)
-                formatted_message = escaped_message.replace('\n', '<br>')
-            
-            email_subject = f"{subject} - Message from Opportunity Hack Team"
-            
-            # Enhanced greeting based on recipient type
-            greeting_map = {
-                'mentor': 'Dear Mentor',
-                'sponsor': 'Dear Sponsor',
-                'judge': 'Dear Judge',
-                'hacker': 'Dear Participant',
-                'volunteer': 'Dear Volunteer'
-            }
-            greeting = greeting_map.get(recipient_type.lower(), 'Dear Volunteer')
-            
-            # Create HTML email content
-            html_content = f"""
-                <h2>{greeting} {html.escape(name)},</h2>
-                <p>You have received a message from the Opportunity Hack team:</p>
-                <div style="background-color: #f5f5f5; padding: 15px; border-left: 4px solid #007bff; margin: 15px 0; font-family: Arial, sans-serif;">
-                    <p style="white-space: pre-wrap; margin: 0;">{formatted_message}</p>
-                </div>                
-                <p>Best regards,<br>The Opportunity Hack Team</p>
-                
-                <!-- Social Media Footer -->
-                <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 8px; text-align: center;">
-                    <h3 style="color: #2c3e50; margin-bottom: 15px; font-size: 16px;">🌟 Stay Connected with Opportunity Hack!</h3>
-                    <p style="margin-bottom: 15px; color: #34495e;">Follow us for updates, volunteer opportunities, and inspiring stories from our community:</p>
-                    <div style="margin: 15px 0;">
-                        <a href="https://www.instagram.com/opportunityhack/" style="text-decoration: none; margin: 0 8px; color: #E4405F;">📸 Instagram</a> |
-                        <a href="https://www.facebook.com/OpportunityHack/" style="text-decoration: none; margin: 0 8px; color: #1877F2;">👥 Facebook</a> |
-                        <a href="https://www.linkedin.com/company/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #0A66C2;">💼 LinkedIn</a> |
-                        <a href="https://www.threads.net/@opportunityhack" style="text-decoration: none; margin: 0 8px; color: #000;">🧵 Threads</a>
-                    </div>
-                    <div style="margin: 10px 0;">
-                        <a href="https://slack.ohack.dev" style="text-decoration: none; margin: 0 8px; color: #4A154B;">💬 Join Slack</a> |
-                        <a href="https://twitter.com/opportunityhack" style="text-decoration: none; margin: 0 8px; color: #1DA1F2;">🐦 Twitter</a> |
-                        <a href="https://github.com/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #333;">💻 GitHub</a>
-                    </div>
-                    <p style="font-size: 12px; color: #666; margin-top: 15px;">Help us make a bigger impact - share our mission with your network! 🚀</p>
-                </div>
-                
-                <hr>
-                <p style="font-size: 12px; color: #666;">
-                    This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack.
-                </p>
-                """
-            
-            # Send email
-            params = {
-                "from": "Opportunity Hack <welcome@notifs.ohack.org>",
-                "to": [email],
-                "reply_to": "Opportunity Hack Questions <questions@ohack.org>",
-                "subject": email_subject,
-                "html": html_content,
-            }
-            
-            # Add QR code attachments if they exist
-            if qr_code_attachments:
-                params["attachments"] = qr_code_attachments
-            
-            email_result = resend.Emails.send(params)
-            delivery_status['email_sent'] = True
-            info(logger, "Email sent to volunteer", 
-                 volunteer_id=volunteer_id, email=email, result=email_result, recipient_type=recipient_type)
-            
-        except Exception as email_error:
-            delivery_status['email_error'] = str(email_error)
-            error(logger, "Failed to send email to volunteer", 
-                  volunteer_id=volunteer_id, exc_info=email_error)
-        
+            slack_success, slack_error = _send_slack_message_to_user(
+                slack_user_id=slack_user_id,
+                message=message_for_slack,
+                volunteer_type=volunteer_type,
+                volunteer_id=volunteer_id,
+                recipient_type=recipient_type
+            )
+            delivery_status['slack_sent'] = slack_success
+            delivery_status['slack_error'] = slack_error
+
+        # Send email message
+        email_success, email_error = _send_email_to_user(
+            email=email,
+            name=name,
+            subject=subject,
+            message=message_for_email,
+            recipient_type=recipient_type,
+            volunteer_type=volunteer_type,
+            qr_code_attachments=qr_code_attachments,
+            volunteer_id=volunteer_id
+        )
+        delivery_status['email_sent'] = email_success
+        delivery_status['email_error'] = email_error
+
         # Update volunteer document with message tracking
         try:
-            # Combine first_name and last_name for full name, don't use get but use .first_name and .last_name directly
             admin_full_name = f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "Admin"
-           
-            message_record = {                
+            email_subject = f"{subject} - Message from Opportunity Hack Team"
+
+            message_record = {
                 'subject': email_subject,
                 'timestamp': _get_current_timestamp(),
                 'sent_by': admin_full_name,
                 'recipient_type': recipient_type,
                 'delivery_status': delivery_status
             }
-            
+
             # Add the message to the volunteer's messages_sent array
             volunteer_ref = db.collection('volunteers').document(volunteer_id)
             volunteer_ref.update({
                 'messages_sent': firestore.ArrayUnion([message_record]),
                 'last_message_timestamp': _get_current_timestamp(),
                 'updated_timestamp': _get_current_timestamp()
-            })                    
+            })
             user_id = volunteer.get('user_id', '')
 
-            info(logger, "Updated volunteer document with message tracking", 
+            info(logger, "Updated volunteer document with message tracking",
                  volunteer_id=volunteer_id, message_timestamp=message_record['timestamp'])
-            
+
             _clear_volunteer_caches(
                 user_id=user_id,
                 email=email,
                 event_id=volunteer.get('event_id', ''),
                 volunteer_type=volunteer_type
             )
-                 
+
         except Exception as tracking_error:
-            error(logger, "Failed to update volunteer document with message tracking", 
+            error(logger, "Failed to update volunteer document with message tracking",
                   volunteer_id=volunteer_id, exc_info=tracking_error)
-        
+
         # Enhanced Slack audit message with recipient context
         from common.utils.slack import send_slack_audit
         message_preview = message[:100] + "..." if len(message) > 100 else message
@@ -1617,10 +1700,10 @@ def send_volunteer_message(
                 "delivery_status": delivery_status
             }
         )
-        
+
         # Determine success based on whether at least one message was sent
         success = delivery_status['slack_sent'] or delivery_status['email_sent']
-        
+
         result = {
             'success': success,
             'volunteer_id': volunteer_id,
@@ -1632,22 +1715,112 @@ def send_volunteer_message(
             'volunteer_type': volunteer_type,
             'delivery_status': delivery_status
         }
-        
+
         if not success:
             result['error'] = (
                 f"Failed to send message via both Slack and email. "
                 f"Slack error: {delivery_status['slack_error']}. "
                 f"Email error: {delivery_status['email_error']}"
             )
-        
+
         return result
-        
+
     except Exception as e:
-        error(logger, "Error sending message to volunteer", 
+        error(logger, "Error sending message to volunteer",
               volunteer_id=volunteer_id, exc_info=e)
         return {
             'success': False,
             'error': f"Failed to send message: {str(e)}",
             'volunteer_id': volunteer_id,
             'recipient_type': recipient_type
+        }
+
+
+def send_email_to_address(
+    email: str,
+    message: str,
+    subject: str,
+    admin_user_id: str,
+    admin_user: Any = None,
+    recipient_type: str = 'volunteer',
+    name: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Send an email to a specific email address using the same template as send_volunteer_message.
+
+    Args:
+        email: The recipient email address
+        message: The message content to send
+        subject: The email subject
+        admin_user_id: The user ID of the admin sending the message
+        admin_user: The admin user object
+        recipient_type: Type of recipient (mentor, sponsor, judge, volunteer, hacker, etc.)
+        name: Optional recipient name (defaults to 'Volunteer')
+
+    Returns:
+        Dict containing delivery status
+    """
+    try:
+        if not email or '@' not in email:
+            return {
+                'success': False,
+                'error': 'Valid email address is required'
+            }
+
+        # Use provided name or default
+        recipient_name = name or 'Volunteer'
+
+        # Process QR code in message
+        _, message_for_email, qr_code_attachments = _process_qr_code_in_message(message)
+
+        # Send email message
+        email_success, email_error = _send_email_to_user(
+            email=email,
+            name=recipient_name,
+            subject=subject,
+            message=message_for_email,
+            recipient_type=recipient_type,
+            volunteer_type=recipient_type,
+            qr_code_attachments=qr_code_attachments,
+            volunteer_id=None
+        )
+
+        # Enhanced Slack audit message
+        from common.utils.slack import send_slack_audit
+        message_preview = message[:100] + "..." if len(message) > 100 else message
+        admin_full_name = f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "Admin"
+
+        send_slack_audit(
+            action="admin_send_email_to_address",
+            message=f"Admin {admin_full_name} sent email to {email}",
+            payload={
+                "recipient_email": email,
+                "recipient_name": recipient_name,
+                "recipient_type": recipient_type,
+                "message_preview": message_preview,
+                "email_sent": email_success,
+                "email_error": email_error
+            }
+        )
+
+        result = {
+            'success': email_success,
+            'recipient_email': email,
+            'recipient_name': recipient_name,
+            'recipient_type': recipient_type,
+            'email_sent': email_success,
+            'email_error': email_error
+        }
+
+        if not email_success:
+            result['error'] = f"Failed to send email: {email_error}"
+
+        return result
+
+    except Exception as e:
+        error(logger, "Error sending email to address", email=email, exc_info=e)
+        return {
+            'success': False,
+            'error': f"Failed to send email: {str(e)}",
+            'recipient_email': email
         }

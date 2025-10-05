@@ -15,6 +15,7 @@ from services.volunteers_service import (
     mentor_checkin,
     mentor_checkout,
     send_volunteer_message,
+    send_email_to_address,
 )
 from common.auth import auth, auth_user
 
@@ -553,10 +554,10 @@ def admin_send_volunteer_message(volunteer_id):
             return _error_response("Message is required", 400)
 
         # Use the service function to send the message
-        if auth_user and auth_user.user_id: 
+        if auth_user and auth_user.user_id:
             result = send_volunteer_message(
-                volunteer_id=volunteer_id, 
-                message=message, 
+                volunteer_id=volunteer_id,
+                message=message,
                 subject=subject,
                 admin_user_id=auth_user.user_id,
                 admin_user=auth_user,
@@ -578,3 +579,46 @@ def admin_send_volunteer_message(volunteer_id):
     except Exception as e:
         logger.error("Error in admin_send_volunteer_message: %s", str(e))
         return _error_response(f"Failed to send message: {str(e)}")
+
+
+@bp.route('/admin/email/send', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_send_email_to_address():
+    """Admin endpoint to send an email to a specific email address."""
+    try:
+        # Process request data
+        request_data = _process_request()
+        email = request_data.get('email')
+        message = request_data.get('message')
+        subject = request_data.get('subject', 'Message from Opportunity Hack Team')
+        recipient_type = request_data.get('recipient_type', 'volunteer')
+        name = request_data.get('name')
+
+        if not email:
+            return _error_response("Email address is required", 400)
+
+        if not message:
+            return _error_response("Message is required", 400)
+
+        # Use the service function to send the email
+        if auth_user and auth_user.user_id:
+            result = send_email_to_address(
+                email=email,
+                message=message,
+                subject=subject,
+                admin_user_id=auth_user.user_id,
+                admin_user=auth_user,
+                recipient_type=recipient_type,
+                name=name
+            )
+
+            if result['success']:
+                return _success_response(result, "Email sent successfully")
+
+            return _error_response(result.get('error', 'Unknown error'), 500)
+
+        return _error_response("Authentication required", 401)
+
+    except Exception as e:
+        logger.error("Error in admin_send_email_to_address: %s", str(e))
+        return _error_response(f"Failed to send email: {str(e)}")
