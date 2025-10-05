@@ -199,6 +199,26 @@ def is_channel_id(channel_id):
         return False    
 
 
+def add_bot_to_channel(channel_id):
+    logger.debug("add_bot_to_channel start")
+    client = get_client()       
+    
+    if channel_id is None:
+        logger.error(f"Channel ID is None, cannot add bot")
+        return    
+
+    # Have the bot join the channel first
+    try:
+        client.conversations_join(channel=channel_id)
+    except Exception as e:
+        logger.error(f"Error joining channel {channel_id}: {e} this might be okay if the bot is already in the channel.")
+        # Log stack trace
+        logger.error(e, exc_info=True)
+        return
+
+    logger.debug("add_bot_to_channel end")
+    return True
+
 def invite_user_to_channel(user_id, channel_name):
     logger.debug("invite_user_to_channel start")
     client = get_client()
@@ -223,13 +243,7 @@ def invite_user_to_channel(user_id, channel_name):
         return    
 
     # Have the bot join the channel first
-    try:
-        client.conversations_join(channel=channel_id)
-    except Exception as e:
-        logger.error(f"Error joining channel {channel_id}: {e} this might be okay if the bot is already in the channel.")
-        # Log stack trace
-        logger.error(e, exc_info=True)
-        return
+    add_bot_to_channel(channel_id)
 
     # Now invite the user
     try:        
@@ -254,8 +268,7 @@ def invite_user_to_channel_id(user_id, channel_id):
     if "-" in user_id:
         user_id = user_id.split("-")[1]        
 
-    try:
-        #client.conversations_join(channel=channel_id)
+    try:        
         result = client.conversations_invite(channel=channel_id, users=user_id)        
     except Exception as e:
         logger.error(
