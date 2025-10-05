@@ -272,7 +272,14 @@ def invite_to_channel_api():
         logger.info("Attempting to invite user %s to channel %s", user_id, channel)
 
         # Use invite_user_to_channel function to add user to channel
-        invite_user_to_channel(user_id=user_id, channel_name=channel)
+        success = invite_user_to_channel(user_id=user_id, channel_name=channel)
+        if not success:
+            logger.error("Failed to invite user %s to channel %s", user_id, channel)
+            return jsonify({
+                "success": False,
+                "error": "Failed to add user to channel"
+            }), 500
+        
         
         logger.info("Successfully invited user %s to channel %s", user_id, channel)
         

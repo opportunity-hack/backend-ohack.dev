@@ -143,7 +143,7 @@ def get_slack_user_by_email(email):
         return None
     
     
-@cached(cache=TTLCache(maxsize=100, ttl=300))  # Cache for 5 minutes
+@cached(cache=TTLCache(maxsize=100, ttl=2))  # Cache for 5 minutes
 @sleep_and_retry
 @limits(calls=20, period=60)  # Rate limiting
 def get_channel_id_from_channel_name(channel_name):
@@ -163,9 +163,8 @@ def get_channel_id_from_channel_name(channel_name):
             # Use pagination to handle workspaces with many channels
             result = client.conversations_list(
                 exclude_archived=True, 
-                limit=1000,
-                cursor=cursor,
-                types="public_channel,private_channel"  # Specify channel types
+                limit=999999,
+                types="private_channel,public_channel"  # Specify channel types
             )
             
             logger.debug(f"Found {len(result['channels'])} channels in this batch")
@@ -189,10 +188,30 @@ def get_channel_id_from_channel_name(channel_name):
         return None
 
 
+def is_channel_id(channel_id):
+    # Use conversation_info to check if channel_id is valid
+    client = get_client()
+    try:
+        result = client.conversations_info(channel=channel_id)
+        return True
+    except SlackApiError as e:
+        logger.error(f"Error checking channel ID {channel_id}: {e}")
+        return False    
+
+
 def invite_user_to_channel(user_id, channel_name):
     logger.debug("invite_user_to_channel start")
     client = get_client()
-    channel_id = get_channel_id_from_channel_name(channel_name)
+       
+       
+    channel_id = None 
+
+    if is_channel_id(channel_name):
+        logger.info(f"Channel name {channel_name} is actually a channel ID, using it directly")
+        channel_id = channel_name
+    else:   
+        channel_id = get_channel_id_from_channel_name(channel_name)
+    
     logger.info(f"Channel ID: {channel_id}")
 
     # If user_id has a - in it, use split to get the last part
@@ -203,16 +222,27 @@ def invite_user_to_channel(user_id, channel_name):
         logger.error(f"Channel {channel_name} not found, cannot invite user {user_id}")
         return    
 
+    # Have the bot join the channel first
     try:
-        #client.conversations_join(channel=channel_id)
+        client.conversations_join(channel=channel_id)
+    except Exception as e:
+        logger.error(f"Error joining channel {channel_id}: {e} this might be okay if the bot is already in the channel.")
+        # Log stack trace
+        logger.error(e, exc_info=True)
+        return
+
+    # Now invite the user
+    try:        
         client.conversations_invite(channel=channel_id, users=user_id)        
     except Exception as e:
         logger.error(
             "Caught exception - this might be okay if the user is already in the channel.")
         #log error
-        logger.error(e)        
+        logger.error(e)
+        return False        
 
     logger.debug("invite_user_to_channel end")
+    return True
 
 
 def invite_user_to_channel_id(user_id, channel_id):
