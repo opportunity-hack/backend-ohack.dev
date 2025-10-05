@@ -13,7 +13,7 @@ from api.messages.messages_service import (
     clear_cache,
     create_github_repo,
     create_slack_channel,
-    invite_user_to_channel,
+    invite_user_to_channel,    
     send_slack,
     send_slack_audit
 )
@@ -21,7 +21,8 @@ from services.users_service import (
     save_user,
     get_user_from_slack_id
 )
-    
+
+from common.utils.slack import add_bot_to_channel    
 
 logger = logging.getLogger("myapp")
 
@@ -345,7 +346,9 @@ def queue_team(propel_user_id, json):
     
     # Create the slack channel
     logger.info("Creating slack channel %s", slack_channel)
-    create_slack_channel(slack_channel)
+    channel_id = create_slack_channel(slack_channel)
+
+    add_bot_to_channel(channel_id)
 
     logger.info("Inviting user %s to slack channel %s", slack_user_id, slack_channel)
     invite_user_to_channel(slack_user_id, slack_channel)
