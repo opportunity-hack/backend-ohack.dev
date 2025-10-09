@@ -200,7 +200,7 @@ def is_channel_id(channel_id):
 
 
 def add_bot_to_channel(channel_id):
-    logger.debug("add_bot_to_channel start")
+    logger.info("add_bot_to_channel start")
     client = get_client()       
     
     if channel_id is None:
@@ -216,7 +216,7 @@ def add_bot_to_channel(channel_id):
         logger.error(e, exc_info=True)
         return
 
-    logger.debug("add_bot_to_channel end")
+    logger.info("add_bot_to_channel end")
     return True
 
 def invite_user_to_channel(user_id, channel_name):

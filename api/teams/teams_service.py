@@ -348,7 +348,36 @@ def queue_team(propel_user_id, json):
     logger.info("Creating slack channel %s", slack_channel)
     channel_id = create_slack_channel(slack_channel)
 
-    add_bot_to_channel(channel_id)
+    logger.info("Adding bot to channel: %s with channel ID: %s", slack_channel, channel_id)
+    add_bot_to_channel(channel_id)    
+
+    # Sleep for a few seconds to ensure the channel is created before inviting users
+    import time
+    time.sleep(2)
+
+    # Send a message to the team about their request being queued
+    slack_message = f'''
+:rocket: Team *{team_name}* has been created! :tada:
+
+*Channel:* #{slack_channel}
+*Created by:* <@{root_slack_user_id}> (add your other team members here)
+
+- Thank you for your nonprofit preferences! 
+- Our team will review your request and pair you with a nonprofit soon.
+- We'll send a message to this Slack channel when the pairing process is complete.
+
+
+:question: *Need help?* 
+Join <#C01E5CGDQ74> for questions and updates.
+
+- Read more about the hackathon <{url_hackathon}|here>
+- Manage your team <{url_manage_team}|here>
+
+Let's make a difference! :muscle: :heart:
+'''
+    send_slack(slack_message, slack_channel)
+    send_slack(slack_message, "log-team-creation")
+
 
     logger.info("Inviting user %s to slack channel %s", slack_user_id, slack_channel)
     invite_user_to_channel(slack_user_id, slack_channel)
@@ -389,28 +418,6 @@ def queue_team(propel_user_id, json):
         logger.info("Inviting admin %s to slack channel %s", admin, slack_channel)
         invite_user_to_channel(admin, slack_channel)
 
-    # Send a message to the team about their request being queued
-    slack_message = f'''
-:rocket: Team *{team_name}* has been created! :tada:
-
-*Channel:* #{slack_channel}
-*Created by:* <@{root_slack_user_id}> (add your other team members here)
-
-- Thank you for your nonprofit preferences! 
-- Our team will review your request and pair you with a nonprofit soon.
-- We'll send a message to this Slack channel when the pairing process is complete.
-
-
-:question: *Need help?* 
-Join <#C01E5CGDQ74> for questions and updates.
-
-- Read more about the hackathon <{url_hackathon}|here>
-- Manage your team <{url_manage_team}|here>
-
-Let's make a difference! :muscle: :heart:
-'''
-    send_slack(slack_message, slack_channel)
-    send_slack(slack_message, "log-team-creation")
 
     my_date = datetime.now()
     collection = db.collection('teams')
