@@ -290,7 +290,7 @@ def submit_judge_score(judge_id: str, team_id: str, event_id: str,
         required_fields = ['scopeImpact', 'scopeComplexity',
                            'documentationCode', 'documentationEase',
                            'polishWorkRemaining', 'polishCanUseToday',
-                           'securityData', 'securityRole']
+                           'securityData', 'securityRole'] # We don't include accessibility here as it's optional and a special category prize
 
         for field in required_fields:
             if field not in scores_data:
@@ -492,10 +492,14 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: s
     if github_links and len(github_links) > 0:
         github_url = github_links[0].get('link', '')
 
+    # Get score info for this team
+    score_key = f"{team_id}_round1"
+    score_obj = score_lookup.get(score_key) if score_key in score_lookup else None
+
     return {
         "id": team_id,
         "name": team.get('name', ''),
-        "problem_statement": {            
+        "problem_statement": {
             "nonprofit": nonprofit_name,
             "nonprofit_id": nonprofit_id
         },
@@ -505,9 +509,12 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: s
         "slack_channel": team.get('slack_channel', ''),
         "video_url": team.get('video_url', ''),
         "demo_time": None,  # Will be overridden for round2
-        "judged": f"{team_id}_round1" in score_lookup,
-        "score": (score_lookup.get(f"{team_id}_round1").total_score
-                  if f"{team_id}_round1" in score_lookup else None)
+        "judged": score_obj is not None,
+        "score": score_obj.total_score if score_obj else None,
+        "specialCategoryScores":
+        {
+            "accessibility": score_obj.accessibility if score_obj else None
+        }        
     }
 
 
