@@ -16,6 +16,7 @@ class JudgeScore:
         self.polish_can_use_today = None  # 1-5 points
         self.security_data = None  # 1-5 points
         self.security_role = None  # 1-5 points
+        self.accessibility = None  # 1-5 points
         self.total_score = None  # Calculated from individual scores
         self.feedback = ''  # Optional feedback from judge
         self.is_draft = False
@@ -39,6 +40,7 @@ class JudgeScore:
         score.polish_can_use_today = d.get('polish_can_use_today')
         score.security_data = d.get('security_data')
         score.security_role = d.get('security_role')
+        score.accessibility = d.get('accessibility')
         score.total_score = d.get('total_score')
         score.is_draft = d.get('is_draft', False)
         score.feedback = d.get('feedback', '')
@@ -46,7 +48,7 @@ class JudgeScore:
         score.created_at = d.get('created_at')
         score.updated_at = d.get('updated_at')
         return score
-    
+
     def serialize(self):
         d = {}
         props = dir(self)
@@ -58,7 +60,8 @@ class JudgeScore:
         return d
 
     def calculate_total_score(self):
-        """Calculate total score from individual criteria scores"""
+        """Calculate total score from individual criteria scores.
+        Note: accessibility is excluded as it's a special category prize."""
         scores = [
             self.scope_impact,
             self.scope_complexity,
@@ -68,12 +71,13 @@ class JudgeScore:
             self.polish_can_use_today,
             self.security_data,
             self.security_role
+            # accessibility is intentionally excluded from total score
         ]
-        
-        # Only calculate if all scores are present
+
+        # Only calculate if all required scores are present
         if all(score is not None for score in scores):
             self.total_score = sum(scores)
-        
+
         return self.total_score
 
     def to_api_format(self):
@@ -87,6 +91,7 @@ class JudgeScore:
             "polishCanUseToday": self.polish_can_use_today,
             "securityData": self.security_data,
             "securityRole": self.security_role,
+            "accessibility": self.accessibility,
             "total": self.total_score
         }
 
@@ -102,8 +107,11 @@ class JudgeScore:
         score.polish_can_use_today = api_scores.get('polishCanUseToday')
         score.security_data = api_scores.get('securityData')
         score.security_role = api_scores.get('securityRole')
+        score.accessibility = api_scores.get('accessibility')
         score.total_score = api_scores.get('total')
         return score
 
     def __str__(self):
-        return f"JudgeScore(id={self.id}, judge_id={self.judge_id}, team_id={self.team_id}, event_id={self.event_id}, round={self.round}, total={self.total_score})"
+        return (f"JudgeScore(id={self.id}, judge_id={self.judge_id}, "
+                f"team_id={self.team_id}, event_id={self.event_id}, "
+                f"round={self.round}, total={self.total_score})")
