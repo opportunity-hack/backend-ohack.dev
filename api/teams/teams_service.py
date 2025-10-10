@@ -276,6 +276,10 @@ def edit_team(json):
         "devpost_link": "devpost_link",
     }
     
+    # If this is the first time setting devpost_link, set devpost_link_submitted date
+    if "devpost_link" in json and "devpost_link" not in team_data:
+        update_data["devpost_link_submitted"] = datetime.now().isoformat()
+
     for db_field, json_field in field_mappings.items():
         if json_field in json:
             update_data[db_field] = json[json_field]
