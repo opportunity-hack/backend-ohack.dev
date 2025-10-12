@@ -105,7 +105,8 @@ def get_github_contributions_for_user(login):
     db = get_db()  # this connects to our Firestore database
     
     # Use a collection group query to search across all contributor subcollections
-    contributors_ref = db.collection_group('github_contributors').where("login", "==", login)
+    # FIXME: Hardcoded org_name filter, make this dynamic later
+    contributors_ref = db.collection_group('github_contributors').where("login", "==", login).where("org_name", "==", "2025-Arizona-Opportunity-Hack")
     
     docs = contributors_ref.stream()
 
