@@ -1509,27 +1509,37 @@ def _send_email_to_user(
             </div>
             <p>Best regards,<br>The Opportunity Hack Team</p>
 
-            <!-- Social Media Footer -->
-            <div style="background-color: #f8f9fa; padding: 20px; margin: 20px 0; border-radius: 8px; text-align: center;">
-                <h3 style="color: #2c3e50; margin-bottom: 15px; font-size: 16px;">🌟 Stay Connected with Opportunity Hack!</h3>
-                <p style="margin-bottom: 15px; color: #34495e;">Follow us for updates, volunteer opportunities, and inspiring stories from our community:</p>
-                <div style="margin: 15px 0;">
-                    <a href="https://www.instagram.com/opportunityhack/" style="text-decoration: none; margin: 0 8px; color: #E4405F;">📸 Instagram</a> |
-                    <a href="https://www.facebook.com/OpportunityHack/" style="text-decoration: none; margin: 0 8px; color: #1877F2;">👥 Facebook</a> |
-                    <a href="https://www.linkedin.com/company/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #0A66C2;">💼 LinkedIn</a> |
-                    <a href="https://www.threads.net/@opportunityhack" style="text-decoration: none; margin: 0 8px; color: #000;">🧵 Threads</a>
+            <!-- Donation Call-to-Action (Compact) -->
+            <div style="background-color: #e8f5e8; padding: 16px; margin: 20px 0; border-radius: 6px; border-left: 3px solid #27ae60; text-align: center;">
+                <h4 style="color: #27ae60; margin: 0 0 8px 0; font-size: 16px;">💚 Support Our Mission</h4>
+                <p style="margin: 0 0 12px 0; color: #34495e; font-size: 14px;">Just <strong>$17 feeds a hacker</strong> building solutions for nonprofits!</p>
+                <div style="margin: 12px 0;">
+                    <a href="https://givebutter.com/a5MSes" style="background-color: #27ae60; color: white; padding: 8px 16px; text-decoration: none; border-radius: 4px; font-weight: bold; font-size: 14px; margin: 0 4px;">💳 Donate Now</a>
+                    <a href="http://venmo.com/opportunityhack" style="color: #3D95CE; text-decoration: none; font-size: 13px; margin: 0 4px;">Venmo</a>
+                    <a href="http://paypal.me/opportunityhack" style="color: #0070ba; text-decoration: none; font-size: 13px, margin: 0 4px;">PayPal</a>
                 </div>
-                <div style="margin: 10px 0;">
-                    <a href="https://slack.ohack.dev" style="text-decoration: none; margin: 0 8px; color: #4A154B;">💬 Join Slack</a> |
-                    <a href="https://twitter.com/opportunityhack" style="text-decoration: none; margin: 0 8px; color: #1DA1F2;">🐦 Twitter</a> |
-                    <a href="https://github.com/opportunity-hack/" style="text-decoration: none; margin: 0 8px; color: #333;">💻 GitHub</a>
+                <p style="font-size: 11px; color: #666; margin: 8px 0 0 0;">Corporate employees: Find us on Benevity • 501(c)(3) tax-deductible</p>
+            </div>
+
+            <!-- Social Media Footer (Compact) -->
+            <div style="background-color: #f8f9fa; padding: 16px; margin: 20px 0; border-radius: 6px; text-align: center;">
+                <h4 style="color: #2c3e50; margin: 0 0 12px 0; font-size: 15px;">🌟 Stay Connected</h4>
+                <div style="margin: 8px 0;">
+                    <a href="https://www.instagram.com/opportunityhack/" style="text-decoration: none; margin: 0 6px; color: #E4405F; font-size: 13px;">Instagram</a> |
+                    <a href="https://www.linkedin.com/company/opportunity-hack/" style="text-decoration: none; margin: 0 6px; color: #0A66C2; font-size: 13px;">LinkedIn</a> |
+                    <a href="https://slack.ohack.dev" style="text-decoration: none; margin: 0 6px; color: #4A154B; font-size: 13px;">Slack</a> |
+                    <a href="https://github.com/opportunity-hack/" style="text-decoration: none; margin: 0 6px; color: #333; font-size: 13px;">GitHub</a> |
+                    <! -- Threads link -->
+                    <a href="https://www.threads.net/@opportunityhack" style="text-decoration: none; margin: 0 6px; color: #000; font-size: 13px;">Threads</a> |
+                    <! -- Facebook link -->
+                    <a href="https://www.facebook.com/opportunityhack" style="text-decoration: none; margin: 0 6px; color: #1877F2; font-size: 13px;">Facebook</a>
                 </div>
-                <p style="font-size: 12px; color: #666; margin-top: 15px;">Help us make a bigger impact - share our mission with your network! 🚀</p>
+                <p style="font-size: 11px; color: #666; margin: 8px 0 0 0;">Help us reach more people - share our mission! 🚀</p>
             </div>
 
             <hr>
             <p style="font-size: 12px; color: #666;">
-                This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack.
+                Sent to {volunteer_type.title()} for Opportunity Hack.
             </p>
             """
 
