@@ -1586,7 +1586,7 @@ def send_volunteer_message(
         admin_user_id: The user ID of the admin sending the message
         admin_user: The admin user object
         recipient_type: Type of recipient (mentor, sponsor, judge, volunteer, hacker, etc.)
-        recipient_id: Optional specific recipient ID for enhanced context
+        recipient_id: Optional specific recipient ID for enhanced context - might be Slack ID
 
     Returns:
         Dict containing delivery status and volunteer information
@@ -1597,21 +1597,38 @@ def send_volunteer_message(
         # Get volunteer by ID from the volunteers collection
         db = get_db()
         volunteer_doc = db.collection('volunteers').document(volunteer_id).get()
+    
+        SLACK_USER_PREFIX = "oauth2|slack|T1Q7936BH-"
+        # Search users for  "user_id": "<recipient_id>"
+        users_doc = db.collection('users').where('user_id', '==', f"{SLACK_USER_PREFIX}{recipient_id}").get()
 
-        if not volunteer_doc.exists:
+        email = None
+        slack_user_id = None
+        name = "Volunteer"
+        volunteer_type = recipient_type
+        
+        if volunteer_doc.exists:        
+            volunteer = volunteer_doc.to_dict()
+
+            # Extract contact information from volunteer data
+            email = volunteer.get('email')
+            slack_user_id = volunteer.get('slack_user_id')
+            name = volunteer.get('name', 'Volunteer')
+            volunteer_type = volunteer.get('volunteer_type', recipient_type)
+        elif users_doc:
+            user = users_doc[0].to_dict()
+            email = user.get('email_address')
+            slack_user_id = user.get('user_id')
+            name = user.get('name', 'Volunteer')
+            volunteer_type = "Volunteer"
+        else:
             return {
                 'success': False,
-                'error': 'Volunteer not found',
-                'volunteer_id': volunteer_id
+                'error': 'Volunteer record not found',
+                'volunteer_id': volunteer_id,
+                'recipient_type': recipient_type
             }
-
-        volunteer = volunteer_doc.to_dict()
-
-        # Extract contact information from volunteer data
-        email = volunteer.get('email')
-        slack_user_id = volunteer.get('slack_user_id')
-        name = volunteer.get('name', 'Volunteer')
-        volunteer_type = volunteer.get('volunteer_type', recipient_type)
+        
 
         if not email:
             return {
