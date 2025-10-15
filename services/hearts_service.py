@@ -27,7 +27,7 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 logger = get_logger("hearts_service")
 #
 from common.utils.firebase import add_hearts_for_user, get_user_by_user_id, add_certificate
-from common.utils.slack import send_slack
+from common.utils.slack import send_slack, async_send_slack, invite_user_to_channel
 
 
 def get_hearts_for_all_users():    
@@ -131,9 +131,7 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
         for reason in reasons:
             add_hearts_for_user(id, amount, reason)
 
-        reasons_string = ""
-        for reason in reasons:
-            reasons_string += get_reason_pretty(reason) + ", "        
+        reasons_string = ", ".join(get_reason_pretty(reason) for reason in reasons)
 
         plural = "s" if amount > 1 else ""
 
@@ -142,16 +140,27 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
         else:
             heart_list = ":heart: " * amount * len(reasons)
 
+        invite_user_to_channel(slack_user_id, "C09L60BQU85") #heart-certificates
+
         # Intro Message to Opportunity Hack community to encourage more hearts        
         intro_message = ":heart_eyes: *Heart Announcement*! :heart_eyes:\n"
         outro_message = "\n_Thank you for taking the time out of your day to support a nonprofit with your talents_!\nMore on our heart system at https://ohack.dev/about/hearts and check your profile at https://ohack.dev/profile to see them!"
         # Send a DM
-        send_slack(channel=f"{slack_user_id}",
+        async_send_slack(channel=f"{slack_user_id}",
                   message=f"{intro_message}\nHey <@{slack_user_id}> :astronaut-hooray-woohoo-yeahfistpump: You have been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}\nYour profile should now reflect these updates: https://ohack.dev/profile")
         
+        channel_to_send_heart_certificates = "C09L60BQU85" #heart-certificates
+        message_to_send = f"""
+{intro_message}\n
+:astronaut-hooray-woohoo-yeahfistpump: <@{slack_user_id}> has been given {amount} :heart: heart{plural}\n
+:point_right: *{reasons_string}* {heart_list}!\n
+{outro_message}\n
+{certificate_text}
+"""
+
         # Send to public channel too
-        send_slack(channel="general",
-                   message=f"{intro_message}\n:astronaut-hooray-woohoo-yeahfistpump: <@{slack_user_id}> has been given {amount} :heart: heart{plural} each for :point_right: *{reasons_string}* {heart_list}!\n{outro_message} {certificate_text}")
+        async_send_slack(channel=channel_to_send_heart_certificates,
+                   message=message_to_send)
     else:
         # Example: ["code_reliability", "iterations_of_code_pushed_to_production
         raise Exception("You must provide at least 1 reasons for giving hearts in a list")

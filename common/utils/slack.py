@@ -141,9 +141,9 @@ def get_slack_user_by_email(email):
     except SlackApiError as e:
         logger.error(f"Error fetching user by email {email}: {e}")
         return None
-    
-    
-@cached(cache=TTLCache(maxsize=100, ttl=2))  # Cache for 5 minutes
+
+
+@cached(cache=TTLCache(maxsize=100, ttl=60))  # Cache for 1 minute
 @sleep_and_retry
 @limits(calls=20, period=60)  # Rate limiting
 def get_channel_id_from_channel_name(channel_name):
@@ -188,6 +188,7 @@ def get_channel_id_from_channel_name(channel_name):
         return None
 
 
+@cached(cache=TTLCache(maxsize=50, ttl=60))  # Cache for 1 minute
 def is_channel_id(channel_id):
     # Use conversation_info to check if channel_id is valid
     client = get_client()
