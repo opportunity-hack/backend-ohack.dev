@@ -505,7 +505,11 @@ def store_praise():
     receiver_id = json_data.get("praise_receiver")
 
     # Check BACKEND_NEWS_TOKEN
+    logger.info(f"Token: {token}")
+    environment_token = os.getenv("BACKEND_PRAISE_TOKEN")
+    logger.info(f"environment praise token: {environment_token}")
     if token == None or token != os.getenv("BACKEND_PRAISE_TOKEN"):
+        logger.info(f"Token mismatch: {token} != {environment_token}")
         return "Unauthorized", 401
     elif sender_id == receiver_id:
         return "You cannot write a praise about yourself", 400
