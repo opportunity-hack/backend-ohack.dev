@@ -1767,7 +1767,7 @@ def save_news(json):
 
 def save_praise(json):
     # Make sure these fields exist praise_receiver, praise_sender, praise_channel, praise_message
-    check_fields = ["praise_receiver", "praise_sender", "praise_channel", "praise_message"]
+    check_fields = ["praise_receiver", "praise_channel", "praise_message"]
     for field in check_fields:
         if field not in json:
             logger.error(f"Missing field {field} in {json}")
