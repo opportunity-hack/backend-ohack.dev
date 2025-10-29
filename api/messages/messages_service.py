@@ -1766,8 +1766,6 @@ def save_news(json):
     return Message("Saved News")
 
 def save_praise(json):
-    logger.debug(f"Attempting to save the praise with the json object {json}")
-
     # Make sure these fields exist praise_receiver, praise_channel, praise_message
     check_fields = ["praise_receiver", "praise_channel", "praise_message"]
     for field in check_fields:
@@ -1777,6 +1775,33 @@ def save_praise(json):
         
     logger.debug(f"Detected required fields, attempting to save praise")
     json["timestamp"] = datetime.now(pytz.utc).astimezone().isoformat()
+    
+    # Add ohack.dev user IDs for both sender and receiver
+    try:
+        # Get ohack.dev user ID for praise receiver
+        receiver_user = get_user_by_user_id(json["praise_receiver"])
+        if receiver_user and "id" in receiver_user:
+            json["praise_receiver_ohack_id"] = receiver_user["id"]
+            logger.debug(f"Added praise_receiver_ohack_id: {receiver_user['id']}")
+        else:
+            logger.warning(f"Could not find ohack.dev user for praise_receiver: {json['praise_receiver']}")
+            json["praise_receiver_ohack_id"] = None
+            
+        # Get ohack.dev user ID for praise sender
+        sender_user = get_user_by_user_id(json["praise_sender"])
+        if sender_user and "id" in sender_user:
+            json["praise_sender_ohack_id"] = sender_user["id"]
+            logger.debug(f"Added praise_sender_ohack_id: {sender_user['id']}")
+        else:
+            logger.warning(f"Could not find ohack.dev user for praise_sender: {json['praise_sender']}")
+            json["praise_sender_ohack_id"] = None
+            
+    except Exception as e:
+        logger.error(f"Error getting ohack.dev user IDs: {str(e)}")
+        json["praise_receiver_ohack_id"] = None
+        json["praise_sender_ohack_id"] = None
+    
+    logger.info(f"Attempting to save the praise with the json object {json}")
     upsert_praise(json)
 
     logger.info("Updated praise successfully")
