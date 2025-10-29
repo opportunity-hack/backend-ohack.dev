@@ -1801,7 +1801,6 @@ def save_praise(json):
         json["praise_receiver_ohack_id"] = None
         json["praise_sender_ohack_id"] = None
     
-    
     logger.info(f"Attempting to save the praise with the json object {json}")
     upsert_praise(json)
 
