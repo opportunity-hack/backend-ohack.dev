@@ -905,6 +905,20 @@ def send_team_message(admin_user, teamid, json):
     slack_channel = team_data["slack_channel"]
     send_slack(message, slack_channel)
 
+    # I'd also like to send each of them an email using send_volunteer_message from volunteers_service.py where we need to get their Slack User ID and pass that in as recipient_id
+    from api.volunteers.volunteers_service import send_volunteer_message, get_user_from_slack_id
+    for user_ref in team_data.get("users", []):
+        user_data = user_ref.get().to_dict()
+        slack_user_id = user_data.get("user_id", "")
+        if slack_user_id:
+            send_volunteer_message(
+                admin_user=admin_user,
+                recipient_id=slack_user_id,
+                subject=f"Message from Opportunity Hack Team {team_data['name']}",
+                message=message
+            )
+    
+
     # If communication_history doesn't exist, create it and append the timestamp, sender, text
     if "communication_history" not in team_data:
         team_data["communication_history"] = []
