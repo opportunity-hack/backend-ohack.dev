@@ -8,6 +8,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run tests: `pytest`
 - Run a single test: `pytest path/to/test_file.py::test_function_name`
 - Run linting: `pylint api/ common/ db/ model/ services/`
+- We use Miniconda on Mac to change our Python environments, use conda activate py39_ohack_backend for the right one
+
 
 ## Code Style Guidelines
 - Python 3.9.13 (Flask backend)
