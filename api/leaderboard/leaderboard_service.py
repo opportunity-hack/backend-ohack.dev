@@ -543,6 +543,18 @@ def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
     org_name = get_github_organizations(event_id)
     org_duration = time.time() - org_start
     logger.debug("get_github_organizations took %.2f seconds", org_duration)
+
+    if org_name["github_organizations"] == []:
+        logger.warning("No GitHub organizations found for event ID: %s", event_id)
+        return {
+            "github_organizations": [],
+            "github_repositories": [],
+            "github_contributors": [],
+            "github_achievements": [],
+            "generalStats": [],
+            "individualAchievements": [],
+            "teamAchievements": []
+        }
     
     repos_start = time.time()
     repos = get_github_repositories(org_name["github_organizations"][0]["name"])

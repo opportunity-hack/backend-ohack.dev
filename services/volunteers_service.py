@@ -1599,8 +1599,17 @@ def send_volunteer_message(
         volunteer_doc = db.collection('volunteers').document(volunteer_id).get()
     
         SLACK_USER_PREFIX = "oauth2|slack|T1Q7936BH-"
+        
+        # if recipient_id already has SLACK_USER_PREFIX, use it directly
+        if recipient_id and recipient_id.startswith(SLACK_USER_PREFIX):
+            pass
+        elif recipient_id:
+            recipient_id = f"{SLACK_USER_PREFIX}{recipient_id}"
+        else:
+            logger.warning("No recipient_id provided, Slack message may not be sent if slack_user_id is not found in volunteer record.")
+
         # Search users for  "user_id": "<recipient_id>"
-        users_doc = db.collection('users').where('user_id', '==', f"{SLACK_USER_PREFIX}{recipient_id}").get()
+        users_doc = db.collection('users').where('user_id', '==', f"{recipient_id}").get()
 
         email = None
         slack_user_id = None
