@@ -6,6 +6,12 @@ from datetime import datetime
 import sys
 from typing import Any, Dict, Optional, Union
 
+try:
+    import colorlog
+    HAS_COLORLOG = True
+except ImportError:
+    HAS_COLORLOG = False
+
 # Configure default log level
 log_level = logging.INFO
 
@@ -65,6 +71,14 @@ class JsonFormatter(logging.Formatter):
 # Determine if we should use JSON logging based on environment
 use_json_logging = os.environ.get('USE_JSON_LOGGING', 'false').lower() == 'true'
 
+# Determine if we should use colored logging (only in non-JSON mode)
+# Default to True if colorlog is available and we're not using JSON logging
+use_colored_logging = (
+    HAS_COLORLOG and
+    not use_json_logging and
+    os.environ.get('USE_COLORED_LOGS', 'true').lower() == 'true'
+)
+
 # Root logger configuration
 def configure_root_logger():
     """Configure the root logger with appropriate handlers"""
@@ -82,9 +96,24 @@ def configure_root_logger():
     # Apply appropriate formatter
     if use_json_logging:
         formatter = JsonFormatter()
+    elif use_colored_logging:
+        # Use colorlog for colored output with nice formatting
+        formatter = colorlog.ColoredFormatter(
+            '%(log_color)s%(asctime)s - %(name)s - %(levelname)s%(reset)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+            log_colors={
+                'DEBUG': 'cyan',
+                'INFO': 'green',
+                'WARNING': 'yellow',
+                'ERROR': 'red',
+                'CRITICAL': 'red,bg_white',
+            },
+            secondary_log_colors={},
+            style='%'
+        )
     else:
         formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
+
     console_handler.setFormatter(formatter)
     root_logger.addHandler(console_handler)
 

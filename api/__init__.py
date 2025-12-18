@@ -11,6 +11,12 @@ from readme_metrics.flask_readme import ReadMeMetrics
 from common.utils import safe_get_env_var
 import os
 
+try:
+    import colorlog
+    HAS_COLORLOG = True
+except ImportError:
+    HAS_COLORLOG = False
+
 def grouping_function(request):
   env = safe_get_env_var("FLASK_ENV")
   if True:
@@ -26,27 +32,50 @@ def grouping_function(request):
       return None
   
 
+# Determine if colored logging should be used
+use_colored_logs = (
+    HAS_COLORLOG and
+    os.environ.get('USE_COLORED_LOGS', 'true').lower() == 'true'
+)
+
+# Build formatters dictionary
+formatters = {
+    'default': {
+        'format': '[%(asctime)s] {%(pathname)s:%(funcName)s:%(lineno)d} %(levelname)s - %(message)s',
+    }
+}
+
+if use_colored_logs:
+    formatters['colored'] = {
+        '()': 'colorlog.ColoredFormatter',
+        'format': '%(log_color)s[%(asctime)s] %(levelname)s%(reset)s - %(message)s',
+        'datefmt': '%Y-%m-%d %H:%M:%S',
+        'log_colors': {
+            'DEBUG': 'cyan',
+            'INFO': 'green',
+            'WARNING': 'yellow',
+            'ERROR': 'red',
+            'CRITICAL': 'red,bg_white',
+        }
+    }
+
 dict_config = {
     'version': 1,
-    'formatters': {
-        'default': {
-            'format': '[%(asctime)s] {%(pathname)s:%(funcName)s:%(lineno)d} %(levelname)s - %(message)s',
-        }
-    },
+    'formatters': formatters,
     'handlers': {
         'default': {
-        'level': 'DEBUG',
-        'formatter': 'default',
-        'class': 'logging.handlers.RotatingFileHandler',
-        'filename': "test.log",
-        'maxBytes': 5000000,
-        'backupCount': 10
-    },
+            'level': 'DEBUG',
+            'formatter': 'default',
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': "test.log",
+            'maxBytes': 5000000,
+            'backupCount': 10
+        },
         'console': {
             'class': 'logging.StreamHandler',
             'level': 'DEBUG',
-            'formatter': 'default',
-    },
+            'formatter': 'colored' if use_colored_logs else 'default',
+        },
     },
     'loggers': {
         'myapp': {
