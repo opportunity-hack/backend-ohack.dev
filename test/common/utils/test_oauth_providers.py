@@ -9,8 +9,12 @@ from common.utils.oauth_providers import (
     is_oauth_user_id,
     normalize_slack_user_id,
     extract_slack_user_id,
-    get_provider_display_name
+    get_provider_display_name,
+    DEFAULT_SLACK_WORKSPACE_ID  # Import the constant for testing
 )
+
+# Test constant - matches the default workspace ID
+TEST_SLACK_WORKSPACE_ID = DEFAULT_SLACK_WORKSPACE_ID
 
 
 class TestOAuthProviderDetection:
@@ -18,7 +22,7 @@ class TestOAuthProviderDetection:
 
     def test_get_oauth_provider_from_slack_user_id(self):
         """Test extracting provider from Slack user ID"""
-        user_id = "oauth2|slack|T1Q7936BH-U12345ABC"
+        user_id = f"oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC"
         assert get_oauth_provider_from_user_id(user_id) == "slack"
 
     def test_get_oauth_provider_from_google_user_id(self):
@@ -50,7 +54,7 @@ class TestSlackUserIdDetection:
 
     def test_is_slack_user_id_positive(self):
         """Test identifying Slack user IDs"""
-        assert is_slack_user_id("oauth2|slack|T1Q7936BH-U12345ABC") is True
+        assert is_slack_user_id(f"oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC") is True
 
     def test_is_slack_user_id_negative_google(self):
         """Test rejecting Google user IDs"""
@@ -86,7 +90,7 @@ class TestOAuthUserIdDetection:
 
     def test_is_oauth_user_id_slack(self):
         """Test with Slack OAuth user ID"""
-        assert is_oauth_user_id("oauth2|slack|T1Q7936BH-U12345ABC") is True
+        assert is_oauth_user_id(f"oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC") is True
 
     def test_is_oauth_user_id_google(self):
         """Test with Google OAuth user ID"""
@@ -111,11 +115,11 @@ class TestSlackUserIdNormalization:
     def test_normalize_slack_user_id_raw(self):
         """Test normalizing raw Slack user ID"""
         result = normalize_slack_user_id("U12345ABC")
-        assert result == "oauth2|slack|T1Q7936BH-U12345ABC"
+        assert result == f"oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC"
 
     def test_normalize_slack_user_id_already_normalized(self):
         """Test with already normalized Slack user ID"""
-        user_id = "oauth2|slack|T1Q7936BH-U12345ABC"
+        user_id = f"oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC"
         result = normalize_slack_user_id(user_id)
         assert result == user_id
 
@@ -139,7 +143,7 @@ class TestSlackUserIdExtraction:
 
     def test_extract_slack_user_id_from_full(self):
         """Test extracting raw Slack user ID from full format"""
-        user_id = "oauth2|slack|T1Q7936BH-U12345ABC"
+        user_id = f"oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC"
         result = extract_slack_user_id(user_id)
         assert result == "U12345ABC"
 
@@ -171,7 +175,7 @@ class TestProviderDisplayName:
 
     def test_get_provider_display_name_slack(self):
         """Test display name for Slack"""
-        user_id = "oauth2|slack|T1Q7936BH-U12345ABC"
+        user_id = f"oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC"
         assert get_provider_display_name(user_id) == "Slack"
 
     def test_get_provider_display_name_google(self):

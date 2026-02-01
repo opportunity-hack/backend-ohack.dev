@@ -9,7 +9,7 @@ from google.cloud import firestore
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger, info, debug, warning, error, exception
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern
-from common.utils.oauth_providers import SLACK_PREFIX as SLACK_USER_PREFIX, normalize_slack_user_id, is_oauth_user_id
+from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id
 import os
 import requests
 import resend

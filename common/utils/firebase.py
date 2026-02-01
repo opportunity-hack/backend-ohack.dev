@@ -81,12 +81,18 @@ def get_user_by_user_id(user_id):
     """
     Get user by user_id. Handles both OAuth format and raw user IDs.
     Supports multiple OAuth providers (Slack, Google, etc.)
+
+    Note: This function uses normalize_slack_user_id for backward compatibility
+    with legacy code that stored raw Slack user IDs. For OAuth-prefixed IDs
+    from any provider (Slack, Google, etc.), the ID is used as-is.
     """
     # Normalize the user_id if it's not already in OAuth format
+    # For Slack: converts raw IDs like "U12345" to "oauth2|slack|T1Q7936BH-U12345"
+    # For other OAuth providers: leaves IDs like "oauth2|google-oauth2|123" unchanged
     normalized_user_id = normalize_slack_user_id(user_id) if not is_oauth_user_id(user_id) else user_id
-    
+
     logger.info(f"Looking up user {normalized_user_id}")
-    
+
     db = get_db()  # this connects to our Firestore database
     docs = db.collection('users').where("user_id", "==", normalized_user_id).stream()
 

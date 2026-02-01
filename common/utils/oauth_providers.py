@@ -27,9 +27,19 @@ from common.log import get_logger
 
 logger = get_logger("oauth_providers")
 
-# Default Slack workspace ID from environment or hardcoded
+# Default Slack workspace ID from environment or hardcoded fallback
+# WARNING: The fallback value T1Q7936BH should match your production Slack workspace
+# Set SLACK_WORKSPACE_ID environment variable to override this default
 _slack_workspace_id_env = safe_get_env_var("SLACK_WORKSPACE_ID")
-DEFAULT_SLACK_WORKSPACE_ID = _slack_workspace_id_env if _slack_workspace_id_env != "CHANGEMEPLS" else "T1Q7936BH"
+if _slack_workspace_id_env != "CHANGEMEPLS":
+    DEFAULT_SLACK_WORKSPACE_ID = _slack_workspace_id_env
+else:
+    # Fallback to hardcoded value - should be configured in production via environment
+    DEFAULT_SLACK_WORKSPACE_ID = "T1Q7936BH"
+    logger.warning(
+        "SLACK_WORKSPACE_ID not configured. Using hardcoded default. "
+        "Set SLACK_WORKSPACE_ID environment variable for production."
+    )
 
 # OAuth provider patterns
 OAUTH_PROVIDER_PATTERN = re.compile(r'^oauth2\|([^|]+)\|(.+)$')
