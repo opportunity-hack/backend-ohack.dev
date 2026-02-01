@@ -9,6 +9,7 @@ from google.cloud import firestore
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger, info, debug, warning, error, exception
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern
+from common.utils.oauth_providers import SLACK_PREFIX as SLACK_USER_PREFIX, normalize_slack_user_id, is_oauth_user_id
 import os
 import requests
 import resend
@@ -1598,14 +1599,10 @@ def send_volunteer_message(
         db = get_db()
         volunteer_doc = db.collection('volunteers').document(volunteer_id).get()
     
-        SLACK_USER_PREFIX = "oauth2|slack|T1Q7936BH-"
-        
-        # if recipient_id already has SLACK_USER_PREFIX, use it directly
-        if recipient_id and recipient_id.startswith(SLACK_USER_PREFIX):
-            pass
-        elif recipient_id:
-            recipient_id = f"{SLACK_USER_PREFIX}{recipient_id}"
-        else:
+        # Normalize recipient_id to use OAuth format if needed
+        if recipient_id and not is_oauth_user_id(recipient_id):
+            recipient_id = normalize_slack_user_id(recipient_id)
+        elif not recipient_id:
             logger.warning("No recipient_id provided, Slack message may not be sent if slack_user_id is not found in volunteer record.")
 
         # Search users for  "user_id": "<recipient_id>"

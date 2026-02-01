@@ -17,6 +17,7 @@ load_dotenv()
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from common.utils.firebase import get_db
+from common.utils.oauth_providers import SLACK_PREFIX
 import logging
 
 # Set up logging
@@ -26,7 +27,7 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
+# SLACK_PREFIX is now imported from oauth_providers module
 
 
 def fetch_user_by_slack_id(db, slack_user_id, cache=None):

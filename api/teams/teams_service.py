@@ -21,6 +21,7 @@ from services.users_service import (
     save_user,
     get_user_from_slack_id
 )
+from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id
 
 from common.utils.slack import add_bot_to_channel    
 
@@ -320,8 +321,8 @@ def queue_team(propel_user_id, json):
     _, user_id, _, _, name, _ = get_propel_user_details_by_id(propel_user_id)
     slack_user_id = user_id
     
-    SLACK_USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-"
-    root_slack_user_id = slack_user_id.replace(SLACK_USER_ID_PREFIX, "")
+    # Extract the raw Slack user ID (handles both OAuth formats and Google users gracefully)
+    root_slack_user_id = extract_slack_user_id(slack_user_id)
     users_list = []
     user = get_user_doc_reference(root_slack_user_id)
     users_list.append(user)

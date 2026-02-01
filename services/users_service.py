@@ -14,11 +14,14 @@ import uuid
 
 logger = get_logger("users_service")
 
+# Import OAuth utilities for handling multiple providers (Slack, Google, etc.)
+from common.utils.oauth_providers import USER_ID_PREFIX, normalize_slack_user_id, is_oauth_user_id
+
 #TODO consts file?
 ONE_MINUTE = 1*60
 
-#TODO: get last part of this from env
-USER_ID_PREFIX = "oauth2|slack|T1Q7936BH-" #the followed by UXXXXX for slack
+# USER_ID_PREFIX is now imported from oauth_providers module for consistency
+# Note: This maintains backward compatibility with Slack-specific code
 
 def clear_cache():        
     get_profile_metadata.cache_clear()

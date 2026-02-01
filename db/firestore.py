@@ -22,8 +22,11 @@ logger = get_logger("firestore")
 
 mockfirestore = None
 
-#TODO: Put in .env? Feels configurable. Or maybe something we would want to protect with a secret?
-SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
+# Import OAuth utilities for handling multiple providers (Slack, Google, etc.)
+from common.utils.oauth_providers import SLACK_PREFIX
+
+# TODO: Put in .env? Feels configurable. Or maybe something we would want to protect with a secret?
+# SLACK_PREFIX is now imported from oauth_providers module for consistency
 
 if safe_get_env_var("ENVIRONMENT") == "test":
     mockfirestore = MockFirestore() #Only used when testing

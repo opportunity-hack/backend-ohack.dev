@@ -1,6 +1,7 @@
 from datetime import datetime
 from ratelimit import limits
 from common.utils.slack import invite_user_to_channel, send_slack, send_slack_audit
+from common.utils.oauth_providers import extract_slack_user_id, is_slack_user_id
 from model.problem_statement import ProblemStatement
 from model.user import User
 from db.db import (delete_helping, fetch_hackathon, fetch_problem_statements,
@@ -138,9 +139,11 @@ def save_helping_status(propel_user_id, d):
 
     slack_user_id = None
     try:
-        slack_user_id = user.user_id.split("-")[1]  # Example user_id = oauth2|slack|T1Q7116BH-U041117EYTQ
-        invite_user_to_channel(user_id=slack_user_id,
-                            channel_name=problem_statement_slack_channel)
+        # Extract raw Slack user ID for Slack API calls (handles OAuth formats)
+        if is_slack_user_id(user.user_id):
+            slack_user_id = extract_slack_user_id(user.user_id)
+            invite_user_to_channel(user_id=slack_user_id,
+                                channel_name=problem_statement_slack_channel)
     except Exception:
         pass # Don't return error if slack invite fails.
 

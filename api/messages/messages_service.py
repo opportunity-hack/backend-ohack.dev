@@ -3,6 +3,7 @@ from common.utils.slack import send_slack_audit, create_slack_channel, send_slac
 from common.utils.firebase import get_hackathon_by_event_id, upsert_news, upsert_praise, get_github_contributions_for_user,get_volunteer_from_db_by_event, get_volunteer_checked_in_from_db_by_event, get_user_by_user_id, get_recent_praises, get_praises_by_user_id
 from common.utils.openai_api import generate_and_save_image_to_cdn
 from common.utils.github import create_github_repo, get_all_repos, validate_github_username
+from common.utils.oauth_providers import extract_slack_user_id
 from api.messages.message import Message
 from google.cloud.exceptions import NotFound
 
@@ -677,7 +678,8 @@ def save_team(propel_user_id, json):
     email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_user_id)
     slack_user_id = user_id
     
-    root_slack_user_id = slack_user_id.replace("oauth2|slack|T1Q7936BH-","")
+    # Extract the raw Slack user ID (handles both OAuth formats)
+    root_slack_user_id = extract_slack_user_id(slack_user_id)
     user = get_user_doc_reference(root_slack_user_id)
     
     db = get_db()  # this connects to our Firestore database
