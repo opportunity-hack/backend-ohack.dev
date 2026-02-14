@@ -15,7 +15,13 @@ import uuid
 logger = get_logger("users_service")
 
 # Import OAuth utilities for handling multiple providers (Slack, Google, etc.)
-from common.utils.oauth_providers import USER_ID_PREFIX, normalize_slack_user_id, is_oauth_user_id
+from common.utils.oauth_providers import (
+    USER_ID_PREFIX,
+    normalize_slack_user_id,
+    is_oauth_user_id,
+    get_oauth_provider_from_propel_response,
+    build_user_id_for_provider
+)
 
 #TODO consts file?
 ONE_MINUTE = 1*60
@@ -93,67 +99,165 @@ def save_user(
 
 def get_slack_user_from_token(token):
     resp = requests.get(
-        "https://slack.com/api/openid.connect.userInfo", 
+        "https://slack.com/api/openid.connect.userInfo",
         headers={"Authorization": f"Bearer {token}"}
     )
     '''
-    {'ok': True, 'sub': 'UC31XTRT5', 'https://slack.com/user_id': 'UC31XTRT5', 'https://slack.com/team_id': 'T1Q7936BH', 'email': 'greg.vannoni@gmail.com', 'email_verified': True, 'date_email_verified': 1632009763, 'name': 'Greg V [Staff/Mentor]', 'picture': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'given_name': 'Greg', 'family_name': 'V [Staff/Mentor]', 'locale': 'en-US', 'https://slack.com/team_name': 'Opportunity Hack', 'https://slack.com/team_domain': 'opportunity-hack', 'https://slack.com/user_image_24': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_24.png', 'https://slack.com/user_image_32': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_32.png', 'https://slack.com/user_image_48': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_48.png', 'https://slack.com/user_image_72': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_72.png', 'https://slack.com/user_image_192': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_192.png', 'https://slack.com/user_image_512': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'https://slack.com/user_image_1024': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_1024.png', 'https://slack.com/team_image_34': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_34.png', 'https://slack.com/team_image_44': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_44.png', 'https://slack.com/team_image_68': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_68.png', 'https://slack.com/team_image_88': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_88.png', 'https://slack.com/team_image_102': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_102.png', 'https://slack.com/team_image_132': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_132.png', 
+    {'ok': True, 'sub': 'UC31XTRT5', 'https://slack.com/user_id': 'UC31XTRT5', 'https://slack.com/team_id': 'T1Q7936BH', 'email': 'greg.vannoni@gmail.com', 'email_verified': True, 'date_email_verified': 1632009763, 'name': 'Greg V [Staff/Mentor]', 'picture': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'given_name': 'Greg', 'family_name': 'V [Staff/Mentor]', 'locale': 'en-US', 'https://slack.com/team_name': 'Opportunity Hack', 'https://slack.com/team_domain': 'opportunity-hack', 'https://slack.com/user_image_24': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_24.png', 'https://slack.com/user_image_32': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_32.png', 'https://slack.com/user_image_48': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_48.png', 'https://slack.com/user_image_72': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_72.png', 'https://slack.com/user_image_192': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_192.png', 'https://slack.com/user_image_512': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_512.png', 'https://slack.com/user_image_1024': 'https://avatars.slack-edge.com/2020-10-18/1442299648180_56142a4494226a9ea4b5_1024.png', 'https://slack.com/team_image_34': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_34.png', 'https://slack.com/team_image_44': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_44.png', 'https://slack.com/team_image_68': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_68.png', 'https://slack.com/team_image_88': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_88.png', 'https://slack.com/team_image_102': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_102.png', 'https://slack.com/team_image_132': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_132.png',
     'https://slack.com/team_image_230': 'https://avatars.slack-edge.com/2017-09-26/246651063104_30aaa970e3bcf4a8ac6b_230.png', 'https://slack.com/team_image_default': False}
     '''
-    
+
     json = resp.json()
     if not json["ok"]:
         warning(logger, "Error getting user details from Slack or Propel APIs", response=json)
-        return None    
-    
+        return None
+
     if "sub" not in json:
         warning(logger, "Error getting user details from Slack or Propel APIs", response=json)
         return None
 
-    # Add prefix to sub 
+    # Add prefix to sub
     json["sub"] = USER_ID_PREFIX + json["sub"]
 
     info(logger, "Slack API response", response=json)
     return json
 
+
+def get_google_user_from_token(token):
+    """
+    Get Google user details from a Google OAuth access token.
+
+    Google userinfo response format:
+    {
+        'sub': '1234567890',  # Google's unique user ID
+        'email': 'user@gmail.com',
+        'email_verified': True,
+        'name': 'John Doe',
+        'given_name': 'John',
+        'family_name': 'Doe',
+        'picture': 'https://lh3.googleusercontent.com/...',
+        'locale': 'en'
+    }
+    """
+    resp = requests.get(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        headers={"Authorization": f"Bearer {token}"}
+    )
+
+    json = resp.json()
+
+    if "error" in json:
+        warning(logger, "Error getting user details from Google API", response=json)
+        return None
+
+    if "sub" not in json:
+        warning(logger, "Missing 'sub' field in Google API response", response=json)
+        return None
+
+    # Build the normalized user ID for Google
+    json["sub"] = build_user_id_for_provider("google", json["sub"])
+
+    info(logger, "Google API response", response=json)
+    return json
+
 def get_user_from_propel_user_id(propel_id):
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    user_id = slack_user["sub"]
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+    if oauth_user is None:
+        return None
+    user_id = oauth_user["sub"]
     return get_user_from_slack_id(user_id)
 
-def get_slack_user_from_propel_user_id(propel_id):
-    #TODO: Do we want to be using os.getenv here?
 
+def get_oauth_user_from_propel_user_id(propel_id):
+    """
+    Get user details from any OAuth provider via PropelAuth.
+
+    This function detects which OAuth provider (Slack, Google, etc.) was used
+    and fetches user details from the appropriate provider's API.
+
+    Args:
+        propel_id: The PropelAuth user ID
+
+    Returns:
+        dict: User details with normalized fields including 'sub' (user ID)
+    """
     url = f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token"
 
     debug(logger, "Propel API URL", url=url)
 
     resp = requests.get(
-        url, 
+        url,
         headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
-        )    
+    )
     logger.debug(f"Propel RESP: {resp}")
-    json = resp.json()    
-    logger.debug(f"Propel RESP JSON: {json}")
-    
-    slack_token = json['slack']['access_token']
-    return get_slack_user_from_token(slack_token)
+    json_resp = resp.json()
+    logger.debug(f"Propel RESP JSON: {json_resp}")
 
-def get_propel_user_details_by_id(propel_id):    
-    slack_user = get_slack_user_from_propel_user_id(propel_id)    
-    user_id = slack_user["sub"]
-    
-    email = slack_user["email"]
-    # Use todays date in UTC  (Z)
+    # Detect which OAuth provider was used
+    provider, token_data = get_oauth_provider_from_propel_response(json_resp)
+
+    if provider is None or token_data is None:
+        warning(logger, "Could not detect OAuth provider from PropelAuth response", response=json_resp)
+        return None
+
+    access_token = token_data.get('access_token')
+    if not access_token:
+        warning(logger, "No access token found in PropelAuth response", provider=provider, response=json_resp)
+        return None
+
+    debug(logger, "Detected OAuth provider", provider=provider)
+
+    # Fetch user details from the appropriate provider
+    if provider == 'slack':
+        return get_slack_user_from_token(access_token)
+    elif provider == 'google':
+        return get_google_user_from_token(access_token)
+    else:
+        warning(logger, "Unsupported OAuth provider", provider=provider)
+        return None
+
+
+def get_slack_user_from_propel_user_id(propel_id):
+    """
+    Legacy function for backward compatibility.
+    Use get_oauth_user_from_propel_user_id instead.
+    """
+    return get_oauth_user_from_propel_user_id(propel_id)
+
+def get_propel_user_details_by_id(propel_id):
+    """
+    Get normalized user details from PropelAuth for any OAuth provider.
+
+    Returns:
+        tuple: (email, user_id, last_login, profile_image, name, nickname)
+    """
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+
+    if oauth_user is None:
+        warning(logger, "Could not get OAuth user details", propel_id=propel_id)
+        return None, None, None, None, None, None
+
+    user_id = oauth_user["sub"]
+    email = oauth_user.get("email", "")
+
+    # Use today's date in UTC (Z)
     last_login = datetime.now().isoformat() + "Z"
-    # Print the last login in native format and in Arizona time
-    
-    logger.debug(f"Last Login: {last_login} {datetime.now().astimezone(pytz.timezone('US/Arizona')).isoformat()}")  
+    logger.debug(f"Last Login: {last_login} {datetime.now().astimezone(pytz.timezone('US/Arizona')).isoformat()}")
 
-    # https://slack.com/user_image_192
-    profile_image = slack_user["https://slack.com/user_image_192"]
-    name = slack_user["name"]
-    nickname = slack_user["given_name"]
+    # Get profile image - handle different provider formats
+    # Slack uses: https://slack.com/user_image_192
+    # Google uses: picture
+    profile_image = (
+        oauth_user.get("https://slack.com/user_image_192") or
+        oauth_user.get("picture") or
+        ""
+    )
+
+    # Get name - both providers use 'name'
+    name = oauth_user.get("name", "")
+
+    # Get nickname - both providers use 'given_name'
+    nickname = oauth_user.get("given_name", "")
 
     return email, user_id, last_login, profile_image, name, nickname
 
@@ -189,7 +293,7 @@ def get_profile_metadata(propel_id):
     
 
     logger.debug(f"Account Details:\
-            \nEmail: {email}\nSlack User ID: {user_id}\n\
+            \nEmail: {email}\nUser ID: {user_id}\n\
             Last Login:{last_login}\
             Image:{profile_image}")
 
@@ -220,28 +324,32 @@ def get_history(db_id):
     return result
 
 def save_profile_metadata(propel_id, json):
-    
-    send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
-    
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    slack_user_id = slack_user["sub"]
 
-    logger.info(f"Save Profile Metadata for {slack_user_id} {json}")
+    send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
+
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+    if oauth_user is None:
+        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        return None
+
+    user_id = oauth_user["sub"]
+
+    logger.info(f"Save Profile Metadata for {user_id} {json}")
 
     json = json["metadata"]
-        
+
     # See if the user exists
-    user = fetch_user_by_user_id(slack_user_id)
+    user = fetch_user_by_user_id(user_id)
     if user is None:
         return
     else:
-        logger.info(f"User exists: {user.id}")   
-        user.update_from_metadata(json)     
+        logger.info(f"User exists: {user.id}")
+        user.update_from_metadata(json)
         upsert_profile_metadata(user)
-    
+
         # Clear cache for get_profile_metadata
         get_profile_metadata.cache_clear()
-            
+
     return user #TODO: Breaking API change
 
 def get_user_by_db_id(id):
@@ -262,26 +370,30 @@ def get_users():
 
 def save_volunteering_time(propel_id, json):
     logger.info(f"Save Volunteering Time for {propel_id} {json}")
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    slack_user_id = slack_user["sub"]
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+    if oauth_user is None:
+        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        return None
 
-    logger.info(f"Save Volunteering Time for {slack_user_id} {json}")
+    user_id = oauth_user["sub"]
+
+    logger.info(f"Save Volunteering Time for {user_id} {json}")
 
     # Get the user
-    user = fetch_user_by_user_id(slack_user_id)
+    user = fetch_user_by_user_id(user_id)
     if user is None:
-        error(logger, "User not found", slack_user_id=slack_user_id)
+        error(logger, "User not found", user_id=user_id)
         return
 
-    timestamp = datetime.now().isoformat() + "Z"  
-    reason = json["reason"] # The kind of volunteering being done  
-    
+    timestamp = datetime.now().isoformat() + "Z"
+    reason = json["reason"] # The kind of volunteering being done
+
     if "finalHours" in json:
-        finalHours = json["finalHours"] # This is sent at when volunteering is done        
+        finalHours = json["finalHours"] # This is sent at when volunteering is done
         if finalHours is None:
-            error(logger, "finalHours is None", slack_user_id=slack_user_id)
+            error(logger, "finalHours is None", user_id=user_id)
             return
-            
+
         user.volunteering.append({
             "timestamp": timestamp,
             "finalHours": round(finalHours,2),
@@ -295,9 +407,9 @@ def save_volunteering_time(propel_id, json):
     # The right way to do this is likely to get a session id when they start volunteering and the frontend uses that to close out the volunteering session when it is done
     # But this way is simpler for now
     elif "commitmentHours" in json:
-        commitmentHours = json["commitmentHours"] # This is sent at the start of volunteering        
+        commitmentHours = json["commitmentHours"] # This is sent at the start of volunteering
         if commitmentHours is None:
-            error(logger, "commitmentHours is None", slack_user_id=slack_user_id)
+            error(logger, "commitmentHours is None", user_id=user_id)
             return
         
         user.volunteering.append({
@@ -314,13 +426,17 @@ def save_volunteering_time(propel_id, json):
 
 def get_volunteering_time(propel_id, start_date, end_date):
     logger.info(f"Get Volunteering Time for {propel_id} {start_date} {end_date}")
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    slack_user_id = slack_user["sub"]
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+    if oauth_user is None:
+        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        return None
 
-    logger.info(f"Get Volunteering Time for {slack_user_id} start: {start_date} end: {end_date}")
+    user_id = oauth_user["sub"]
+
+    logger.info(f"Get Volunteering Time for {user_id} start: {start_date} end: {end_date}")
 
     # Get the user
-    user = fetch_user_by_user_id(slack_user_id)
+    user = fetch_user_by_user_id(user_id)
     if user is None:
         return
 
@@ -416,13 +532,17 @@ def get_all_volunteering_time(start_date=None, end_date=None):
 def get_privacy_settings(propel_id):
     """Get privacy settings for a user"""
     logger.info(f"Get Privacy Settings for {propel_id}")
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    slack_user_id = slack_user["sub"]
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+    if oauth_user is None:
+        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        return None
+
+    user_id = oauth_user["sub"]
 
     # Get the user
-    user = fetch_user_by_user_id(slack_user_id)
+    user = fetch_user_by_user_id(user_id)
     if user is None:
-        error(logger, "User not found", slack_user_id=slack_user_id)
+        error(logger, "User not found", user_id=user_id)
         return None
 
     return user.get_privacy_settings()
@@ -431,13 +551,17 @@ def get_privacy_settings(propel_id):
 def update_privacy_settings(propel_id, data):
     """Update privacy settings for a user"""
     logger.info(f"Update Privacy Settings for {propel_id} {data}")
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    slack_user_id = slack_user["sub"]
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+    if oauth_user is None:
+        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        return None
+
+    user_id = oauth_user["sub"]
 
     # Get the user
-    user = fetch_user_by_user_id(slack_user_id)
+    user = fetch_user_by_user_id(user_id)
     if user is None:
-        error(logger, "User not found", slack_user_id=slack_user_id)
+        error(logger, "User not found", user_id=user_id)
         return None
 
     # Update the privacy settings

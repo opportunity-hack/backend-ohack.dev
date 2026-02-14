@@ -501,21 +501,65 @@ def get_my_teams_by_event_id(propel_id, event_id):
             "teams": teams,
             "user_id": user_id
         }
-    
 
-    for t in hackathon_dict["teams"]:
-        team_data = t.get().to_dict()        
-        team_data["id"] = t.id
-        
-        for user_ref in team_data["users"]:
-            user_data = user_ref.get().to_dict()
-            user_data["id"] = user_ref.id
-            logger.debug("User data: %s", user_data)
-            if user_id == user_data["user_id"]:
-                del team_data["users"]
-                if "problem_statements" in team_data:
-                    del team_data["problem_statements"]
-                teams.append(team_data)                              
+    db = get_db()
+    team_refs = hackathon_dict["teams"]
+
+    if not team_refs:
+        return {
+            "teams": teams,
+            "user_id": user_id
+        }
+
+    # Batch fetch all teams at once (1 query instead of N queries)
+    team_docs = db.get_all(team_refs)
+
+    # Collect all unique user references from all teams
+    all_user_refs = []
+    teams_with_users = []
+
+    for team_doc in team_docs:
+        if not team_doc.exists:
+            continue
+
+        team_data = team_doc.to_dict()
+        team_data["id"] = team_doc.id
+        user_refs = team_data.get("users", [])
+
+        # Store team data with its user references for later filtering
+        teams_with_users.append({
+            "team_data": team_data,
+            "user_refs": user_refs
+        })
+
+        # Collect all user references for batch fetching
+        all_user_refs.extend(user_refs)
+
+    # Batch fetch all users at once (1 query instead of N*M queries)
+    if all_user_refs:
+        user_docs = db.get_all(all_user_refs)
+
+        # Create a map of user_ref.id -> user_data for fast lookup
+        user_map = {}
+        for user_doc in user_docs:
+            if user_doc.exists:
+                user_data = user_doc.to_dict()
+                user_map[user_doc.id] = user_data.get("user_id")
+
+        # Filter teams that contain the target user
+        for item in teams_with_users:
+            team_data = item["team_data"]
+            user_refs = item["user_refs"]
+
+            # Check if any user in this team matches our target user
+            for user_ref in user_refs:
+                if user_ref.id in user_map and user_map[user_ref.id] == user_id:
+                    # Found the user in this team
+                    del team_data["users"]
+                    if "problem_statements" in team_data:
+                        del team_data["problem_statements"]
+                    teams.append(team_data)
+                    break  # No need to check other users in this team
 
     logger.debug("Teams data: %s", teams)
 

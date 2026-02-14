@@ -10,6 +10,8 @@ from common.utils.oauth_providers import (
     normalize_slack_user_id,
     extract_slack_user_id,
     get_provider_display_name,
+    get_oauth_provider_from_propel_response,
+    build_user_id_for_provider,
     DEFAULT_SLACK_WORKSPACE_ID  # Import the constant for testing
 )
 
@@ -203,3 +205,127 @@ class TestProviderDisplayName:
         """Test display name for non-OAuth user ID"""
         user_id = "regular-user-id"
         assert get_provider_display_name(user_id) == "Unknown"
+
+
+class TestPropelResponseProviderDetection:
+    """Tests for detecting OAuth provider from PropelAuth response"""
+
+    def test_detect_slack_provider(self):
+        """Test detecting Slack from PropelAuth response"""
+        response = {
+            'slack': {
+                'access_token': 'xoxp-123456',
+                'refresh_token': None,
+                'token_provider': 'slack'
+            }
+        }
+        provider, token_data = get_oauth_provider_from_propel_response(response)
+        assert provider == 'slack'
+        assert token_data['access_token'] == 'xoxp-123456'
+
+    def test_detect_google_provider(self):
+        """Test detecting Google from PropelAuth response"""
+        response = {
+            'google': {
+                'access_token': 'ya29.abc123',
+                'refresh_token': None,
+                'token_provider': 'google',
+                'token_expiration': 1770096897,
+                'authorized_scopes': ['openid', 'email', 'profile']
+            }
+        }
+        provider, token_data = get_oauth_provider_from_propel_response(response)
+        assert provider == 'google'
+        assert token_data['access_token'] == 'ya29.abc123'
+
+    def test_detect_github_provider(self):
+        """Test detecting GitHub from PropelAuth response"""
+        response = {
+            'github': {
+                'access_token': 'gho_abc123',
+                'refresh_token': None
+            }
+        }
+        provider, token_data = get_oauth_provider_from_propel_response(response)
+        assert provider == 'github'
+        assert token_data['access_token'] == 'gho_abc123'
+
+    def test_detect_microsoft_provider(self):
+        """Test detecting Microsoft from PropelAuth response"""
+        response = {
+            'microsoft': {
+                'access_token': 'EwBwA...',
+                'refresh_token': None
+            }
+        }
+        provider, token_data = get_oauth_provider_from_propel_response(response)
+        assert provider == 'microsoft'
+        assert token_data['access_token'] == 'EwBwA...'
+
+    def test_empty_response(self):
+        """Test with empty response"""
+        provider, token_data = get_oauth_provider_from_propel_response({})
+        assert provider is None
+        assert token_data is None
+
+    def test_none_response(self):
+        """Test with None response"""
+        provider, token_data = get_oauth_provider_from_propel_response(None)
+        assert provider is None
+        assert token_data is None
+
+    def test_unknown_provider_with_access_token(self):
+        """Test with unknown provider that has access_token structure"""
+        response = {
+            'custom_oauth': {
+                'access_token': 'custom_token_123'
+            }
+        }
+        provider, token_data = get_oauth_provider_from_propel_response(response)
+        assert provider == 'custom_oauth'
+        assert token_data['access_token'] == 'custom_token_123'
+
+    def test_response_without_access_token(self):
+        """Test with response that doesn't have access_token in nested dict"""
+        response = {
+            'something': {
+                'other_field': 'value'
+            }
+        }
+        provider, token_data = get_oauth_provider_from_propel_response(response)
+        assert provider is None
+        assert token_data is None
+
+
+class TestBuildUserIdForProvider:
+    """Tests for building normalized user IDs for different providers"""
+
+    def test_build_slack_user_id_with_workspace(self):
+        """Test building Slack user ID with explicit workspace"""
+        result = build_user_id_for_provider('slack', 'U12345ABC', 'T9999999')
+        assert result == 'oauth2|slack|T9999999-U12345ABC'
+
+    def test_build_slack_user_id_default_workspace(self):
+        """Test building Slack user ID with default workspace"""
+        result = build_user_id_for_provider('slack', 'U12345ABC')
+        assert result == f'oauth2|slack|{TEST_SLACK_WORKSPACE_ID}-U12345ABC'
+
+    def test_build_google_user_id(self):
+        """Test building Google user ID"""
+        result = build_user_id_for_provider('google', '1234567890123456789')
+        assert result == 'oauth2|google-oauth2|1234567890123456789'
+
+    def test_build_github_user_id(self):
+        """Test building GitHub user ID"""
+        result = build_user_id_for_provider('github', '12345678')
+        assert result == 'oauth2|github|12345678'
+
+    def test_build_microsoft_user_id(self):
+        """Test building Microsoft user ID"""
+        result = build_user_id_for_provider('microsoft', 'uuid-here')
+        assert result == 'oauth2|microsoft|uuid-here'
+
+    def test_build_unknown_provider_user_id(self):
+        """Test building user ID for unknown provider"""
+        result = build_user_id_for_provider('custom_provider', 'user123')
+        assert result == 'oauth2|custom_provider|user123'

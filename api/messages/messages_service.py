@@ -921,7 +921,7 @@ def join_team(propel_user_id, json):
         # Check if user is already in team
         if user_ref in team_users:
             logger.warning(f"User {userid} is already in team {team_id}")
-            return False
+            return False, None
 
         # Prepare updates
         new_team_users = list(set(team_users + [user_ref]))
@@ -932,18 +932,19 @@ def join_team(propel_user_id, json):
         transaction.update(user_ref, {"teams": new_user_teams})
 
         logger.debug(f"User {userid} added to team {team_id}")
-        return True
+        # Return slack_channel from within transaction to avoid race condition
+        return True, team_data.get("slack_channel")
 
     # Execute the transaction
     try:
         transaction = db.transaction()
-        success = update_team_and_user(transaction)
+        success, team_slack_channel = update_team_and_user(transaction)
         if success:
             send_slack_audit(action="join_team", message="Added", payload=json)
             message = "Joined Team"
-            # Add person to Slack channel
-            team_slack_channel = team_ref.get().to_dict()["slack_channel"]
-            invite_user_to_channel(userid, team_slack_channel)
+            # Add person to Slack channel using data from transaction
+            if team_slack_channel:
+                invite_user_to_channel(userid, team_slack_channel)
         else:
             message = "User was already in the team"
     except Exception as e:
@@ -2382,11 +2383,28 @@ def get_all_profiles():
 @limits(calls=100, period=ONE_MINUTE)
 def get_history_old(db_id):
     logger.debug("Get History Start")
+
+    # Check if db_id is None first
+    if db_id is None:
+        logger.error("get_history_old called with None db_id")
+        return None
+
     db = get_db()  # this connects to our Firestore database
     collection = db.collection('users')
     doc = collection.document(db_id)
     doc_get = doc.get()
+
+    # Check if document exists before calling to_dict()
+    if not doc_get.exists:
+        logger.warning(f"User document not found for db_id: {db_id}")
+        return None
+
     res = doc_get.to_dict()
+
+    # Additional safety check in case to_dict() returns None
+    if res is None:
+        logger.warning(f"User document exists but to_dict() returned None for db_id: {db_id}")
+        return None
 
     _hackathons=[]
     if "hackathons" in res:
@@ -2519,15 +2537,18 @@ def save_user_old(
 def save_profile_metadata_old(propel_id, json):
     send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
     db = get_db()  # this connects to our Firestore database
-    slack_user = get_slack_user_from_propel_user_id(propel_id)
-    slack_user_id = slack_user["sub"]
+    oauth_user = get_slack_user_from_propel_user_id(propel_id)
+    if oauth_user is None:
+        logger.warning(f"Could not get OAuth user details for propel_id: {propel_id}")
+        return None
+    oauth_user_id = oauth_user["sub"]
 
-    logger.info(f"Save Profile Metadata for {slack_user_id} {json}")
+    logger.info(f"Save Profile Metadata for {oauth_user_id} {json}")
 
     json = json["metadata"]
 
     # See if the user exists
-    user = get_user_from_slack_id(slack_user_id)
+    user = get_user_from_slack_id(oauth_user_id)
     if user is None:
         return
     else:

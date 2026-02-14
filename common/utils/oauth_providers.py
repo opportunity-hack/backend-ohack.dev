@@ -202,3 +202,73 @@ def is_oauth_user_id(user_id):
 # Backward compatibility: Keep the old constant name
 USER_ID_PREFIX = f"oauth2|slack|{DEFAULT_SLACK_WORKSPACE_ID}-"
 SLACK_PREFIX = f"oauth2|slack|{DEFAULT_SLACK_WORKSPACE_ID}-"
+GOOGLE_PREFIX = "oauth2|google-oauth2|"
+
+
+def get_oauth_provider_from_propel_response(propel_response):
+    """
+    Detect which OAuth provider was used from a PropelAuth oauth_token response.
+
+    PropelAuth returns OAuth tokens in a format like:
+        {'slack': {'access_token': '...', ...}}
+        {'google': {'access_token': '...', ...}}
+
+    Args:
+        propel_response: The JSON response from PropelAuth's oauth_token endpoint
+
+    Returns:
+        tuple: (provider_name, token_data) or (None, None) if not found
+
+    Examples:
+        >>> get_oauth_provider_from_propel_response({'slack': {'access_token': 'xoxp-...'}})
+        ('slack', {'access_token': 'xoxp-...'})
+        >>> get_oauth_provider_from_propel_response({'google': {'access_token': 'ya29...'}})
+        ('google', {'access_token': 'ya29...'})
+    """
+    if not propel_response:
+        return None, None
+
+    # Check for known providers in order of likelihood
+    known_providers = ['slack', 'google', 'github', 'microsoft']
+
+    for provider in known_providers:
+        if provider in propel_response:
+            return provider, propel_response[provider]
+
+    # Check for any other provider
+    for key, value in propel_response.items():
+        if isinstance(value, dict) and 'access_token' in value:
+            return key, value
+
+    return None, None
+
+
+def build_user_id_for_provider(provider, provider_user_id, workspace_id=None):
+    """
+    Build a normalized user ID for a given OAuth provider.
+
+    Args:
+        provider: The OAuth provider name ('slack', 'google', etc.)
+        provider_user_id: The user ID from the provider
+        workspace_id: For Slack, the workspace ID (optional, uses default if not provided)
+
+    Returns:
+        str: The normalized user ID in format oauth2|provider|identifier
+
+    Examples:
+        >>> build_user_id_for_provider('slack', 'U12345', 'T1Q7936BH')
+        'oauth2|slack|T1Q7936BH-U12345'
+        >>> build_user_id_for_provider('google', '1234567890')
+        'oauth2|google-oauth2|1234567890'
+    """
+    if provider == 'slack':
+        ws_id = workspace_id or DEFAULT_SLACK_WORKSPACE_ID
+        return f"oauth2|slack|{ws_id}-{provider_user_id}"
+    elif provider == 'google':
+        return f"oauth2|google-oauth2|{provider_user_id}"
+    elif provider == 'github':
+        return f"oauth2|github|{provider_user_id}"
+    elif provider == 'microsoft':
+        return f"oauth2|microsoft|{provider_user_id}"
+    else:
+        return f"oauth2|{provider}|{provider_user_id}"

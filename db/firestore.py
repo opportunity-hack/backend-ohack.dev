@@ -23,7 +23,7 @@ logger = get_logger("firestore")
 mockfirestore = None
 
 # Import OAuth utilities for handling multiple providers (Slack, Google, etc.)
-from common.utils.oauth_providers import SLACK_PREFIX
+from common.utils.oauth_providers import SLACK_PREFIX, is_oauth_user_id, normalize_slack_user_id
 
 # TODO: Put in .env? Feels configurable. Or maybe something we would want to protect with a secret?
 # SLACK_PREFIX is now imported from oauth_providers module for consistency
@@ -96,18 +96,20 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
     def fetch_user_by_user_id_raw(self, db, user_id):
         debug(logger, "Fetching raw user by user_id", user_id=user_id)
-        #TODO: Why are we putting the slack prefix in the DB?
-        if user_id.startswith(SLACK_PREFIX):
-            slack_user_id = user_id
+        # Handle multiple OAuth providers (Slack, Google, etc.)
+        # If the user_id is already in OAuth format (oauth2|provider|id), use it as-is
+        # Otherwise, assume it's a raw Slack user ID and normalize it
+        if is_oauth_user_id(user_id):
+            normalized_user_id = user_id
         else:
-            slack_user_id = f"{SLACK_PREFIX}{user_id}"
+            normalized_user_id = normalize_slack_user_id(user_id)
 
         u = None
         try:
-            u, *rest = db.collection('users').where("user_id", "==", slack_user_id).stream()
-            debug(logger, "Found user in database", slack_user_id=slack_user_id)
+            u, *rest = db.collection('users').where("user_id", "==", normalized_user_id).stream()
+            debug(logger, "Found user in database", normalized_user_id=normalized_user_id)
         except ValueError:
-            warning(logger, "ValueError when fetching user", slack_user_id=slack_user_id)
+            warning(logger, "ValueError when fetching user", normalized_user_id=normalized_user_id)
             pass
         return u
     
@@ -195,31 +197,39 @@ class FirestoreDatabaseInterface(DatabaseInterface):
                 user = User.deserialize(d)
 
                 if "hackathons" in d:
-                    #TODO: I think we use get_all here
-                    # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
-                    for h in d["hackathons"]:
-                        h_doc = h.get()
-                        rec = h_doc.to_dict()
-                        rec['id'] = h_doc.id
+                    # Batch fetch all hackathon documents at once to avoid N+1 queries
+                    hackathon_refs = d["hackathons"]
+                    if hackathon_refs:
+                        hackathon_docs = db.get_all(hackathon_refs)
 
-                        hackathon = Hackathon.deserialize(rec)
-                        user.hackathons.append(hackathon)
+                        for h_doc in hackathon_docs:
+                            if not h_doc.exists:
+                                continue
 
-                        #TODO: I think we use get_all here
-                        # https://cloud.google.com/python/docs/reference/firestore/latest/google.cloud.firestore_v1.client.Client#google_cloud_firestore_v1_client_Client_get_all
-                        for n in rec["nonprofits"]:
-                            
-                            npo_doc = n.get() #TODO: Deal with lazy-loading in db layer
-                            npo_id = npo_doc.id
-                            npo = n.get().to_dict()
-                            npo["id"] = npo_id
-                                            
-                            if npo and "problem_statements" in npo:
-                                # This is duplicate date as we should already have this
-                                del npo["problem_statements"]
-                            hackathon.nonprofits.append(npo)
+                            rec = h_doc.to_dict()
+                            rec['id'] = h_doc.id
 
-                        user.hackathons.append(hackathon)
+                            hackathon = Hackathon.deserialize(rec)
+
+                            # Batch fetch all nonprofit documents for this hackathon
+                            if "nonprofits" in rec:
+                                nonprofit_refs = rec["nonprofits"]
+                                if nonprofit_refs:
+                                    nonprofit_docs = db.get_all(nonprofit_refs)
+
+                                    for npo_doc in nonprofit_docs:
+                                        if not npo_doc.exists:
+                                            continue
+
+                                        npo = npo_doc.to_dict()
+                                        npo["id"] = npo_doc.id
+
+                                        if npo and "problem_statements" in npo:
+                                            # This is duplicate data as we should already have this
+                                            del npo["problem_statements"]
+                                        hackathon.nonprofits.append(npo)
+
+                            user.hackathons.append(hackathon)
 
                 #TODO:
                 # if "badges" in res:

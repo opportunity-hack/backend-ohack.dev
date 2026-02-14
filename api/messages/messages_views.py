@@ -583,8 +583,11 @@ def profile():
 @auth.require_user
 def save_profile():
     logger.info("POST /profile called")
-    if auth_user and auth_user.user_id:        
-        return vars(save_profile_metadata_old(auth_user.user_id, request.get_json()))
+    if auth_user and auth_user.user_id:
+        result = save_profile_metadata_old(auth_user.user_id, request.get_json())
+        if result is None:
+            return {"error": "User not found. Please ensure you have logged in via the profile page first."}, 404
+        return vars(result)
     else:
         return None
 
