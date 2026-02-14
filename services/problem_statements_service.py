@@ -105,7 +105,12 @@ def update_problem_statement_fields(d):
     if problem_statement is not None:
         problem_statement.update(d)
         problem_statement.id = d['id']
-        return update_problem_statement(problem_statement)
+        result = update_problem_statement(problem_statement)
+        
+        # Clear cache after updating problem statement
+        get_problem_statement.cache_clear()
+        
+        return result
     else:
         return None
     
