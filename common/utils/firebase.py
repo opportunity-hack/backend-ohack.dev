@@ -6,6 +6,8 @@ from mockfirestore import MockFirestore
 import datetime
 import re
 from google.cloud.firestore import FieldFilter
+# Import OAuth utilities for handling multiple providers (Slack, Google, etc.)
+from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id
 
 
 cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
@@ -76,13 +78,23 @@ def get_user_by_id(id):
     return adict
 
 def get_user_by_user_id(user_id):
-    SLACK_PREFIX = "oauth2|slack|T1Q7936BH-"
-    slack_user_id = f"{SLACK_PREFIX}{user_id}"
-    # log slack_user_id
-    logger.info(f"Looking up user {slack_user_id}")
-    
+    """
+    Get user by user_id. Handles both OAuth format and raw user IDs.
+    Supports multiple OAuth providers (Slack, Google, etc.)
+
+    Note: This function uses normalize_slack_user_id for backward compatibility
+    with legacy code that stored raw Slack user IDs. For OAuth-prefixed IDs
+    from any provider (Slack, Google, etc.), the ID is used as-is.
+    """
+    # Normalize the user_id if it's not already in OAuth format
+    # For Slack: converts raw IDs like "U12345" to "oauth2|slack|T1Q7936BH-U12345"
+    # For other OAuth providers: leaves IDs like "oauth2|google-oauth2|123" unchanged
+    normalized_user_id = normalize_slack_user_id(user_id) if not is_oauth_user_id(user_id) else user_id
+
+    logger.info(f"Looking up user {normalized_user_id}")
+
     db = get_db()  # this connects to our Firestore database
-    docs = db.collection('users').where("user_id", "==", slack_user_id).stream()
+    docs = db.collection('users').where("user_id", "==", normalized_user_id).stream()
 
     for doc in docs:
         adict = doc.to_dict()
@@ -304,13 +316,15 @@ def add_user_by_email_to_team(email_address, team_name):
         db.collection("users").document(user.id).set({"teams": user_teams}, merge=True)
 
 def add_user_by_slack_id_to_team(user_id, team_name):
+    """
+    Add user to team. Handles both OAuth format and raw Slack user IDs.
+    Supports multiple OAuth providers by normalizing the user_id.
+    """
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Adding user {user_id} to team {team_name}")
 
-    # If user_id doesn't have oauth2|slack|T1Q7936BH- prefix, add it
-    if not user_id.startswith("oauth2|slack|T1Q7936BH-"):
-        user_id = "oauth2|slack|T1Q7936BH-" + user_id
-
+    # Normalize user_id if it doesn't have OAuth prefix
+    normalized_user_id = normalize_slack_user_id(user_id) if not is_oauth_user_id(user_id) else user_id
 
     # Get team
     team = db.collection("teams").where("name", "==", team_name).get()
@@ -321,20 +335,20 @@ def add_user_by_slack_id_to_team(user_id, team_name):
         logger.error(f"**ERROR Team {team_name} does not exist")
         raise Exception(f"Team {team_name} does not exist")
 
-    # Get user
-    user = db.collection("users").where("user_id", "==", user_id).get()
+    # Get user using normalized user_id
+    user = db.collection("users").where("user_id", "==", normalized_user_id).get()
     user = user[0]
     
     if not user:
-        logger.error(f"**ERROR User {user_id} does not exist")
-        raise Exception(f"User {user_id} does not exist")
+        logger.error(f"**ERROR User {normalized_user_id} does not exist")
+        raise Exception(f"User {normalized_user_id} does not exist")
 
     
     print(team)
     # Check if user is already in team    
     team_users = team.to_dict()["users"]
     if user.reference in team_users:
-        logger.info(f"User {user_id} is already in team {team_name}, not adding again")        
+        logger.info(f"User {normalized_user_id} is already in team {team_name}, not adding again")        
     else:
         team_users.append(user.reference)
         db.collection("teams").document(team.id).set({"users": team_users}, merge=True)

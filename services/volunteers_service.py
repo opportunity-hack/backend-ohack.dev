@@ -9,6 +9,7 @@ from google.cloud import firestore
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger, info, debug, warning, error, exception
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern
+from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
 import os
 import requests
 import resend
@@ -1428,7 +1429,7 @@ def _send_slack_message_to_user(
     Send a Slack message to a user.
 
     Args:
-        slack_user_id: The Slack user ID
+        slack_user_id: The Slack user ID (raw format like "U12345ABC", not OAuth format)
         message: The message content (already converted to Slack format)
         volunteer_type: Type of volunteer
         volunteer_id: Optional volunteer ID for logging
@@ -1437,6 +1438,24 @@ def _send_slack_message_to_user(
     Returns:
         Tuple of (success, error_message)
     """
+    # Validate that this is a valid Slack user ID format
+    # Slack user IDs start with 'U' or 'W' followed by alphanumeric characters
+    # They should NOT be OAuth format (oauth2|...) or Google IDs
+    if not slack_user_id:
+        warning(logger, "Empty slack_user_id provided", volunteer_id=volunteer_id)
+        return False, "No Slack user ID provided"
+
+    if slack_user_id.startswith('oauth2|'):
+        warning(logger, "OAuth format ID passed to Slack messaging - this is not a raw Slack ID",
+                slack_user_id=slack_user_id, volunteer_id=volunteer_id)
+        return False, "Invalid Slack user ID format (OAuth format not supported for Slack DMs)"
+
+    # Slack user IDs typically start with U or W
+    if not (slack_user_id.startswith('U') or slack_user_id.startswith('W')):
+        warning(logger, "Potentially invalid Slack user ID format",
+                slack_user_id=slack_user_id, volunteer_id=volunteer_id)
+        # Continue anyway - it might be a channel name or valid ID we don't recognize
+
     try:
         slack_message = f"📧 *Message from Opportunity Hack Team*\n\n{message}\n\n_This message was sent to you as a registered {volunteer_type.title()} for Opportunity Hack._"
         send_slack(message=slack_message, channel=slack_user_id)
@@ -1598,14 +1617,10 @@ def send_volunteer_message(
         db = get_db()
         volunteer_doc = db.collection('volunteers').document(volunteer_id).get()
     
-        SLACK_USER_PREFIX = "oauth2|slack|T1Q7936BH-"
-        
-        # if recipient_id already has SLACK_USER_PREFIX, use it directly
-        if recipient_id and recipient_id.startswith(SLACK_USER_PREFIX):
-            pass
-        elif recipient_id:
-            recipient_id = f"{SLACK_USER_PREFIX}{recipient_id}"
-        else:
+        # Normalize recipient_id to use OAuth format if needed
+        if recipient_id and not is_oauth_user_id(recipient_id):
+            recipient_id = normalize_slack_user_id(recipient_id)
+        elif not recipient_id:
             logger.warning("No recipient_id provided, Slack message may not be sent if slack_user_id is not found in volunteer record.")
 
         # Search users for  "user_id": "<recipient_id>"
@@ -1616,18 +1631,26 @@ def send_volunteer_message(
         name = "Volunteer"
         volunteer_type = recipient_type
         
-        if volunteer_doc.exists:        
+        if volunteer_doc.exists:
             volunteer = volunteer_doc.to_dict()
 
             # Extract contact information from volunteer data
             email = volunteer.get('email')
+            # slack_user_id in volunteers collection is only set for actual Slack users
             slack_user_id = volunteer.get('slack_user_id')
             name = volunteer.get('name', 'Volunteer')
             volunteer_type = volunteer.get('volunteer_type', recipient_type)
         elif users_doc:
             user = users_doc[0].to_dict()
             email = user.get('email_address')
-            slack_user_id = user.get('user_id')
+            # Only use user_id for Slack messaging if it's actually a Slack user ID
+            user_id = user.get('user_id')
+            if user_id and is_slack_user_id(user_id):
+                # Extract the raw Slack user ID (e.g., "U12345ABC" from "oauth2|slack|T1Q7936BH-U12345ABC")
+                slack_user_id = extract_slack_user_id(user_id)
+            else:
+                # Non-Slack users (Google, GitHub, etc.) can't receive Slack DMs
+                slack_user_id = None
             name = user.get('name', 'Volunteer')
             volunteer_type = "Volunteer"
         else:
