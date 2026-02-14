@@ -226,6 +226,8 @@ def add_nonprofit_to_hackathon(json):
     # Update the hackathon document
     hackathon_doc.set(hackathon_dict, merge=True)
 
+    # Clear cache to ensure fresh data is served
+    clear_cache()
 
     return {
         "message": "Nonprofit added to hackathon"
@@ -279,6 +281,9 @@ def remove_nonprofit_from_hackathon(json):
     # Update the hackathon document with the filtered nonprofits list
     hackathon_data["nonprofits"] = updated_nonprofits
     hackathon_doc.set(hackathon_data, merge=True)
+    
+    # Clear cache to ensure fresh data is served
+    clear_cache()
     
     logger.info(f"Remove Nonprofit from Hackathon End (nonprofit removed)")
     return {
@@ -1233,6 +1238,7 @@ def clear_cache():
     doc_to_json.cache_clear()
     get_single_hackathon_event.cache_clear()
     get_single_hackathon_id.cache_clear()
+    get_hackathon_list.cache_clear()
     
 
 @limits(calls=100, period=ONE_MINUTE)
@@ -1707,11 +1713,8 @@ def save_hackathon(json_data, propel_id):
         transaction = db.transaction()
         update_hackathon(transaction)
 
-        # Clear cache for get_single_hackathon_event
-        get_single_hackathon_event.cache_clear()
-
-        # Clear cache for get_hackathon_list
-        doc_to_json.cache_clear()
+        # Clear all hackathon-related caches
+        clear_cache()
 
 
         logger.info(f"Hackathon {'updated' if is_update else 'created'} successfully. ID: {doc_id}")
