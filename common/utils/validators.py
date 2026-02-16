@@ -101,7 +101,21 @@ def validate_hackathon_data(data):
     if not all(isinstance(constraints.get(k), int) for k in ["max_people_per_team", "max_teams_per_problem", "min_people_per_team"]):
         raise ValueError("Constraints must be integers")
 
-    # Add more specific validations as needed
+    # Validate hacker_required_questions if present
+    hacker_required_questions = constraints.get("hacker_required_questions", {})
+    if hacker_required_questions:
+        questions = hacker_required_questions.get("questions", [])
+        if not isinstance(questions, list):
+            raise ValueError("hacker_required_questions.questions must be a list")
+        for i, q in enumerate(questions):
+            if not isinstance(q, dict):
+                raise ValueError(f"Question {i} must be an object")
+            if not isinstance(q.get("question"), str) or not q.get("question"):
+                raise ValueError(f"Question {i} must have a non-empty 'question' string")
+            if not isinstance(q.get("required_answer"), bool):
+                raise ValueError(f"Question {i} must have a boolean 'required_answer'")
+            if not isinstance(q.get("error"), str) or not q.get("error"):
+                raise ValueError(f"Question {i} must have a non-empty 'error' string")
 
 if __name__ == "__main__":
     # Simple tests

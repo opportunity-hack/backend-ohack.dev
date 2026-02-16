@@ -720,7 +720,32 @@ def create_or_update_volunteer(
         if not verify_recaptcha(recaptcha_token):
             warning(logger, "reCAPTCHA verification failed", email=email)
             return {"error": "reCAPTCHA verification failed"}
-    
+
+    # Validate required question answers for hacker applications
+    if volunteer_data.get('volunteer_type') == 'hacker':
+        submitted_answers = volunteer_data.get('requiredQuestionAnswers', [])
+        if submitted_answers:
+            try:
+                db_temp = get_db()
+                hackathon_docs = db_temp.collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
+                hackathon_data = None
+                for doc in hackathon_docs:
+                    hackathon_data = doc.to_dict()
+                    break
+
+                if hackathon_data:
+                    questions = hackathon_data.get('constraints', {}).get('hacker_required_questions', {}).get('questions', [])
+                    if questions:
+                        if len(submitted_answers) != len(questions):
+                            warning(logger, "Required question answer count mismatch", email=email, event_id=event_id)
+                            return {"error": "Required question answers do not match the expected number of questions"}
+                        for i, q in enumerate(questions):
+                            if i >= len(submitted_answers) or submitted_answers[i] != q.get('required_answer'):
+                                warning(logger, "Required question answer incorrect", email=email, event_id=event_id, question_index=i)
+                                return {"error": q.get('error', 'You do not meet the eligibility requirements for this event.')}
+            except Exception as e:
+                exception(logger, "Error validating required questions", exc_info=e, email=email, event_id=event_id)
+
     db = get_db()
     volunteer_type = volunteer_data.get('volunteer_type')
     
