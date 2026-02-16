@@ -65,6 +65,31 @@ def get_hearts_for_all_users():
     return result
 
 
+def get_hearts_leaderboard(limit: int = 10) -> list:
+    users = fetch_users()
+    result = []
+
+    for user in users:
+        total_hearts = 0
+
+        if user.history:
+            for key in user.history:
+                if "certificates" in key:
+                    continue
+                for subkey in user.history[key]:
+                    total_hearts += user.history[key][subkey]
+
+        if total_hearts > 0:
+            result.append({
+                "name": user.name,
+                "totalHearts": total_hearts,
+                "userId": user.id,
+                "profileImage": user.profile_image,
+            })
+
+    result.sort(key=lambda x: x["totalHearts"], reverse=True)
+    return result[:limit]
+
 
 
 def save_hearts(user_id, hearts_json):
