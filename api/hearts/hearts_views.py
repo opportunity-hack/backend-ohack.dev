@@ -17,6 +17,14 @@ bp_url_prefix = '/api'
 bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
 
 
+@bp.route("/hearts/leaderboard", methods=["GET"])
+def get_hearts_leaderboard():
+    limit = request.args.get("limit", 10, type=int)
+    limit = min(max(limit, 1), 50)
+    res = hearts_service.get_hearts_leaderboard(limit)
+    return {"leaderboard": res}
+
+
 # Used to provide profile details - user must be logged in
 @bp.route("/hearts", methods=["GET"])
 @auth.require_user
