@@ -1708,7 +1708,7 @@ def send_volunteer_message(
 
         # Update volunteer document with message tracking
         try:
-            admin_full_name = f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "Admin"
+            admin_full_name = f"Admin ({admin_user.user_id})" if admin_user else "Admin"
             email_subject = f"{subject} - Message from Opportunity Hack Team"
 
             message_record = {
@@ -1847,7 +1847,7 @@ def send_email_to_address(
         # Enhanced Slack audit message
         from common.utils.slack import send_slack_audit
         message_preview = message[:100] + "..." if len(message) > 100 else message
-        admin_full_name = f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "Admin"
+        admin_full_name = f"Admin ({admin_user.user_id})" if admin_user else "Admin"
 
         send_slack_audit(
             action="admin_send_email_to_address",
