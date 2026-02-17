@@ -2,6 +2,7 @@ import re
 from urllib.parse import urlparse
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +96,14 @@ def validate_hackathon_data(data):
             raise ValueError("End date must be after start date")
     except ValueError as e:
         raise ValueError(f"Invalid date format: {str(e)}")
+
+    # Validate timezone if provided
+    timezone = data.get("timezone")
+    if timezone:
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, KeyError):
+            raise ValueError(f"Invalid timezone: {timezone}")
 
     # Validate constraints
     constraints = data.get("constraints", {})
