@@ -16,6 +16,7 @@ from services.volunteers_service import (
     mentor_checkout,
     send_volunteer_message,
     send_email_to_address,
+    get_resend_email_statuses,
 )
 from common.auth import auth, auth_user
 
@@ -593,6 +594,7 @@ def admin_send_email_to_address():
         subject = request_data.get('subject', 'Message from Opportunity Hack Team')
         recipient_type = request_data.get('recipient_type', 'volunteer')
         name = request_data.get('name')
+        volunteer_id = request_data.get('volunteer_id')
 
         if not email:
             return _error_response("Email address is required", 400)
@@ -609,7 +611,8 @@ def admin_send_email_to_address():
                 admin_user_id=auth_user.user_id,
                 admin_user=auth_user,
                 recipient_type=recipient_type,
-                name=name
+                name=name,
+                volunteer_id=volunteer_id
             )
 
             if result['success']:
@@ -622,3 +625,34 @@ def admin_send_email_to_address():
     except Exception as e:
         logger.error("Error in admin_send_email_to_address: %s", str(e))
         return _error_response(f"Failed to send email: {str(e)}")
+
+
+@bp.route('/admin/emails/resend-status', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_get_resend_email_statuses():
+    """Admin endpoint to fetch delivery status for Resend email IDs."""
+    try:
+        request_data = _process_request()
+        email_ids = request_data.get('email_ids', [])
+
+        logger.info("Fetching Resend email statuses for %d email IDs", len(email_ids) if isinstance(email_ids, list) else 0)
+        logger.debug("Email IDs requested: %s", email_ids)
+
+        if not email_ids or not isinstance(email_ids, list):
+            logger.warning("Invalid or missing email_ids in request: %s", email_ids)
+            return _error_response("email_ids array is required", 400)
+
+        result = get_resend_email_statuses(email_ids)
+
+        if result['success']:
+            logger.info("Successfully fetched statuses for %d email IDs", len(email_ids))
+            logger.debug("Email status results: %s", result)
+            return _success_response(result, "Email statuses fetched successfully")
+
+        logger.error("Failed to fetch email statuses. Error: %s", result.get('error', 'Unknown error'))
+        return _error_response(result.get('error', 'Unknown error'), 500)
+
+    except Exception as e:
+        logger.error("Error in admin_get_resend_email_statuses: %s", str(e))
+        logger.exception(e)
+        return _error_response(f"Failed to fetch email statuses: {str(e)}")
