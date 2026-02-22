@@ -8,7 +8,7 @@ from db.db import get_db
 from google.cloud import firestore
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger, info, debug, warning, error, exception
-from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern
+from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern, get_cached, set_cached
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
 import os
 import requests
@@ -1791,6 +1791,10 @@ def send_volunteer_message(
         # Determine success based on whether at least one message was sent
         success = delivery_status['slack_sent'] or delivery_status['email_sent']
 
+        # Invalidate Resend email list cache so next fetch picks up the new email
+        if delivery_status['email_sent']:
+            delete_cached("resend:all_emails_index")
+
         result = {
             'success': success,
             'volunteer_id': volunteer_id,
@@ -1925,6 +1929,10 @@ def send_email_to_address(
             }
         )
 
+        # Invalidate Resend email list cache so next fetch picks up the new email
+        if email_success:
+            delete_cached("resend:all_emails_index")
+
         result = {
             'success': email_success,
             'recipient_email': email,
@@ -1988,4 +1996,130 @@ def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
 
     except Exception as e:
         error(logger, "Error fetching Resend email statuses", exc_info=e)
+        return {'success': False, 'error': str(e)}
+
+
+def list_all_resend_emails(filter_emails=None):
+    """
+    Fetch all sent emails from Resend's List Emails API, cached in Redis.
+    Returns an index of {recipient_email: [{id, subject, created_at, last_event}, ...]}.
+
+    Args:
+        filter_emails: Optional list of email addresses to filter results for.
+
+    Returns:
+        Dict with 'success', 'emails_by_recipient', and 'total_fetched'.
+    """
+    try:
+        resend.api_key = os.environ.get('RESEND_EMAIL_STATUS_KEY')
+        if not resend.api_key:
+            return {'success': False, 'error': 'Resend API key not configured'}
+
+        cache_key = "resend:all_emails_index"
+        cached = get_cached(cache_key)
+        if cached is not None:
+            info(logger, "Using cached Resend email index",
+                 total_emails=cached.get('total_fetched', 0))
+            index = cached['emails_by_recipient']
+            if filter_emails:
+                filter_set = {e.lower() for e in filter_emails}
+                index = {k: v for k, v in index.items() if k in filter_set}
+            return {
+                'success': True,
+                'emails_by_recipient': index,
+                'total_fetched': cached['total_fetched'],
+                'from_cache': True
+            }
+
+        # Paginate through Resend Emails.list()
+        all_emails = []
+        max_pages = 10
+
+        if not hasattr(resend.Emails, 'list'):
+            error(logger, "resend.Emails.list is not available in this SDK version")
+            return {'success': False, 'error': 'resend.Emails.list not available'}
+
+        for page in range(max_pages):
+            try:
+                # Resend SDK list() returns a ListEmailsResponse
+                # The response has a 'data' attribute with the email list
+                response = resend.Emails.list()
+                email_list = []
+                if isinstance(response, dict):
+                    email_list = response.get('data', [])
+                elif hasattr(response, 'data'):
+                    email_list = response.data if isinstance(response.data, list) else []
+                else:
+                    email_list = list(response) if response else []
+
+                all_emails.extend(email_list)
+                info(logger, "Fetched Resend emails page",
+                     page=page, count=len(email_list), total_so_far=len(all_emails))
+
+                # Resend list API returns all emails in one call (no pagination params)
+                # so we only need one iteration
+                break
+
+            except Exception as page_error:
+                warning(logger, "Error fetching Resend emails page",
+                        page=page, exc_info=page_error)
+                break
+
+        # Build index by recipient email
+        index = {}
+        for email_data in all_emails:
+            if isinstance(email_data, dict):
+                recipients = email_data.get('to', [])
+                email_id = email_data.get('id', '')
+                subject = email_data.get('subject', '')
+                created_at = email_data.get('created_at', '')
+                last_event = email_data.get('last_event', '')
+            else:
+                recipients = getattr(email_data, 'to', [])
+                email_id = getattr(email_data, 'id', '')
+                subject = getattr(email_data, 'subject', '')
+                created_at = getattr(email_data, 'created_at', '')
+                last_event = getattr(email_data, 'last_event', '')
+
+            if isinstance(recipients, str):
+                recipients = [recipients]
+
+            entry = {
+                'id': email_id,
+                'subject': subject,
+                'created_at': created_at,
+                'last_event': last_event,
+            }
+
+            for recipient in recipients:
+                key = recipient.lower().strip()
+                if key not in index:
+                    index[key] = []
+                index[key].append(entry)
+
+        total_fetched = len(all_emails)
+
+        # Cache the full index with 300s TTL
+        set_cached(cache_key, {
+            'emails_by_recipient': index,
+            'total_fetched': total_fetched
+        }, ttl=300)
+
+        info(logger, "Built Resend email index",
+             total_fetched=total_fetched, unique_recipients=len(index))
+
+        # Filter if requested
+        if filter_emails:
+            filter_set = {e.lower() for e in filter_emails}
+            index = {k: v for k, v in index.items() if k in filter_set}
+
+        return {
+            'success': True,
+            'emails_by_recipient': index,
+            'total_fetched': total_fetched,
+            'from_cache': False
+        }
+
+    except Exception as e:
+        error(logger, "Error listing Resend emails", exc_info=e)
         return {'success': False, 'error': str(e)}
