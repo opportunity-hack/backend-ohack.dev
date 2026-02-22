@@ -720,7 +720,32 @@ def create_or_update_volunteer(
         if not verify_recaptcha(recaptcha_token):
             warning(logger, "reCAPTCHA verification failed", email=email)
             return {"error": "reCAPTCHA verification failed"}
-    
+
+    # Validate required question answers for hacker applications
+    if volunteer_data.get('volunteer_type') == 'hacker':
+        submitted_answers = volunteer_data.get('requiredQuestionAnswers', [])
+        if submitted_answers:
+            try:
+                db_temp = get_db()
+                hackathon_docs = db_temp.collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
+                hackathon_data = None
+                for doc in hackathon_docs:
+                    hackathon_data = doc.to_dict()
+                    break
+
+                if hackathon_data:
+                    questions = hackathon_data.get('constraints', {}).get('hacker_required_questions', {}).get('questions', [])
+                    if questions:
+                        if len(submitted_answers) != len(questions):
+                            warning(logger, "Required question answer count mismatch", email=email, event_id=event_id)
+                            return {"error": "Required question answers do not match the expected number of questions"}
+                        for i, q in enumerate(questions):
+                            if i >= len(submitted_answers) or submitted_answers[i] != q.get('required_answer'):
+                                warning(logger, "Required question answer incorrect", email=email, event_id=event_id, question_index=i)
+                                return {"error": q.get('error', 'You do not meet the eligibility requirements for this event.')}
+            except Exception as e:
+                exception(logger, "Error validating required questions", exc_info=e, email=email, event_id=event_id)
+
     db = get_db()
     volunteer_type = volunteer_data.get('volunteer_type')
     
@@ -1576,14 +1601,15 @@ def _send_email_to_user(
             params["attachments"] = qr_code_attachments
 
         email_result = resend.Emails.send(params)
+        resend_email_id = email_result.get('id') if isinstance(email_result, dict) else getattr(email_result, 'id', None)
         info(logger, "Email sent to user",
-             volunteer_id=volunteer_id, email=email, result=email_result, recipient_type=recipient_type)
-        return True, None
+             volunteer_id=volunteer_id, email=email, result=email_result, resend_email_id=resend_email_id, recipient_type=recipient_type)
+        return True, None, resend_email_id
 
     except Exception as email_error:
         error(logger, "Failed to send email to user",
               volunteer_id=volunteer_id, exc_info=email_error)
-        return False, str(email_error)
+        return False, str(email_error), None
 
 
 def send_volunteer_message(
@@ -1693,7 +1719,7 @@ def send_volunteer_message(
             delivery_status['slack_error'] = slack_error
 
         # Send email message
-        email_success, email_error = _send_email_to_user(
+        email_success, email_error, resend_email_id = _send_email_to_user(
             email=email,
             name=name,
             subject=subject,
@@ -1706,30 +1732,31 @@ def send_volunteer_message(
         delivery_status['email_sent'] = email_success
         delivery_status['email_error'] = email_error
 
-        # Update volunteer document with message tracking
+        # Update volunteer document with message tracking (sent_emails with Resend ID)
         try:
-            admin_full_name = f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "Admin"
+            admin_full_name = f"Admin ({admin_user.user_id})" if admin_user else "Admin"
             email_subject = f"{subject} - Message from Opportunity Hack Team"
 
-            message_record = {
+            sent_email_record = {
+                'resend_id': resend_email_id,
                 'subject': email_subject,
                 'timestamp': _get_current_timestamp(),
                 'sent_by': admin_full_name,
                 'recipient_type': recipient_type,
-                'delivery_status': delivery_status
             }
 
-            # Add the message to the volunteer's messages_sent array
+            # Add the record to the volunteer's sent_emails array
             volunteer_ref = db.collection('volunteers').document(volunteer_id)
             volunteer_ref.update({
-                'messages_sent': firestore.ArrayUnion([message_record]),
+                'sent_emails': firestore.ArrayUnion([sent_email_record]),
                 'last_message_timestamp': _get_current_timestamp(),
                 'updated_timestamp': _get_current_timestamp()
             })
             user_id = volunteer.get('user_id', '')
 
-            info(logger, "Updated volunteer document with message tracking",
-                 volunteer_id=volunteer_id, message_timestamp=message_record['timestamp'])
+            info(logger, "Updated volunteer document with sent_emails tracking",
+                 volunteer_id=volunteer_id, resend_email_id=resend_email_id,
+                 message_timestamp=sent_email_record['timestamp'])
 
             _clear_volunteer_caches(
                 user_id=user_id,
@@ -1739,8 +1766,9 @@ def send_volunteer_message(
             )
 
         except Exception as tracking_error:
-            error(logger, "Failed to update volunteer document with message tracking",
-                  volunteer_id=volunteer_id, exc_info=tracking_error)
+            error(logger, "Failed to update volunteer document with sent_emails tracking",
+                  volunteer_id=volunteer_id, resend_email_id=resend_email_id,
+                  exc_info=tracking_error)
 
         # Enhanced Slack audit message with recipient context
         from common.utils.slack import send_slack_audit
@@ -1802,7 +1830,8 @@ def send_email_to_address(
     admin_user_id: str,
     admin_user: Any = None,
     recipient_type: str = 'volunteer',
-    name: Optional[str] = None
+    name: Optional[str] = None,
+    volunteer_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Send an email to a specific email address using the same template as send_volunteer_message.
@@ -1815,6 +1844,7 @@ def send_email_to_address(
         admin_user: The admin user object
         recipient_type: Type of recipient (mentor, sponsor, judge, volunteer, hacker, etc.)
         name: Optional recipient name (defaults to 'Volunteer')
+        volunteer_id: Optional volunteer document ID for tracking sent emails
 
     Returns:
         Dict containing delivery status
@@ -1833,7 +1863,7 @@ def send_email_to_address(
         _, message_for_email, qr_code_attachments = _process_qr_code_in_message(message)
 
         # Send email message
-        email_success, email_error = _send_email_to_user(
+        email_success, email_error, resend_email_id = _send_email_to_user(
             email=email,
             name=recipient_name,
             subject=subject,
@@ -1841,13 +1871,44 @@ def send_email_to_address(
             recipient_type=recipient_type,
             volunteer_type=recipient_type,
             qr_code_attachments=qr_code_attachments,
-            volunteer_id=None
+            volunteer_id=volunteer_id
         )
+
+        admin_full_name = f"Admin ({admin_user.user_id})" if admin_user else "Admin"
+
+        # Save sent_emails record to volunteer document if volunteer_id is provided
+        if volunteer_id and email_success:
+            try:
+                from db.db import get_db
+                db = get_db()
+                email_subject = f"{subject} - Message from Opportunity Hack Team"
+
+                sent_email_record = {
+                    'resend_id': resend_email_id,
+                    'subject': email_subject,
+                    'timestamp': _get_current_timestamp(),
+                    'sent_by': admin_full_name,
+                    'recipient_type': recipient_type,
+                }
+
+                volunteer_ref = db.collection('volunteers').document(volunteer_id)
+                volunteer_ref.update({
+                    'sent_emails': firestore.ArrayUnion([sent_email_record]),
+                    'last_message_timestamp': _get_current_timestamp(),
+                    'updated_timestamp': _get_current_timestamp()
+                })
+
+                info(logger, "Updated volunteer document with sent_emails tracking (email-only path)",
+                     volunteer_id=volunteer_id, resend_email_id=resend_email_id)
+
+            except Exception as tracking_error:
+                error(logger, "Failed to update volunteer document with sent_emails tracking (email-only path)",
+                      volunteer_id=volunteer_id, resend_email_id=resend_email_id,
+                      exc_info=tracking_error)
 
         # Enhanced Slack audit message
         from common.utils.slack import send_slack_audit
         message_preview = message[:100] + "..." if len(message) > 100 else message
-        admin_full_name = f"{admin_user.first_name} {admin_user.last_name}" if admin_user else "Admin"
 
         send_slack_audit(
             action="admin_send_email_to_address",
@@ -1858,7 +1919,9 @@ def send_email_to_address(
                 "recipient_type": recipient_type,
                 "message_preview": message_preview,
                 "email_sent": email_success,
-                "email_error": email_error
+                "email_error": email_error,
+                "resend_email_id": resend_email_id,
+                "volunteer_id": volunteer_id
             }
         )
 
@@ -1868,7 +1931,8 @@ def send_email_to_address(
             'recipient_name': recipient_name,
             'recipient_type': recipient_type,
             'email_sent': email_success,
-            'email_error': email_error
+            'email_error': email_error,
+            'resend_email_id': resend_email_id
         }
 
         if not email_success:
@@ -1883,3 +1947,45 @@ def send_email_to_address(
             'error': f"Failed to send email: {str(e)}",
             'recipient_email': email
         }
+
+
+def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
+    """
+    Fetch delivery status for a list of Resend email IDs.
+
+    Args:
+        email_ids: List of Resend email IDs to look up
+
+    Returns:
+        Dict with 'statuses' mapping each email ID to its Resend status
+    """
+    try:
+        resend.api_key = os.environ.get('RESEND_EMAIL_STATUS_KEY')
+        if not resend.api_key:
+            return {'success': False, 'error': 'Resend API key not configured'}
+
+        statuses = {}
+        for eid in email_ids[:50]:  # Cap at 50 to avoid excessive API calls
+            try:
+                email_data = resend.Emails.get(eid)
+                statuses[eid] = {
+                    'id': eid,
+                    'to': getattr(email_data, 'to', []) if not isinstance(email_data, dict) else email_data.get('to', []),
+                    'subject': getattr(email_data, 'subject', '') if not isinstance(email_data, dict) else email_data.get('subject', ''),
+                    'created_at': getattr(email_data, 'created_at', '') if not isinstance(email_data, dict) else email_data.get('created_at', ''),
+                    'last_event': getattr(email_data, 'last_event', '') if not isinstance(email_data, dict) else email_data.get('last_event', ''),
+                }
+            except Exception as fetch_error:
+                warning(logger, "Failed to fetch Resend email status",
+                        resend_email_id=eid, exc_info=fetch_error)
+                statuses[eid] = {
+                    'id': eid,
+                    'last_event': 'unknown',
+                    'error': str(fetch_error)
+                }
+
+        return {'success': True, 'statuses': statuses}
+
+    except Exception as e:
+        error(logger, "Error fetching Resend email statuses", exc_info=e)
+        return {'success': False, 'error': str(e)}

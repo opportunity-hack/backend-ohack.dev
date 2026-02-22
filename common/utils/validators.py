@@ -2,6 +2,7 @@ import re
 from urllib.parse import urlparse
 import logging
 from datetime import datetime
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
@@ -96,12 +97,34 @@ def validate_hackathon_data(data):
     except ValueError as e:
         raise ValueError(f"Invalid date format: {str(e)}")
 
+    # Validate timezone if provided
+    timezone = data.get("timezone")
+    if timezone:
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, KeyError):
+            raise ValueError(f"Invalid timezone: {timezone}")
+
     # Validate constraints
     constraints = data.get("constraints", {})
     if not all(isinstance(constraints.get(k), int) for k in ["max_people_per_team", "max_teams_per_problem", "min_people_per_team"]):
         raise ValueError("Constraints must be integers")
 
-    # Add more specific validations as needed
+    # Validate hacker_required_questions if present
+    hacker_required_questions = constraints.get("hacker_required_questions", {})
+    if hacker_required_questions:
+        questions = hacker_required_questions.get("questions", [])
+        if not isinstance(questions, list):
+            raise ValueError("hacker_required_questions.questions must be a list")
+        for i, q in enumerate(questions):
+            if not isinstance(q, dict):
+                raise ValueError(f"Question {i} must be an object")
+            if not isinstance(q.get("question"), str) or not q.get("question"):
+                raise ValueError(f"Question {i} must have a non-empty 'question' string")
+            if not isinstance(q.get("required_answer"), bool):
+                raise ValueError(f"Question {i} must have a boolean 'required_answer'")
+            if not isinstance(q.get("error"), str) or not q.get("error"):
+                raise ValueError(f"Question {i} must have a non-empty 'error' string")
 
 if __name__ == "__main__":
     # Simple tests

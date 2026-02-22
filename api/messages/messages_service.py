@@ -1686,6 +1686,7 @@ def save_hackathon(json_data, propel_id):
                 "prize": "0",
                 "swag": "0",
             }),
+            "timezone": json_data.get("timezone", "America/Phoenix"),
             "last_updated": firestore.SERVER_TIMESTAMP,
             "last_updated_by": propel_id,
         }
