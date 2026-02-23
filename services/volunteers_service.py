@@ -2031,34 +2031,29 @@ def list_all_resend_emails(filter_emails=None):
                 'from_cache': True
             }
 
-        # Paginate through Resend Emails.list()
+        # Paginate through resend.Emails.list() (requires resend >= 2.5)
         all_emails = []
         max_pages = 10
-
-        if not hasattr(resend.Emails, 'list'):
-            error(logger, "resend.Emails.list is not available in this SDK version")
-            return {'success': False, 'error': 'resend.Emails.list not available'}
+        params = {"limit": 100}
 
         for page in range(max_pages):
             try:
-                # Resend SDK list() returns a ListEmailsResponse
-                # The response has a 'data' attribute with the email list
-                response = resend.Emails.list()
-                email_list = []
-                if isinstance(response, dict):
-                    email_list = response.get('data', [])
-                elif hasattr(response, 'data'):
-                    email_list = response.data if isinstance(response.data, list) else []
-                else:
-                    email_list = list(response) if response else []
-
+                response = resend.Emails.list(params)
+                email_list = response.get('data', []) if isinstance(response, dict) else getattr(response, 'data', [])
                 all_emails.extend(email_list)
                 info(logger, "Fetched Resend emails page",
                      page=page, count=len(email_list), total_so_far=len(all_emails))
 
-                # Resend list API returns all emails in one call (no pagination params)
-                # so we only need one iteration
-                break
+                has_more = response.get('has_more', False) if isinstance(response, dict) else getattr(response, 'has_more', False)
+                if not has_more or len(email_list) == 0:
+                    break
+
+                # Use last email ID as cursor for next page
+                last_item = email_list[-1]
+                last_id = last_item.get('id', '') if isinstance(last_item, dict) else getattr(last_item, 'id', '')
+                if not last_id:
+                    break
+                params = {"limit": 100, "after": last_id}
 
             except Exception as page_error:
                 warning(logger, "Error fetching Resend emails page",
