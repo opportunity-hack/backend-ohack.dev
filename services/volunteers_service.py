@@ -2095,10 +2095,12 @@ def list_all_resend_emails(filter_emails=None):
         total_fetched = len(all_emails)
 
         # Cache the full index with 300s TTL
-        set_cached(cache_key, {
-            'emails_by_recipient': index,
-            'total_fetched': total_fetched
-        }, ttl=300)
+        # Only cache if we actually fetched emails (avoid caching errors/empty results)
+        if total_fetched > 0:
+            set_cached(cache_key, {
+                'emails_by_recipient': index,
+                'total_fetched': total_fetched
+            }, ttl=300)
 
         info(logger, "Built Resend email index",
              total_fetched=total_fetched, unique_recipients=len(index))
