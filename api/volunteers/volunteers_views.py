@@ -17,6 +17,7 @@ from services.volunteers_service import (
     send_volunteer_message,
     send_email_to_address,
     get_resend_email_statuses,
+    list_all_resend_emails,
 )
 from common.auth import auth, auth_user
 
@@ -656,3 +657,27 @@ def admin_get_resend_email_statuses():
         logger.error("Error in admin_get_resend_email_statuses: %s", str(e))
         logger.exception(e)
         return _error_response(f"Failed to fetch email statuses: {str(e)}")
+
+
+@bp.route('/admin/emails/resend-list', methods=['GET'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_resend_emails():
+    """Admin endpoint to list all sent emails from Resend, indexed by recipient."""
+    try:
+        emails_param = request.args.get('emails', '')
+        filter_emails = [e.strip() for e in emails_param.split(',') if e.strip()] if emails_param else None
+
+        logger.info("Listing Resend emails, filter_count=%d", len(filter_emails) if filter_emails else 0)
+
+        result = list_all_resend_emails(filter_emails=filter_emails)
+
+        if result['success']:
+            return _success_response(result, "Resend email list fetched successfully")
+
+        logger.error("Failed to list Resend emails. Error: %s", result.get('error', 'Unknown error'))
+        return _error_response(result.get('error', 'Unknown error'), 500)
+
+    except Exception as e:
+        logger.error("Error in admin_list_resend_emails: %s", str(e))
+        logger.exception(e)
+        return _error_response(f"Failed to list Resend emails: {str(e)}")
