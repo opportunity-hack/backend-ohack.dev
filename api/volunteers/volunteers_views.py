@@ -659,13 +659,21 @@ def admin_get_resend_email_statuses():
         return _error_response(f"Failed to fetch email statuses: {str(e)}")
 
 
-@bp.route('/admin/emails/resend-list', methods=['GET'])
+@bp.route('/admin/emails/resend-list', methods=['POST'])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_list_resend_emails():
     """Admin endpoint to list all sent emails from Resend, indexed by recipient."""
     try:
-        emails_param = request.args.get('emails', '')
-        filter_emails = [e.strip() for e in emails_param.split(',') if e.strip()] if emails_param else None
+        body = request.get_json(silent=True) or {}
+        emails_param = body.get('emails', [])
+        if isinstance(emails_param, str):
+            parsed = [e.strip() for e in emails_param.split(',') if e.strip()]
+            filter_emails = parsed if parsed else None
+        elif isinstance(emails_param, list):
+            parsed = [e.strip() for e in emails_param if isinstance(e, str) and e.strip()]
+            filter_emails = parsed if parsed else None
+        else:
+            filter_emails = None
 
         logger.info("Listing Resend emails, filter_count=%d", len(filter_emails) if filter_emails else 0)
 
