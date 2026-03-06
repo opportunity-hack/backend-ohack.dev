@@ -1835,7 +1835,9 @@ def send_email_to_address(
     admin_user: Any = None,
     recipient_type: str = 'volunteer',
     name: Optional[str] = None,
-    volunteer_id: Optional[str] = None
+    volunteer_id: Optional[str] = None,
+    collection_name: Optional[str] = None,
+    document_id: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Send an email to a specific email address using the same template as send_volunteer_message.
@@ -1909,6 +1911,36 @@ def send_email_to_address(
                 error(logger, "Failed to update volunteer document with sent_emails tracking (email-only path)",
                       volunteer_id=volunteer_id, resend_email_id=resend_email_id,
                       exc_info=tracking_error)
+
+        # Track email on any Firestore collection/document (generic tracking)
+        if collection_name and document_id and email_success:
+            try:
+                from db.db import get_db
+                db = get_db()
+                email_subject = f"{subject} - Message from Opportunity Hack Team"
+
+                sent_email_record = {
+                    'resend_id': resend_email_id,
+                    'subject': email_subject,
+                    'timestamp': _get_current_timestamp(),
+                    'sent_by': admin_full_name,
+                    'recipient_type': recipient_type,
+                }
+
+                doc_ref = db.collection(collection_name).document(document_id)
+                doc_ref.update({
+                    'sent_emails': firestore.ArrayUnion([sent_email_record]),
+                    'last_email_timestamp': _get_current_timestamp(),
+                })
+
+                info(logger, "Updated document with sent_emails tracking",
+                     collection=collection_name, document_id=document_id,
+                     resend_email_id=resend_email_id)
+
+            except Exception as tracking_error:
+                error(logger, "Failed to update document with sent_emails tracking",
+                      collection=collection_name, document_id=document_id,
+                      resend_email_id=resend_email_id, exc_info=tracking_error)
 
         # Enhanced Slack audit message
         from common.utils.slack import send_slack_audit
