@@ -22,7 +22,7 @@ ONE_MINUTE = 1*60
 
 
 def _get_db():
-    from api.messages.messages_service import get_db
+    from db.db import get_db
     return get_db()
 
 
@@ -379,7 +379,7 @@ def get_npo_applications():
 
 @limits(calls=100, period=ONE_MINUTE)
 def save_npo_application(json):
-    from api.messages.messages_service import send_nonprofit_welcome_email, google_recaptcha_key
+    from services.email_service import send_nonprofit_welcome_email, google_recaptcha_key
 
     send_slack_audit(action="save_npo_application", message="Saving", payload=json)
     db = _get_db()

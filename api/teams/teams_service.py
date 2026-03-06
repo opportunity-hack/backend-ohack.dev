@@ -2,10 +2,8 @@ import uuid
 import logging
 from datetime import datetime
 from db.db import get_db, get_user_doc_reference
-from api.messages.messages_service import (
-    get_problem_statement_from_id_old,
-    get_teams_list,
-)
+from api.messages.messages_service import get_problem_statement_from_id_old
+from services.teams_service import get_teams_list
 from services.nonprofits_service import get_single_npo
 from common.utils.firestore_helpers import clear_all_caches as clear_cache
 from services.users_service import (

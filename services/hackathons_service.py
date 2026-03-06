@@ -35,7 +35,7 @@ THIRTY_SECONDS = 30
 
 
 def _get_db():
-    from api.messages.messages_service import get_db
+    from db.db import get_db
     return get_db()
 
 
@@ -425,11 +425,7 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
     )
 
 
-def add_utm(url, source="email", medium="welcome", campaign="newsletter_signup", content=None):
-    utm_string = f"utm_source={source}&utm_medium={medium}&utm_campaign={campaign}"
-    if content:
-        utm_string += f"&utm_content={content}"
-    return f"{url}?{utm_string}"
+from services.email_service import add_utm
 
 
 def send_hackathon_request_email(contact_name, contact_email, request_id):
