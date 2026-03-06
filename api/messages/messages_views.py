@@ -669,6 +669,25 @@ def admin_get_all_giveaways():
     return get_all_giveaways()
 
 
+@bp.route("/admin/hackathon-requests", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_get_all_hackathon_requests():
+    logger.info("GET /admin/hackathon-requests called")
+    from api.messages.messages_service import get_all_hackathon_requests
+    return get_all_hackathon_requests()
+
+@bp.route("/admin/hackathon-requests/<request_id>", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_update_hackathon_request_api(request_id):
+    logger.info(f"PATCH /admin/hackathon-requests/{request_id} called")
+    from api.messages.messages_service import admin_update_hackathon_request
+    result = admin_update_hackathon_request(request_id, request.get_json())
+    if result is None:
+        return {"error": "Hackathon request not found"}, 404
+    return result
+
 @bp.route("/create-hackathon", methods=["POST"])
 def submit_create_hackathon():
     logger.info("POST /create-hackathon called")
