@@ -2028,13 +2028,17 @@ def list_all_resend_emails(filter_emails=None):
                 'success': True,
                 'emails_by_recipient': index,
                 'total_fetched': cached['total_fetched'],
+                'truncated': cached.get('truncated', False),
                 'from_cache': True
             }
 
         # Paginate through resend.Emails.list() (requires resend >= 2.5)
+        # Safety cap of 100 pages (~10,000 emails); for-else detects if we hit it.
         all_emails = []
-        max_pages = 10
+        max_pages = 100
         params = {"limit": 100}
+        page_error_occurred = False
+        truncated = False
 
         for page in range(max_pages):
             try:
@@ -2058,7 +2062,22 @@ def list_all_resend_emails(filter_emails=None):
             except Exception as page_error:
                 warning(logger, "Error fetching Resend emails page",
                         page=page, exc_info=page_error)
+                page_error_occurred = True
                 break
+        else:
+            # Loop exhausted max_pages without a natural break — results are truncated.
+            truncated = True
+            warning(logger, "Resend email pagination hit safety cap",
+                    max_pages=max_pages, total_so_far=len(all_emails))
+
+        # If a page fetch failed, return an error rather than caching partial data.
+        if page_error_occurred:
+            return {
+                'success': False,
+                'error': 'Failed to fetch all email pages from Resend',
+                'emails_by_recipient': {},
+                'total_fetched': len(all_emails)
+            }
 
         # Build index by recipient email
         index = {}
@@ -2094,16 +2113,17 @@ def list_all_resend_emails(filter_emails=None):
 
         total_fetched = len(all_emails)
 
-        # Cache the full index with 300s TTL
-        # Only cache if we actually fetched emails (avoid caching errors/empty results)
-        if total_fetched > 0:
-            set_cached(cache_key, {
-                'emails_by_recipient': index,
-                'total_fetched': total_fetched
-            }, ttl=300)
-
         info(logger, "Built Resend email index",
-             total_fetched=total_fetched, unique_recipients=len(index))
+             total_fetched=total_fetched, unique_recipients=len(index),
+             truncated=truncated)
+
+        # Cache the full index with 300s TTL, including empty results so we
+        # don't hammer the Resend API on every request when there are no emails.
+        set_cached(cache_key, {
+            'emails_by_recipient': index,
+            'total_fetched': total_fetched,
+            'truncated': truncated
+        }, ttl=300)
 
         # Filter if requested
         if filter_emails:
@@ -2114,6 +2134,7 @@ def list_all_resend_emails(filter_emails=None):
             'success': True,
             'emails_by_recipient': index,
             'total_fetched': total_fetched,
+            'truncated': truncated,
             'from_cache': False
         }
 
