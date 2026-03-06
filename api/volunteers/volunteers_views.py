@@ -17,6 +17,7 @@ from services.volunteers_service import (
     send_volunteer_message,
     send_email_to_address,
     get_resend_email_statuses,
+    list_all_resend_emails,
 )
 from common.auth import auth, auth_user
 
@@ -595,6 +596,8 @@ def admin_send_email_to_address():
         recipient_type = request_data.get('recipient_type', 'volunteer')
         name = request_data.get('name')
         volunteer_id = request_data.get('volunteer_id')
+        collection_name = request_data.get('collection_name')
+        document_id = request_data.get('document_id')
 
         if not email:
             return _error_response("Email address is required", 400)
@@ -612,7 +615,9 @@ def admin_send_email_to_address():
                 admin_user=auth_user,
                 recipient_type=recipient_type,
                 name=name,
-                volunteer_id=volunteer_id
+                volunteer_id=volunteer_id,
+                collection_name=collection_name,
+                document_id=document_id
             )
 
             if result['success']:
@@ -656,3 +661,35 @@ def admin_get_resend_email_statuses():
         logger.error("Error in admin_get_resend_email_statuses: %s", str(e))
         logger.exception(e)
         return _error_response(f"Failed to fetch email statuses: {str(e)}")
+
+
+@bp.route('/admin/emails/resend-list', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_resend_emails():
+    """Admin endpoint to list all sent emails from Resend, indexed by recipient."""
+    try:
+        body = request.get_json(silent=True) or {}
+        emails_param = body.get('emails', [])
+        if isinstance(emails_param, str):
+            parsed = [e.strip() for e in emails_param.split(',') if e.strip()]
+            filter_emails = parsed if parsed else None
+        elif isinstance(emails_param, list):
+            parsed = [e.strip() for e in emails_param if isinstance(e, str) and e.strip()]
+            filter_emails = parsed if parsed else None
+        else:
+            filter_emails = None
+
+        logger.info("Listing Resend emails, filter_count=%d", len(filter_emails) if filter_emails else 0)
+
+        result = list_all_resend_emails(filter_emails=filter_emails)
+
+        if result['success']:
+            return _success_response(result, "Resend email list fetched successfully")
+
+        logger.error("Failed to list Resend emails. Error: %s", result.get('error', 'Unknown error'))
+        return _error_response(result.get('error', 'Unknown error'), 500)
+
+    except Exception as e:
+        logger.error("Error in admin_list_resend_emails: %s", str(e))
+        logger.exception(e)
+        return _error_response(f"Failed to list Resend emails: {str(e)}")

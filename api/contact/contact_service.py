@@ -120,6 +120,55 @@ def verify_recaptcha(token: str) -> bool:
         logger.exception("Error verifying recaptcha: %s", str(e))
         return False
 
+def get_all_contact_submissions() -> Dict[str, Any]:
+    """
+    Get all contact form submissions for admin viewing.
+
+    Returns:
+        Dict with list of submissions sorted by timestamp desc
+    """
+    try:
+        db = get_db()
+        submissions = []
+        docs = db.collection('contact_submissions').order_by('timestamp', direction='DESCENDING').stream()
+        for doc in docs:
+            data = doc.to_dict()
+            data['id'] = doc.id
+            submissions.append(data)
+        return {"success": True, "submissions": submissions}
+    except Exception as e:
+        logger.error("Error fetching contact submissions: %s", str(e))
+        return {"success": False, "error": str(e), "submissions": []}
+
+
+def admin_update_contact_submission(doc_id: str, data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Update a contact submission's status and admin notes.
+
+    Args:
+        doc_id: Firestore document ID
+        data: Dict with status and/or adminNotes
+
+    Returns:
+        Dict with success status
+    """
+    try:
+        db = get_db()
+        update_data = {}
+        if 'status' in data:
+            update_data['status'] = data['status']
+        if 'adminNotes' in data:
+            update_data['adminNotes'] = data['adminNotes']
+        update_data['updatedAt'] = _get_current_timestamp()
+
+        db.collection('contact_submissions').document(doc_id).update(update_data)
+        logger.info("Updated contact submission %s", doc_id)
+        return {"success": True}
+    except Exception as e:
+        logger.error("Error updating contact submission %s: %s", doc_id, str(e))
+        return {"success": False, "error": str(e)}
+
+
 def send_confirmation_email(contact_data) -> bool:
     """
     Send a confirmation email to the contact form submitter.

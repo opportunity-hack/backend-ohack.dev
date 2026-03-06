@@ -1,26 +1,19 @@
 import uuid
 import logging
 from datetime import datetime
-from db.db import get_db
-from api.messages.messages_service import (
-    get_propel_user_details_by_id,
-    get_user_doc_reference,
-    get_problem_statement_from_id_old,
-    get_single_npo,
-    validate_github_username,
-    get_hackathon_by_event_id,
-    get_teams_list,
-    clear_cache,
-    create_github_repo,
-    create_slack_channel,
-    invite_user_to_channel,    
-    send_slack,
-    send_slack_audit
-)
+from db.db import get_db, get_user_doc_reference
+from api.messages.messages_service import get_problem_statement_from_id_old
+from services.teams_service import get_teams_list
+from services.nonprofits_service import get_single_npo
+from common.utils.firestore_helpers import clear_all_caches as clear_cache
 from services.users_service import (
+    get_propel_user_details_by_id,
     save_user,
     get_user_from_slack_id
 )
+from common.utils.github import create_github_repo, validate_github_username
+from common.utils.slack import create_slack_channel, invite_user_to_channel, send_slack, send_slack_audit
+from common.utils.firebase import get_hackathon_by_event_id
 from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id
 
 from common.utils.slack import add_bot_to_channel    

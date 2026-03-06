@@ -1,7 +1,12 @@
 from flask import Blueprint, jsonify, request
 from common.log import get_logger
 from common.exceptions import InvalidInputError
-from api.contact.contact_service import submit_contact_form
+from common.auth import auth, auth_user
+from api.contact.contact_service import (
+    submit_contact_form,
+    get_all_contact_submissions,
+    admin_update_contact_submission,
+)
 
 logger = get_logger(__name__)
 bp = Blueprint('contact', __name__, url_prefix='/api')
@@ -88,3 +93,39 @@ def handle_contact_form():
             "success": False,
             "error": "An error occurred while processing your request"
         }), 500
+
+
+def getOrgId(req):
+    return req.headers.get("X-Org-Id")
+
+
+@bp.route("/contact/submissions", methods=["GET"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_contact_submissions():
+    """Admin endpoint to list all contact form submissions."""
+    try:
+        result = get_all_contact_submissions()
+        if result.get('success'):
+            return jsonify(result), 200
+        return jsonify(result), 500
+    except Exception as e:
+        logger.exception("Error listing contact submissions: %s", str(e))
+        return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/contact/submissions/<submission_id>", methods=["PATCH"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_update_contact_submission_route(submission_id):
+    """Admin endpoint to update a contact submission's status and notes."""
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({"success": False, "error": "Empty request body"}), 400
+
+        result = admin_update_contact_submission(submission_id, data)
+        if result.get('success'):
+            return jsonify(result), 200
+        return jsonify(result), 500
+    except Exception as e:
+        logger.exception("Error updating contact submission: %s", str(e))
+        return jsonify({"success": False, "error": str(e)}), 500
