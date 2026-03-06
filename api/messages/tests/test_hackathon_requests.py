@@ -2,12 +2,12 @@
 Test cases for hackathon request admin service functions.
 
 Tests get_all_hackathon_requests and admin_update_hackathon_request
-from messages_service.
+from hackathons_service.
 """
 import pytest
 from unittest.mock import patch, MagicMock
 from datetime import datetime
-from api.messages.messages_service import (
+from services.hackathons_service import (
     get_all_hackathon_requests,
     admin_update_hackathon_request,
     get_hackathon_request_by_id,
@@ -19,7 +19,7 @@ from api.messages.messages_service import (
 class TestGetAllHackathonRequests:
     """Test cases for listing all hackathon requests."""
 
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service._get_db')
     def test_returns_all_requests(self, mock_db):
         """Test that all hackathon requests are returned with their IDs."""
         # Setup
@@ -53,7 +53,7 @@ class TestGetAllHackathonRequests:
         assert len(result["requests"]) == 2
         mock_db.return_value.collection.assert_called_once_with('hackathon_requests')
 
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service._get_db')
     def test_requests_include_document_ids(self, mock_db):
         """Test that each request includes its Firestore document ID."""
         mock_doc = MagicMock()
@@ -72,7 +72,7 @@ class TestGetAllHackathonRequests:
         assert result["requests"][0]["id"] == "abc-123"
         assert result["requests"][0]["companyName"] == "Test Co"
 
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service._get_db')
     def test_requests_sorted_newest_first(self, mock_db):
         """Test that requests are sorted by created date descending."""
         mock_doc_old = MagicMock()
@@ -99,7 +99,7 @@ class TestGetAllHackathonRequests:
         assert result["requests"][0]["id"] == "new"
         assert result["requests"][1]["id"] == "old"
 
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service._get_db')
     def test_empty_collection_returns_empty_list(self, mock_db):
         """Test that an empty collection returns an empty requests list."""
         mock_collection = MagicMock()
@@ -110,7 +110,7 @@ class TestGetAllHackathonRequests:
 
         assert result == {"requests": []}
 
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service._get_db')
     def test_handles_missing_created_field(self, mock_db):
         """Test that requests without a created field are still returned."""
         mock_doc = MagicMock()
@@ -133,8 +133,8 @@ class TestGetAllHackathonRequests:
 class TestAdminUpdateHackathonRequest:
     """Test cases for admin updating a hackathon request."""
 
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_updates_status_successfully(self, mock_db, mock_slack):
         """Test that an admin can update the status of a request."""
         # Setup
@@ -174,8 +174,8 @@ class TestAdminUpdateHackathonRequest:
         assert update_args["adminNotes"] == "Looks good"
         assert "updated" in update_args
 
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_returns_none_for_nonexistent_request(self, mock_db, mock_slack):
         """Test that updating a nonexistent request returns None."""
         mock_doc_ref = MagicMock()
@@ -194,8 +194,8 @@ class TestAdminUpdateHackathonRequest:
         assert result is None
         mock_doc_ref.update.assert_not_called()
 
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_adds_updated_timestamp(self, mock_db, mock_slack):
         """Test that the updated timestamp is added to the update payload."""
         mock_doc_ref = MagicMock()
@@ -218,8 +218,8 @@ class TestAdminUpdateHackathonRequest:
         # Verify it's a valid ISO format timestamp
         datetime.fromisoformat(update_args["updated"])
 
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_sends_slack_audit(self, mock_db, mock_slack):
         """Test that updating a request sends a Slack audit message."""
         mock_doc_ref = MagicMock()
@@ -247,8 +247,8 @@ class TestAdminUpdateHackathonRequest:
 class TestGetHackathonRequestById:
     """Test cases for retrieving a single hackathon request."""
 
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_returns_request_data(self, mock_db, mock_slack):
         """Test that a request is returned by its document ID."""
         mock_doc = MagicMock()
@@ -272,10 +272,10 @@ class TestGetHackathonRequestById:
 class TestCreateHackathon:
     """Test cases for creating a new hackathon request."""
 
-    @patch('api.messages.messages_service.send_slack')
-    @patch('api.messages.messages_service.send_hackathon_request_email')
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack')
+    @patch('services.hackathons_service.send_hackathon_request_email')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_creates_request_with_pending_status(self, mock_db, mock_slack_audit, mock_email, mock_slack):
         """Test that a new request is created with pending status."""
         mock_doc = MagicMock()
@@ -299,10 +299,10 @@ class TestCreateHackathon:
         assert saved_data["status"] == "pending"
         assert "created" in saved_data
 
-    @patch('api.messages.messages_service.send_slack')
-    @patch('api.messages.messages_service.send_hackathon_request_email')
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack')
+    @patch('services.hackathons_service.send_hackathon_request_email')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_sends_confirmation_email(self, mock_db, mock_slack_audit, mock_email, mock_slack):
         """Test that a confirmation email is sent on creation."""
         mock_doc = MagicMock()
@@ -323,9 +323,9 @@ class TestCreateHackathon:
         assert call_args[0] == "Diana"
         assert call_args[1] == "diana@example.com"
 
-    @patch('api.messages.messages_service.send_slack')
-    @patch('api.messages.messages_service.send_slack_audit')
-    @patch('api.messages.messages_service.get_db')
+    @patch('services.hackathons_service.send_slack')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
     def test_skips_email_without_contact_info(self, mock_db, mock_slack_audit, mock_slack):
         """Test that no email is sent if contact info is missing."""
         mock_doc = MagicMock()
@@ -335,6 +335,6 @@ class TestCreateHackathon:
 
         payload = {"companyName": "No Contact Corp"}
 
-        with patch('api.messages.messages_service.send_hackathon_request_email') as mock_email:
+        with patch('services.hackathons_service.send_hackathon_request_email') as mock_email:
             create_hackathon(payload)
             mock_email.assert_not_called()

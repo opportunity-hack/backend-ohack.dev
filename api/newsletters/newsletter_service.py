@@ -1,7 +1,9 @@
 import logging
 from ratelimit import limits
 
-from api.messages.messages_service import (get_db, ONE_MINUTE)
+from db.db import get_db
+
+ONE_MINUTE = 60
 
 logger = logging.getLogger("myapp")
 

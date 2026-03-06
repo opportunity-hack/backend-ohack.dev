@@ -17,18 +17,48 @@ from api.messages.messages_service import (
     get_admin_message,
     get_single_problem_statement_old,
     get_user_by_id_old,
-    get_volunteer_checked_in_by_event,
     save_helping_status_old,
-    save_npo,
     save_profile_metadata_old,
     save_problem_statement_old,
-    update_npo,
-    remove_npo,
-    get_npo_list,
+    get_all_profiles,
+    get_github_profile,
+)
+from services.news_service import (
+    save_news,
+    get_news,
+    get_all_praises,
+    get_praises_about_user,
+    save_praise,
+)
+from services.feedback_service import save_feedback, get_user_feedback
+from services.giveaway_service import save_giveaway, get_user_giveaway, get_all_giveaways
+from services.onboarding_service import save_onboarding_feedback
+from services.teams_service import (
+    get_teams_list,
+    get_team,
+    get_teams_batch,
+    get_teams_by_event_id,
+    save_team,
+    unjoin_team,
+    join_team,
+    get_github_repos,
+)
+from services.email_service import save_lead_async
+from services.nonprofits_service import (
     get_single_npo,
+    get_npo_list,
     get_npo_by_hackathon_id,
     get_npos_by_hackathon_id,
-    get_single_hackathon_event,    
+    save_npo_legacy as save_npo,
+    update_npo_legacy as update_npo,
+    remove_npo_legacy as remove_npo,
+    save_npo_application,
+    get_npo_applications,
+    update_npo_application,
+)
+from services.hackathons_service import (
+    get_volunteer_checked_in_by_event,
+    get_single_hackathon_event,
     single_add_volunteer,
     get_single_hackathon_id,
     add_nonprofit_to_hackathon,
@@ -38,34 +68,8 @@ from api.messages.messages_service import (
     get_hackathon_request_by_id,
     update_hackathon_request,
     update_hackathon_volunteers,
-    get_teams_list,
-    get_team,
-    get_teams_batch,
-    get_teams_by_event_id,
-    save_team,
-    unjoin_team,
-    join_team,
     get_hackathon_list,
-    save_news,
-    save_lead_async,
-    get_news,
-    get_all_profiles,
-    save_npo_application,
-    get_npo_applications,
-    update_npo_application,
-    get_github_profile,
-    get_all_praises,
-    get_praises_about_user,
-    save_praise,
-    save_feedback,
-    get_user_feedback,
     get_volunteer_by_event,
-    get_github_repos,
-    get_user_giveaway,
-    save_giveaway,
-    get_all_giveaways,
-    upload_image_to_cdn,
-    save_onboarding_feedback,
 )
 
 logger = get_logger("messages_views")
@@ -674,7 +678,7 @@ def admin_get_all_giveaways():
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_get_all_hackathon_requests():
     logger.info("GET /admin/hackathon-requests called")
-    from api.messages.messages_service import get_all_hackathon_requests
+    from services.hackathons_service import get_all_hackathon_requests
     return get_all_hackathon_requests()
 
 @bp.route("/admin/hackathon-requests/<request_id>", methods=["PATCH"])
@@ -682,7 +686,7 @@ def admin_get_all_hackathon_requests():
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_update_hackathon_request_api(request_id):
     logger.info(f"PATCH /admin/hackathon-requests/{request_id} called")
-    from api.messages.messages_service import admin_update_hackathon_request
+    from services.hackathons_service import admin_update_hackathon_request
     result = admin_update_hackathon_request(request_id, request.get_json())
     if result is None:
         return {"error": "Hackathon request not found"}, 404
