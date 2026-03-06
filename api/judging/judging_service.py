@@ -27,8 +27,8 @@ from db.db import (
 from model.judge_assignment import JudgeAssignment
 from model.judge_score import JudgeScore
 from model.judge_panel import JudgePanel
+from services.hackathons_service import get_single_hackathon_event
 from api.messages.messages_service import (
-    get_single_hackathon_event,
     get_team,
     get_teams_batch
 )
