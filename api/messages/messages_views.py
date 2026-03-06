@@ -20,20 +20,19 @@ from api.messages.messages_service import (
     save_helping_status_old,
     save_profile_metadata_old,
     save_problem_statement_old,
-    save_news,
-    get_news,
     get_all_profiles,
     get_github_profile,
+)
+from services.news_service import (
+    save_news,
+    get_news,
     get_all_praises,
     get_praises_about_user,
     save_praise,
-    save_feedback,
-    get_user_feedback,
-    get_user_giveaway,
-    save_giveaway,
-    get_all_giveaways,
-    save_onboarding_feedback,
 )
+from services.feedback_service import save_feedback, get_user_feedback
+from services.giveaway_service import save_giveaway, get_user_giveaway, get_all_giveaways
+from services.onboarding_service import save_onboarding_feedback
 from services.teams_service import (
     get_teams_list,
     get_team,
