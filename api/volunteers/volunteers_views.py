@@ -596,6 +596,8 @@ def admin_send_email_to_address():
         recipient_type = request_data.get('recipient_type', 'volunteer')
         name = request_data.get('name')
         volunteer_id = request_data.get('volunteer_id')
+        collection_name = request_data.get('collection_name')
+        document_id = request_data.get('document_id')
 
         if not email:
             return _error_response("Email address is required", 400)
@@ -613,7 +615,9 @@ def admin_send_email_to_address():
                 admin_user=auth_user,
                 recipient_type=recipient_type,
                 name=name,
-                volunteer_id=volunteer_id
+                volunteer_id=volunteer_id,
+                collection_name=collection_name,
+                document_id=document_id
             )
 
             if result['success']:
