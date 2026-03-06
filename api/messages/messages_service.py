@@ -1642,6 +1642,38 @@ def update_hackathon_request(doc_id, json):
         return None
 
 
+def get_all_hackathon_requests():
+    db = get_db()
+    logger.debug("Hackathon Requests List (Admin)")
+    collection = db.collection('hackathon_requests')
+    docs = collection.stream()
+    requests = []
+    for doc in docs:
+        doc_dict = doc.to_dict()
+        doc_dict["id"] = doc.id
+        requests.append(doc_dict)
+    # Sort by created date descending (newest first)
+    requests.sort(key=lambda x: x.get("created", ""), reverse=True)
+    return {"requests": requests}
+
+
+def admin_update_hackathon_request(doc_id, json):
+    db = get_db()
+    logger.debug("Hackathon Request Admin Update")
+    doc_ref = db.collection('hackathon_requests').document(doc_id)
+    doc_snapshot = doc_ref.get()
+    if not doc_snapshot.exists:
+        return None
+
+    send_slack_audit(action="admin_update_hackathon_request", message="Admin updating", payload=json)
+    json["updated"] = datetime.now().isoformat()
+    doc_ref.update(json)
+
+    updated_doc = doc_ref.get().to_dict()
+    updated_doc["id"] = doc_id
+    return updated_doc
+
+
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_hackathon(json_data, propel_id):
