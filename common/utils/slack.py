@@ -300,20 +300,21 @@ def create_slack_channel(channel_name):
     logger.debug("create_slack_channel end")
 
 
-def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"):
+def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None):
     client = get_client()
     channel_id = get_channel_id_from_channel_name(channel)
     logger.info(f"Got channel id {channel_id}")
-    
+
     if channel_id is None:
         logger.warning("Unable to get channel id from name, might be a user?")
         channel_id = channel
-    
+
     logger.info("Sending message...")
     try:
         kwargs = {
             "channel": channel_id,
-            "blocks": [
+            "text": message,
+            "blocks": blocks if blocks else [
                 SectionBlock(
                     text={
                         "type": "mrkdwn",
@@ -335,19 +336,20 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
         assert e.response["error"]
 
 
-def async_send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"):
+def async_send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None):
     """
     Send a Slack message asynchronously using threading.
     This allows the calling function to return immediately without waiting for the Slack API call.
-    
+
     :param message: The message to send
-    :param channel: The channel name or user ID to send to  
+    :param channel: The channel name or user ID to send to
     :param icon_emoji: Optional emoji icon
     :param username: The username for the bot
+    :param blocks: Optional Block Kit blocks for rich formatting
     """
     def _send_slack_thread():
         try:
-            send_slack(message=message, channel=channel, icon_emoji=icon_emoji, username=username)
+            send_slack(message=message, channel=channel, icon_emoji=icon_emoji, username=username, blocks=blocks)
             logger.info(f"Async Slack message sent successfully to {channel}")
         except Exception as e:
             logger.error(f"Error sending async Slack message to {channel}: {e}")
