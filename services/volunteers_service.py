@@ -334,39 +334,125 @@ def send_admin_notification_email(volunteer_data: Dict[str, Any], is_update: boo
 
 def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update: bool = False) -> bool:
     """
-    Send a notification to Slack when a volunteer form is submitted or updated.
-    
+    Send a rich Block Kit notification to Slack when a volunteer form is submitted or updated.
+
     Args:
         volunteer_data: The volunteer data
         is_update: Whether this is an update to an existing volunteer
-        
+
     Returns:
         True if notification was sent successfully, False otherwise
     """
-    action_type = "updated" if is_update else "submitted"
+    import datetime as _dt
+
+    # --- Derive display values ---
     first_name = volunteer_data.get('firstName', '')
     last_name = volunteer_data.get('lastName', '')
     name = volunteer_data.get('name', '')
-
+    display_name = name or f"{first_name} {last_name}".strip() or "Unknown"
 
     email = volunteer_data.get('email', '')
-    volunteer_type = volunteer_data.get('volunteer_type', '')
+    volunteer_type = volunteer_data.get('volunteer_type', 'volunteer')
     event_id = volunteer_data.get('event_id', '')
-    
-    slack_message = f"""
-New volunteer form {action_type}:
-*Name:* {name} {first_name} {last_name}
-*Email:* {email}
-*Type:* {volunteer_type}
-*Event ID:* {event_id}
-"""
-    
+
+    type_emoji = {
+        'mentor': ':brain:',
+        'judge': ':scales:',
+        'volunteer': ':raised_hands:',
+        'sponsor': ':star:',
+        'hacker': ':computer:',
+    }
+    emoji = type_emoji.get(volunteer_type, ':raised_hands:')
+    action_label = "Updated" if is_update else "New"
+    role_label = volunteer_type.capitalize() if volunteer_type else "Volunteer"
+
+    # --- Fallback plain-text (required by Slack for notifications/accessibility) ---
+    fallback_text = f"{action_label} {role_label} Application — {display_name} ({email})"
+
+    # --- Build Block Kit blocks ---
+    blocks = []
+
+    # Header
+    blocks.append({
+        "type": "header",
+        "text": {"type": "plain_text", "text": f"{emoji}  {action_label} {role_label} Application", "emoji": True}
+    })
+
+    blocks.append({"type": "divider"})
+
+    # Core fields (two-column layout)
+    fields = [
+        {"type": "mrkdwn", "text": f"*Name:*\n{display_name}"},
+        {"type": "mrkdwn", "text": f"*Email:*\n{email}"},
+        {"type": "mrkdwn", "text": f"*Role:*\n{role_label}"},
+        {"type": "mrkdwn", "text": f"*Event:*\n{event_id or '—'}"},
+    ]
+    blocks.append({"type": "section", "fields": fields})
+
+    # Additional details (only if present)
+    detail_lines = []
+    company = volunteer_data.get('company', '')
+    if company:
+        detail_lines.append(f"*Company:* {company}")
+
+    linkedin = volunteer_data.get('linkedinProfile', '')
+    if linkedin:
+        detail_lines.append(f"*LinkedIn:* <{linkedin}|Profile>")
+
+    expertise = volunteer_data.get('expertise', '')
+    if expertise:
+        detail_lines.append(f"*Expertise:* {expertise}")
+
+    sw_specifics = volunteer_data.get('softwareEngineeringSpecifics', '')
+    if sw_specifics:
+        detail_lines.append(f"*SW Engineering:* {sw_specifics}")
+
+    in_person = volunteer_data.get('inPerson')
+    if in_person is not None:
+        in_person_label = "Yes :office:" if in_person else "No (remote) :globe_with_meridians:"
+        detail_lines.append(f"*In-Person:* {in_person_label}")
+
+    availability = volunteer_data.get('availability', '')
+    if availability:
+        # Truncate long availability strings for readability
+        avail_display = availability if len(availability) <= 200 else availability[:200] + "…"
+        detail_lines.append(f"*Availability:* {avail_display}")
+
+    available_days = volunteer_data.get('availableDays', '')
+    if available_days:
+        detail_lines.append(f"*Available Days:* {available_days}")
+
+    skills = volunteer_data.get('skills', '')
+    if skills:
+        detail_lines.append(f"*Skills:* {skills}")
+
+    experience = volunteer_data.get('experience', '')
+    if experience:
+        detail_lines.append(f"*Experience:* {experience}")
+
+    if detail_lines:
+        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(detail_lines)}})
+
+    # Context footer — timestamp + Slack workspace lookup result
+    context_elements = [
+        {"type": "mrkdwn", "text": f"Submitted {_dt.datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"}
+    ]
+    slack_user_id = volunteer_data.get('slack_user_id', '')
+    if slack_user_id:
+        context_elements.append({"type": "mrkdwn", "text": f":white_check_mark: Found in Slack workspace (<@{slack_user_id}>)"})
+    else:
+        context_elements.append({"type": "mrkdwn", "text": ":x: Not yet found in Slack workspace"})
+
+    blocks.append({"type": "context", "elements": context_elements})
+
+    # --- Send ---
     try:
         send_slack(
-            message=slack_message,
+            message=fallback_text,
             channel="volunteer-applications",
-            icon_emoji=":raising_hand:",
-            username="Volunteer Bot"
+            icon_emoji=emoji,
+            username="Volunteer Bot",
+            blocks=blocks
         )
         info(logger, "Sent Slack notification about volunteer", email=email, is_update=is_update)
         return True
