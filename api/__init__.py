@@ -201,6 +201,7 @@ def create_app():
     from api.slack import slack_views
     from api.judging import judging_views
     from api.llm import llm_views
+    from api.store import store_views
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
@@ -219,5 +220,6 @@ def create_app():
     app.register_blueprint(slack_views.bp)
     app.register_blueprint(llm_views.bp)
     app.register_blueprint(judging_views.bp)
+    app.register_blueprint(store_views.bp)
 
     return app
