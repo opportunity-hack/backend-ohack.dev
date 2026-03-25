@@ -251,19 +251,19 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         params = {
             "from": "Opportunity Hack <welcome@notifs.ohack.org>",
             "to": [email],            
-            "subject": f"Thank you for volunteering as an Opportunity Hack {volunteer_type_readable}",
+            "subject": f"Thank you for applying as an Opportunity Hack {volunteer_type_readable}",
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border-radius: 5px;">
                 <div style="text-align: center; margin-bottom: 20px;">
                     <img src="https://cdn.ohack.dev/ohack.dev/logos/OpportunityHack_2Letter_Dark_Blue.png" alt="Opportunity Hack Logo" style="max-width: 150px;">
                 </div>
-                <h2 style="color: #3498db; text-align: center;">Thank you for volunteering with Opportunity Hack!</h2>
+                <h2 style="color: #3498db; text-align: center;">Thank you for applying as an Opportunity Hack {volunteer_type_readable}!</h2>
                 <p style="font-size: 16px;">Hello {full_name},</p>
-                <p style="font-size: 16px;">Thank you for signing up as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. 
+                <p style="font-size: 16px;">Thank you for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. 
                 We've received your information and our team will review it shortly.</p>
                 {calendar_note}
                 {volunteer_specific_content}
-                <p style="font-size: 16px;">We'll be in touch with next steps.</p>
+                <p style="font-size: 16px;">We'll be in touch with next steps. In the meantime, feel free to explore our website and learn more about our mission and past events.</p>                
                 <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
                     <p style="font-size: 14px; color: #777;">The Opportunity Hack Team</p>
                     <p style="font-size: 14px; color: #777;">Website: <a href="https://ohack.dev" style="color: #3498db;">ohack.dev</a></p>

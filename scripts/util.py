@@ -14,7 +14,7 @@ logger.setLevel(logging.INFO)
 #
 from common.utils.slack import send_slack, get_active_users
 #TODO: Bunch of unused imports here
-from common.utils.firebase import get_hackathon_by_event_id, create_new_hackathon, add_reference_link_to_problem_statement, create_new_problem_statement, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_id, add_image_to_nonprofit_by_nonprofit_id, add_image_to_nonprofit, add_nonprofit_to_hackathon, create_new_problem_statement, create_new_nonprofit, create_new_hackathon, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_name, create_team, add_user_by_email_to_team, add_user_by_slack_id_to_team, add_team_to_hackathon, add_problem_statement_to_team, get_user_by_user_id, add_reference_link_to_problem_statement, get_user_by_email, create_user, add_user_to_team, delete_user_by_id, get_team_by_name, get_user_by_id, remove_user_from_team
+from common.utils.firebase import get_hackathon_by_event_id, create_new_hackathon, add_reference_link_to_problem_statement, create_new_problem_statement, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_id, add_image_to_nonprofit_by_nonprofit_id, add_image_to_nonprofit, add_nonprofit_to_hackathon, create_new_problem_statement, create_new_nonprofit, create_new_hackathon, link_nonprofit_to_problem_statement, link_problem_statement_to_hackathon_event, get_nonprofit_by_name, create_team, add_user_by_email_to_team, add_user_by_slack_id_to_team, add_team_to_hackathon, add_problem_statement_to_team, get_user_by_user_id, add_reference_link_to_problem_statement, get_user_by_email, create_user, add_user_to_team, delete_user_by_id, get_team_by_name, get_user_by_id, remove_user_from_team, get_all_problem_statements
 from common.utils.cdn import upload_to_cdn
 import re
 import urllib.request
@@ -117,6 +117,7 @@ parser.add_argument('--hackathon_end_date', type=str, help='hackathon end date')
 
 parser.add_argument('--slack_channel', type=str, help='user slack channel')
 parser.add_argument('--slack_message', type=str, help='slack message')
+parser.add_argument('--search', type=str, help='search keyword for filtering problem statements')
 
 args = parser.parse_args()
 
@@ -191,6 +192,32 @@ elif args.action == "link_problem_statement_to_nonprofit":
     
 elif args.action == "link_problem_statement_to_hackathon_event":
     link_problem_statement_to_hackathon_event(hackathon_event_id=args.hackathon_event_id, problem_statement_id=args.problem_statement_id)
+
+elif args.action == "list_problem_statements":
+    problem_statements = get_all_problem_statements()
+    search = args.search.lower() if args.search else None
+    if search:
+        problem_statements = [
+            ps for ps in problem_statements
+            if search in ps.get("title", "").lower()
+            or search in ps.get("description", "").lower()
+        ]
+    logger.info(f"Found {len(problem_statements)} problem statement(s)")
+    for ps in problem_statements:
+        title = ps.get("title", "N/A")
+        desc = ps.get("description", "N/A")
+        if len(desc) > 200:
+            desc = desc[:200] + "..."
+        status = ps.get("status", "N/A")
+        refs = ps.get("references", [])
+        ref_strs = [f"{r.get('name', '')}: {r.get('link', '')}" for r in refs] if refs else []
+        print(f"\n{'='*80}")
+        print(f"ID:          {ps.get('id', 'N/A')}")
+        print(f"Title:       {title}")
+        print(f"Description: {desc}")
+        print(f"Status:      {status}")
+        if ref_strs:
+            print(f"References:  {'; '.join(ref_strs)}")
 
 else:
     # Print help
