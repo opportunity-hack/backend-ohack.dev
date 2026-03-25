@@ -649,6 +649,8 @@ def save_hackathon(json_data, propel_id):
             hackathon_data["nonprofits"] = [db.collection("nonprofits").document(npo) for npo in json_data["nonprofits"]]
         if "teams" in json_data:
             hackathon_data["teams"] = [db.collection("teams").document(team) for team in json_data["teams"]]
+        if "visible_problem_statements" in json_data:
+            hackathon_data["visible_problem_statements"] = json_data["visible_problem_statements"]
 
         @firestore.transactional
         def update_hackathon(transaction):
@@ -675,4 +677,31 @@ def save_hackathon(json_data, propel_id):
         return {"error": str(ve)}, 400
     except Exception as e:
         logger.error(f"Error saving/updating hackathon: {str(e)}")
+        return {"error": "An unexpected error occurred"}, 500
+
+
+@limits(calls=50, period=ONE_MINUTE)
+def update_hackathon_visible_problem_statements(json_data, propel_id):
+    """Update the visible_problem_statements list for a hackathon."""
+    db = _get_db()
+    hackathon_id = json_data.get("hackathonId")
+    problem_statement_ids = json_data.get("problemStatementIds", [])
+
+    if not hackathon_id:
+        return {"error": "hackathonId is required"}, 400
+
+    try:
+        hackathon_ref = db.collection('hackathons').document(hackathon_id)
+        hackathon_ref.update({
+            "visible_problem_statements": problem_statement_ids,
+            "last_updated": firestore.SERVER_TIMESTAMP,
+            "last_updated_by": propel_id,
+        })
+
+        clear_cache()
+
+        logger.info(f"Updated visible_problem_statements for hackathon {hackathon_id}")
+        return Message("Updated visible problem statements")
+    except Exception as e:
+        logger.error(f"Error updating visible_problem_statements: {str(e)}")
         return {"error": "An unexpected error occurred"}, 500

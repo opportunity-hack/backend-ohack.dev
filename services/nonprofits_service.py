@@ -85,6 +85,31 @@ def delete_npo(id):
 
 # ==================== Raw-Firestore functions (from messages_service) ====================
 
+@limits(calls=100, period=ONE_MINUTE)
+def get_nonprofits_by_problem_statement_id(problem_statement_id):
+    """Reverse lookup: given a problem statement ID, find the nonprofit(s) that own it."""
+    logger.debug(f"get_nonprofits_by_problem_statement_id start ps_id={problem_statement_id}")
+    db = _get_db()
+    ps_ref = db.collection('problem_statements').document(problem_statement_id)
+
+    try:
+        docs = db.collection('nonprofits').where(
+            'problem_statements', 'array_contains', ps_ref
+        ).stream()
+
+        results = []
+        for doc in docs:
+            npo = doc_to_json(docid=doc.id, doc=doc)
+            if npo:
+                results.append(npo)
+
+        logger.info(f"get_nonprofits_by_problem_statement_id found {len(results)} nonprofits")
+        return {"nonprofits": results}
+    except Exception as e:
+        logger.error(f"Error in get_nonprofits_by_problem_statement_id: {e}")
+        return {"nonprofits": []}
+
+
 @limits(calls=1000, period=ONE_MINUTE)
 def get_single_npo(npo_id):
     logger.debug(f"get_npo start npo_id={npo_id}")
