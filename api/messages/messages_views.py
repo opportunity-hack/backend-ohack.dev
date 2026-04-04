@@ -49,6 +49,7 @@ from services.nonprofits_service import (
     get_npo_list,
     get_npo_by_hackathon_id,
     get_npos_by_hackathon_id,
+    get_nonprofits_by_problem_statement_id,
     save_npo_legacy as save_npo,
     update_npo_legacy as update_npo,
     remove_npo_legacy as remove_npo,
@@ -68,6 +69,7 @@ from services.hackathons_service import (
     get_hackathon_request_by_id,
     update_hackathon_request,
     update_hackathon_volunteers,
+    update_hackathon_visible_problem_statements,
     get_hackathon_list,
     get_volunteer_by_event,
 )
@@ -226,6 +228,14 @@ def remove_nonprofit_from_hackathon_api():
     logger.info("DELETE /hackathon/nonprofit called")
     if auth_user and auth_user.user_id:
         return remove_nonprofit_from_hackathon(request.get_json())
+
+@bp.route("/hackathon/problem_statements", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def update_hackathon_visible_problem_statements_api():
+    logger.info("PATCH /hackathon/problem_statements called")
+    if auth_user and auth_user.user_id:
+        return vars(update_hackathon_visible_problem_statements(request.get_json(), auth_user.user_id))
 
 
 @bp.route("/hackathon/<event_id>/mentor", methods=["POST"])
@@ -568,6 +578,11 @@ def get_problem_statments():
 def get_single_problem(project_id):
     logger.info(f"GET /problem_statement/{project_id} called")
     return (get_single_problem_statement_old(project_id))
+
+@bp.route("/problem_statement/<project_id>/nonprofit", methods=["GET"])
+def get_nonprofit_for_problem_statement(project_id):
+    logger.info(f"GET /problem_statement/{project_id}/nonprofit called")
+    return get_nonprofits_by_problem_statement_id(project_id)
 
 #
 # --------------------- TO BE REPLACED ROUTES ------------------------------------------#

@@ -465,6 +465,16 @@ def create_new_nonprofit(name, description, website, slack_channel, contact_peop
         return nonprofit
 
 
+def get_all_nonprofits():
+    db = get_db()  # this connects to our Firestore database
+    docs = db.collection('nonprofits').stream()
+    results = []
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        results.append(adict)
+    return results
+
 def get_nonprofit_by_name(name):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Getting nonprofit {name}")
@@ -688,6 +698,16 @@ def get_hackathon_reference_by_title(hackathon_title):
 
     for doc in docs:
         return doc.reference
+
+def get_all_problem_statements():
+    db = get_db()  # this connects to our Firestore database
+    docs = db.collection('problem_statements').stream()
+    results = []
+    for doc in docs:
+        adict = doc.to_dict()
+        adict["id"] = doc.id
+        results.append(adict)
+    return results
 
 def get_problem_statement_by_id(id):
     db = get_db()  # this connects to our Firestore database

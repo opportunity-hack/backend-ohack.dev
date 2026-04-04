@@ -387,7 +387,8 @@ def categorize_team_achievements(achievements: List[Dict], contributors: List[Di
         List of team achievements
     """
     # Check if there are any team achievements in the achievements list
-    team_achievements = [a for a in achievements if "team" in a and "person" not in a]
+    # Exclude mentor_opportunity entries — those are handled separately
+    team_achievements = [a for a in achievements if "team" in a and "person" not in a and a.get("type") != "mentor_opportunity"]
     
     # If we have team achievements, use them
     if team_achievements:
@@ -480,6 +481,29 @@ def categorize_team_achievements(achievements: List[Dict], contributors: List[Di
     
     return calculated_team_achievements[:4]
 
+def categorize_mentor_opportunities(achievements: List[Dict]) -> List[Dict]:
+    """
+    Extract mentor opportunity entries (teams that could use support).
+
+    Args:
+        achievements: List of achievement objects
+
+    Returns:
+        List of mentor opportunity entries
+    """
+    opportunities = [a for a in achievements if a.get("type") == "mentor_opportunity"]
+
+    # Ensure each entry has required fields
+    for opp in opportunities:
+        if "icon" not in opp:
+            opp["icon"] = "rocket_launch"
+        if "value" not in opp:
+            opp["value"] = "-"
+        if "description" not in opp:
+            opp["description"] = "This team might benefit from some mentor guidance to get rolling!"
+
+    return opportunities
+
 def get_leaderboard_analytics(event_id: str, contributors: List[Dict], achievements: List[Dict]) -> Dict[str, Any]:
     """
     Generate leaderboard analytics including statistics and achievements.
@@ -516,13 +540,15 @@ def get_leaderboard_analytics(event_id: str, contributors: List[Dict], achieveme
     # Process achievements
     individual_achievements = categorize_individual_achievements(achievements)
     team_achievements = categorize_team_achievements(achievements, contributors)
-    
+    mentor_opportunities = categorize_mentor_opportunities(achievements)
+
     return {
         "eventName": event_name,
         "githubOrg": github_org,
         "generalStats": general_stats,
         "individualAchievements": individual_achievements,
-        "teamAchievements": team_achievements
+        "teamAchievements": team_achievements,
+        "mentorOpportunities": mentor_opportunities
     }
 
 def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
@@ -553,7 +579,8 @@ def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
             "github_achievements": [],
             "generalStats": [],
             "individualAchievements": [],
-            "teamAchievements": []
+            "teamAchievements": [],
+            "mentorOpportunities": []
         }
     
     repos_start = time.time()
