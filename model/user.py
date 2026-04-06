@@ -149,16 +149,16 @@ class User:
             if hasattr(self, field) and getattr(self, field) is not None:
                 public_data[field] = getattr(self, field)
 
+        # Fields that need special handling (not simple attribute lookups)
+        special_fields = {"hackathon_history", "what", "how", "badges"}
+
         # Include privacy-controlled fields only if user made them public
         for field in privacy_fields:
             if field in pii_fields:
                 continue  # Never share PII fields
 
-            # hackathon_history controls the hackathons list, not a direct attribute
-            if field == "hackathon_history":
-                if privacy_settings.get(field, False) == "public":
-                    public_data["hackathons"] = self.serialize_hackathons()
-                continue
+            if field in special_fields:
+                continue  # Handled below
 
             if hasattr(self, field) and privacy_settings.get(field, False) == "public":
                 field_value = getattr(self, field)
@@ -166,17 +166,21 @@ class User:
                 if field_value is not None and field_value != "":
                     public_data[field] = field_value
 
-        # Include history (what/how feedback data) if either what or how is public
-        if privacy_settings.get("what", False) == "public" or privacy_settings.get("how", False) == "public":
-            history = {}
-            if privacy_settings.get("what", False) == "public" and hasattr(self, 'history') and 'what' in self.history:
-                history["what"] = self.history["what"]
-            if privacy_settings.get("how", False) == "public" and hasattr(self, 'history') and 'how' in self.history:
-                history["how"] = self.history["how"]
-            if history:
-                public_data["history"] = history
+        # Hackathons: controlled by hackathon_history privacy field
+        if privacy_settings.get("hackathon_history", False) == "public":
+            public_data["hackathons"] = self.serialize_hackathons()
 
-        # Include badges if public (badges are stored as a list, not a simple field)
+        # Feedback history: what and how are independent privacy fields
+        # Nested under "history" to match the structure the frontend expects
+        history = {}
+        if privacy_settings.get("what", False) == "public" and hasattr(self, 'history') and 'what' in self.history:
+            history["what"] = self.history["what"]
+        if privacy_settings.get("how", False) == "public" and hasattr(self, 'history') and 'how' in self.history:
+            history["how"] = self.history["how"]
+        if history:
+            public_data["history"] = history
+
+        # Badges: stored as a list, not a simple field value
         if privacy_settings.get("badges", False) == "public" and hasattr(self, 'badges') and self.badges:
             public_data["badges"] = self.badges
 
