@@ -1705,7 +1705,9 @@ def send_volunteer_message(
     admin_user_id: str,
     admin_user: Any = None,
     recipient_type: str = 'volunteer',
-    recipient_id: Optional[str] = None
+    recipient_id: Optional[str] = None,
+    fallback_email: Optional[str] = None,
+    fallback_name: Optional[str] = None
 ) -> Dict[str, Any]:
     """
     Send a message to a volunteer via Slack and email.
@@ -1742,7 +1744,8 @@ def send_volunteer_message(
         slack_user_id = None
         name = "Volunteer"
         volunteer_type = recipient_type
-        
+        volunteer = {}
+
         if volunteer_doc.exists:
             volunteer = volunteer_doc.to_dict()
 
@@ -1766,12 +1769,17 @@ def send_volunteer_message(
             name = user.get('name', 'Volunteer')
             volunteer_type = "Volunteer"
         else:
-            return {
-                'success': False,
-                'error': 'Volunteer record not found',
-                'volunteer_id': volunteer_id,
-                'recipient_type': recipient_type
-            }
+            # No volunteer or user document found — use fallback email/name from request
+            if fallback_email:
+                email = fallback_email
+                name = fallback_name or 'Volunteer'
+            else:
+                return {
+                    'success': False,
+                    'error': 'Volunteer record not found',
+                    'volunteer_id': volunteer_id,
+                    'recipient_type': recipient_type
+                }
         
 
         if not email:
@@ -1833,11 +1841,11 @@ def send_volunteer_message(
 
             # Add the record to the volunteer's sent_emails array
             volunteer_ref = db.collection('volunteers').document(volunteer_id)
-            volunteer_ref.update({
+            volunteer_ref.set({
                 'sent_emails': firestore.ArrayUnion([sent_email_record]),
                 'last_message_timestamp': _get_current_timestamp(),
                 'updated_timestamp': _get_current_timestamp()
-            })
+            }, merge=True)
             user_id = volunteer.get('user_id', '')
 
             info(logger, "Updated volunteer document with sent_emails tracking",
@@ -1984,11 +1992,11 @@ def send_email_to_address(
                 }
 
                 volunteer_ref = db.collection('volunteers').document(volunteer_id)
-                volunteer_ref.update({
+                volunteer_ref.set({
                     'sent_emails': firestore.ArrayUnion([sent_email_record]),
                     'last_message_timestamp': _get_current_timestamp(),
                     'updated_timestamp': _get_current_timestamp()
-                })
+                }, merge=True)
 
                 info(logger, "Updated volunteer document with sent_emails tracking (email-only path)",
                      volunteer_id=volunteer_id, resend_email_id=resend_email_id)

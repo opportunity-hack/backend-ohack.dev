@@ -26,8 +26,10 @@ client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 # Initialize logger
 logger = get_logger("hearts_service")
 #
-from common.utils.firebase import add_hearts_for_user, get_user_by_user_id, add_certificate
-from common.utils.slack import send_slack, async_send_slack, invite_user_to_channel
+from common.utils.firebase import add_hearts_for_user, get_user_by_user_id, get_user_by_email, add_certificate
+from common.utils.slack import send_slack, async_send_slack, invite_user_to_channel, rate_limited_get_user_info
+from common.utils.oauth_providers import normalize_slack_user_id
+from services.users_service import save_user
 
 
 def get_hearts_for_all_users():    
@@ -125,14 +127,67 @@ def save_hearts(user_id, hearts_json):
     return response
 
 
-def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image=False, cleanup=True, generate_backround_image=False):
+def _resolve_user_by_slack_id(slack_user_id):
+    """
+    Resolve a raw Slack user ID to a Firestore user dict using a cascading strategy:
+    1. Direct Slack ID lookup (normalized to oauth2|slack|... format)
+    2. Email-based cross-provider lookup (handles Google-login users)
+    3. Auto-create from Slack profile data (handles users who never logged in)
+    """
+    # Tier 1: Direct lookup by normalized Slack ID
     user = get_user_by_user_id(slack_user_id)
-    if user is None:
-        error_string = f"User with slack id {slack_user_id} not found"
-        error(logger, "Error generating certificate", error=error_string)
-        raise Exception(error_string)
-    
-    if "id" not in user:
+    if user is not None:
+        return user
+
+    # Tier 2: Look up Slack profile to get email, then search by email
+    info(logger, "User not found by Slack ID, trying email fallback", slack_user_id=slack_user_id)
+    slack_info = rate_limited_get_user_info(slack_user_id)
+    if slack_info is None:
+        warning(logger, "Slack user not found in workspace", slack_user_id=slack_user_id)
+        return None
+
+    email = slack_info.get("profile", {}).get("email", "")
+    if email:
+        user = get_user_by_email(email)
+        if user is not None:
+            info(logger, "Found user by email (cross-provider)", slack_user_id=slack_user_id, email=email)
+            return user
+
+    # Tier 3: Auto-create user from Slack profile
+    if not email:
+        warning(logger, "Cannot auto-create user without email", slack_user_id=slack_user_id)
+        return None
+
+    info(logger, "Auto-creating user from Slack profile", slack_user_id=slack_user_id, email=email)
+    profile = slack_info.get("profile", {})
+    normalized_id = normalize_slack_user_id(slack_user_id)
+    name = slack_info.get("real_name", slack_info.get("name", ""))
+    nickname = profile.get("display_name", slack_info.get("name", ""))
+    profile_image = profile.get("image_192", "")
+    last_login = datetime.utcnow().isoformat() + "Z"
+
+    save_user(
+        user_id=normalized_id,
+        email=email,
+        last_login=last_login,
+        profile_image=profile_image or "https://ohack.dev/default-avatar.png",
+        name=name,
+        nickname=nickname,
+        propel_id=None,
+    )
+
+    # Re-fetch to get the dict with "id" key
+    user = get_user_by_user_id(slack_user_id)
+    if user is not None:
+        info(logger, "Auto-created user successfully", slack_user_id=slack_user_id)
+    else:
+        error(logger, "Failed to fetch auto-created user", slack_user_id=slack_user_id)
+    return user
+
+
+def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image=False, cleanup=True, generate_backround_image=False):
+    user = _resolve_user_by_slack_id(slack_user_id)
+    if user is None or "id" not in user:
         error_string = f"User with slack id {slack_user_id} not found"
         error(logger, "Error generating certificate", error=error_string)
         raise Exception(error_string)
@@ -293,7 +348,13 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
     text_img.paste(foreground_image, (0, 0), mask=foreground_image)
     text_img.save(filename, format="png")
     upload_to_cdn("certificates", filename)
-    add_certificate(user_id=userid, certificate=filename)
+    add_certificate(
+        user_id=userid,
+        certificate=filename,
+        timestamp=iso_date,
+        reasons=reasons,
+        hearts=hearts,
+    )
     info(logger, "Generated certificate", name=name, hearts=total_hearts, filename=filename)
     return filename
 
