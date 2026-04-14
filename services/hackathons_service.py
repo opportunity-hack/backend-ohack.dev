@@ -150,7 +150,7 @@ def get_single_hackathon_id(id):
         result = doc_to_json(docid=doc.id, doc=doc)
         result["id"] = doc.id
 
-        logger.info(f"get_single_hackathon_id end (with result):{result}")
+        logger.info(f"get_single_hackathon_id end (with result id={doc.id})")
         return result
     return {}
 
@@ -170,7 +170,8 @@ def get_volunteer_by_event(event_id, volunteer_type, admin=False):
         logger.warning(f"get {volunteer_type} end (no results)")
         return []
     else:
-        logger.debug(f"get {volunteer_type} end (with result):{results}")
+        count = len(results.get("data", [])) if isinstance(results, dict) else 0
+        logger.debug(f"get {volunteer_type} end ({count} results)")
         return results
 
 
@@ -188,7 +189,8 @@ def get_volunteer_checked_in_by_event(event_id, volunteer_type):
         logger.warning(f"get {volunteer_type} end (no results)")
         return []
     else:
-        logger.debug(f"get {volunteer_type} end (with result):{results}")
+        count = len(results.get("data", [])) if isinstance(results, dict) else 0
+        logger.debug(f"get {volunteer_type} end ({count} results)")
         return results
 
 

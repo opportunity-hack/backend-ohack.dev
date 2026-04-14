@@ -1,4 +1,5 @@
 import uuid
+import os
 
 from PIL import ImageFont
 from os import getenv, path, remove
@@ -10,10 +11,15 @@ import textwrap
 import pytz
 import base64
 import hashlib
+import resend
 
 # Import get_team_by_slack_channel
 from common.utils.firebase import get_team_by_slack_channel, save_certificate, get_certficate_by_file_id, get_recent_certs_from_db
 from common.utils.cdn import upload_to_cdn
+from common.utils.slack import async_send_slack
+from common.log import get_logger
+
+logger = get_logger("certificate_service")
 
 # Import QR code generator
 from api.certificates.qr_code import generate_qr_code
@@ -33,6 +39,9 @@ HEADER_FONT: ImageFont  = ImageFont.truetype("./api/certificates/assets/Gidole-R
 WHITE_COLOR: Tuple[int, int, int] = (255, 255, 255)
 GOLD_COLOR:  Tuple[int, int, int] = (255, 215, 0)
 BLACK_COLOR: Tuple[int, int, int] = (0, 0, 0)
+
+# Organizer names/usernames excluded from certificate generation (lowercase)
+EXCLUDED_AUTHORS = {"gregv", "greg v"}
 
 
 def get_cert_info(id):
@@ -90,11 +99,16 @@ def _write_stat_to_certificate(certGen: CertificateGenerator, statTextInfo: Dict
 def generate_certificate_from_slack(slack_channel: str) -> List[str]:
     team = get_team_by_slack_channel(slack_channel)
     if (team is None): return []
-    
+
     if "github_links" in team:
         github_links = team["github_links"]
-        return [generate_certificate_for_all_authors(link["link"]) for link in github_links]
+        all_results = [generate_certificate_for_all_authors(link["link"]) for link in github_links]
 
+        # Send notifications for all generated certificates
+        team_name = team.get("name", "your team")
+        _notify_team_certificates(slack_channel, team_name, all_results)
+
+        return all_results
 
     return []
 
@@ -102,14 +116,117 @@ def generate_certificate_from_slack(slack_channel: str) -> List[str]:
 def generate_certificate_for_all_authors(repositoryURL: str) -> str:
    """ Generate certificate for each GitFameData.authors """
    gitFameData: GitFameTableCombined = getGitFameData(repositoryURL)
-   
-   print(f"gitFameData: {gitFameData}")
-   print(f"gitFameData.authors: {gitFameData.authors}")
 
-    # Remove gregv from authors
-   gitFameData.authors = [row for row in gitFameData.authors if row.author != "gregv"]
+   logger.info(f"Generating certificates for {len(gitFameData.authors)} authors from {repositoryURL}")
+
+   gitFameData.authors = [row for row in gitFameData.authors if row.author.lower() not in EXCLUDED_AUTHORS]
 
    return [generate_certificate(repositoryURL, row.author) for row in gitFameData.authors]
+
+
+def _notify_team_certificates(slack_channel, team_name, all_results):
+    """Send Slack message to team channel and email each author after certificate generation."""
+    # Flatten results (all_results is a list of lists of result dicts)
+    certs = []
+    for repo_results in all_results:
+        if isinstance(repo_results, list):
+            for cert in repo_results:
+                if isinstance(cert, dict) and cert.get("certificate_url"):
+                    certs.append(cert)
+
+    if not certs:
+        return
+
+    # Build Slack message for the team channel
+    cert_lines = []
+    for cert in certs:
+        name = cert.get("author_name", "Unknown")
+        stats = cert.get("stats", {})
+        commits = stats.get("commits", 0)
+        hours = stats.get("hours", 0)
+        url = cert.get("certificate_url", "")
+        cert_lines.append(f"  :award: *{name}* — {commits} commits, {hours}h | <{url}|View Certificate>")
+
+    repo_url = certs[0].get("repository_url", "")
+    repo_name = repo_url.rstrip("/").split("/")[-1] if repo_url else ""
+    slack_message = (
+        f":tada: *GitHub Certificates Generated for {team_name}!*\n\n"
+        f"Certificates have been created for {len(certs)} contributor{'s' if len(certs) != 1 else ''}"
+        f"{f' from <{repo_url}|{repo_name}>' if repo_url else ''}:\n\n"
+        + "\n".join(cert_lines)
+        + "\n\nView all certificates at <https://ohack.dev/cert|ohack.dev/cert>"
+    )
+
+    try:
+        async_send_slack(message=slack_message, channel=slack_channel)
+        logger.info(f"Sent certificate notification to Slack channel {slack_channel} for {len(certs)} certs")
+    except Exception as e:
+        logger.error(f"Failed to send Slack notification to {slack_channel}: {e}")
+
+    # Send email to each author
+    for cert in certs:
+        author_email = cert.get("author_email", "")
+        # Skip noreply GitHub emails — they can't receive mail
+        if not author_email or "noreply" in author_email:
+            continue
+        _send_certificate_email(cert)
+
+
+def _send_certificate_email(cert):
+    """Send certificate notification email to a contributor."""
+    resend_api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
+    if not resend_api_key:
+        logger.warning("RESEND_WELCOME_EMAIL_KEY not set, skipping certificate email")
+        return
+
+    resend.api_key = resend_api_key
+    author_name = cert.get("author_name", "Contributor")
+    author_email = cert.get("author_email", "")
+    cert_url = cert.get("certificate_url", "")
+    repo_url = cert.get("repository_url", "")
+    stats = cert.get("stats", {})
+
+    html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #333;">Congratulations, {author_name}! 🎉</h2>
+        <p>A GitHub contribution certificate has been generated for your work
+        {f'on <a href="{repo_url}">{repo_url.split("/")[-1]}</a>' if repo_url else ''}
+        at <strong>Opportunity Hack</strong>.</p>
+
+        <div style="background: #f5f5f5; padding: 16px; border-radius: 8px; margin: 16px 0;">
+            <strong>Your Stats:</strong><br/>
+            Commits: {stats.get('commits', 0)}<br/>
+            Hours: {stats.get('hours', 0)}<br/>
+            Lines of Code: {stats.get('lines_of_code', 0)}<br/>
+            Files: {stats.get('files', 0)}
+        </div>
+
+        <p><a href="{cert_url}"
+              style="display: inline-block; background: #1976d2; color: white; padding: 12px 24px;
+                     border-radius: 6px; text-decoration: none; font-weight: bold;">
+            View Your Certificate
+        </a></p>
+
+        <p style="color: #666; font-size: 14px;">
+            Thank you for volunteering your skills to help nonprofits!<br/>
+            Learn more at <a href="https://ohack.dev">ohack.dev</a>
+        </p>
+    </div>
+    """
+
+    try:
+        params = {
+            "from": "Opportunity Hack <welcome@notifs.ohack.org>",
+            "to": [author_email],
+            "subject": "Your Opportunity Hack GitHub Certificate is Ready!",
+            "html": html,
+        }
+        email = resend.Emails.SendParams(params)
+        resend.Emails.send(email)
+        logger.info(f"Sent certificate email to {author_email}")
+    except Exception as e:
+        logger.error(f"Failed to send certificate email to {author_email}: {e}")
+
 
 def generate_hash(data: str) -> str:
     hash_object = hashlib.sha256(data.encode())
@@ -118,11 +235,14 @@ def generate_hash(data: str) -> str:
 
 def generate_certificate(repositoryURL: str, username: str) -> str:
     """ Automatically generate a certificate and returns the base64 representation of it"""
+    if username.lower() in EXCLUDED_AUTHORS:
+        logger.info(f"Skipping certificate for excluded author: {username}")
+        return ""
+
     certGen: CertificateGenerator = CertificateGenerator()
 
     gitFameData: GitFameTableCombined = getGitFameData(repositoryURL)
-    print(f"gitFameData: {gitFameData}")
-    print(f"gitFameData.authors: {gitFameData.authors}")
+    logger.debug(f"generate_certificate: {len(gitFameData.authors)} authors for {repositoryURL}")
 
     authorWithEmailData: GitFameRow = None
     authorData: GitFameRow = None

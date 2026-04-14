@@ -1,7 +1,7 @@
 import pytest
 from unittest.mock import patch, MagicMock
 import datetime
-from api.slack.slack_service import get_active_users, get_user_details, clear_slack_cache
+from api.slack.slack_service import get_active_users, get_user_details, clear_slack_cache, sync_slack_users_to_firestore
 
 @pytest.fixture
 def mock_userlist_response():
@@ -204,3 +204,133 @@ def test_clear_slack_cache(mock_clear_pattern):
     assert mock_clear_pattern.call_count == 2
     mock_clear_pattern.assert_any_call("slack:active_users:*")
     mock_clear_pattern.assert_any_call("slack:user_details:*")
+
+
+# --- Tests for sync_slack_users_to_firestore ---
+
+@patch('api.slack.slack_service.save_user')
+@patch('api.slack.slack_service.fetch_user_by_user_id')
+@patch('api.slack.slack_service.userlist')
+def test_sync_creates_new_users(mock_userlist, mock_fetch, mock_save, mock_userlist_response):
+    mock_userlist.return_value = mock_userlist_response
+    mock_fetch.return_value = None  # No existing users
+    mock_save.return_value = MagicMock()  # Successful save
+
+    result = sync_slack_users_to_firestore(lookback_days=30)
+
+    assert result["created"] == 1  # Only U123456 is within 30 days and not bot/deleted
+    assert result["skipped_existing"] == 0
+    mock_save.assert_called_once()
+    call_kwargs = mock_save.call_args
+    assert "testuser1@example.com" in str(call_kwargs)
+
+
+@patch('api.slack.slack_service.save_user')
+@patch('api.slack.slack_service.fetch_user_by_user_id')
+@patch('api.slack.slack_service.userlist')
+def test_sync_skips_existing_users(mock_userlist, mock_fetch, mock_save, mock_userlist_response):
+    mock_userlist.return_value = mock_userlist_response
+    mock_fetch.return_value = MagicMock()  # User already exists
+
+    result = sync_slack_users_to_firestore(lookback_days=30)
+
+    assert result["created"] == 0
+    assert result["skipped_existing"] == 1
+    mock_save.assert_not_called()
+
+
+@patch('api.slack.slack_service.save_user')
+@patch('api.slack.slack_service.fetch_user_by_user_id')
+@patch('api.slack.slack_service.userlist')
+def test_sync_skips_bots_and_deleted(mock_userlist, mock_fetch, mock_save, mock_userlist_response):
+    mock_userlist.return_value = mock_userlist_response
+    mock_fetch.return_value = None
+
+    result = sync_slack_users_to_firestore(lookback_days=30)
+
+    # Bot (B345678) and deleted user (U456789) should be filtered out
+    # U234567 is outside 30-day window
+    # Only U123456 qualifies
+    assert result["filtered_by_lookback"] == 1
+
+
+@patch('api.slack.slack_service.save_user')
+@patch('api.slack.slack_service.fetch_user_by_user_id')
+@patch('api.slack.slack_service.userlist')
+def test_sync_skips_users_without_email(mock_userlist, mock_fetch, mock_save):
+    mock_userlist.return_value = {
+        "members": [
+            {
+                "id": "U111111",
+                "name": "noemail_user",
+                "real_name": "No Email",
+                "profile": {"display_name": "noemail"},
+                "updated": int(datetime.datetime.now().timestamp()),
+                "is_bot": False,
+                "deleted": False,
+            }
+        ]
+    }
+    mock_fetch.return_value = None
+
+    result = sync_slack_users_to_firestore(lookback_days=30)
+
+    assert result["skipped_no_email"] == 1
+    assert result["created"] == 0
+    mock_save.assert_not_called()
+
+
+@patch('api.slack.slack_service.save_user')
+@patch('api.slack.slack_service.fetch_user_by_user_id')
+@patch('api.slack.slack_service.userlist')
+def test_sync_handles_save_failure(mock_userlist, mock_fetch, mock_save):
+    mock_userlist.return_value = {
+        "members": [
+            {
+                "id": "U999999",
+                "name": "failuser",
+                "real_name": "Fail User",
+                "profile": {
+                    "display_name": "failuser",
+                    "email": "fail@example.com",
+                    "image_192": "https://example.com/img.jpg",
+                },
+                "updated": int(datetime.datetime.now().timestamp()),
+                "is_bot": False,
+                "deleted": False,
+            }
+        ]
+    }
+    mock_fetch.return_value = None
+    mock_save.side_effect = Exception("DB write failed")
+
+    result = sync_slack_users_to_firestore(lookback_days=30)
+
+    assert result["created"] == 0
+    assert len(result["errors"]) == 1
+    assert "DB write failed" in result["errors"][0]["reason"]
+
+
+@patch('api.slack.slack_service.save_user')
+@patch('api.slack.slack_service.fetch_user_by_user_id')
+@patch('api.slack.slack_service.userlist')
+def test_sync_with_longer_lookback(mock_userlist, mock_fetch, mock_save, mock_userlist_response):
+    mock_userlist.return_value = mock_userlist_response
+    mock_fetch.return_value = None
+    mock_save.return_value = MagicMock()
+
+    result = sync_slack_users_to_firestore(lookback_days=60)
+
+    # With 60-day lookback, both U123456 (5 days) and U234567 (35 days) qualify
+    assert result["filtered_by_lookback"] == 2
+    assert result["created"] == 2
+
+
+@patch('api.slack.slack_service.userlist')
+def test_sync_handles_empty_userlist(mock_userlist):
+    mock_userlist.return_value = None
+
+    result = sync_slack_users_to_firestore()
+
+    assert result["total_slack_members"] == 0
+    assert len(result["errors"]) == 1

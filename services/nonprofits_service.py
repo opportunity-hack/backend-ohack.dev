@@ -122,7 +122,7 @@ def get_single_npo(npo_id):
     else:
         result = doc_to_json(docid=doc.id, doc=doc)
 
-        logger.info(f"get_npo end (with result):{result}")
+        logger.info(f"get_npo end (with result id={doc.id})")
         return {
             "nonprofits": result
         }
@@ -180,7 +180,7 @@ def get_npo_by_hackathon_id(id):
     else:
         result = doc_to_json(docid=doc.id, doc=doc)
 
-        logger.info(f"get_npo_by_hackathon_id end (with result):{result}")
+        logger.info(f"get_npo_by_hackathon_id end (with result id={doc.id})")
         return result
     return {}
 
@@ -396,8 +396,7 @@ def get_npo_applications():
     if not results:
         return {"applications": []}
 
-    logger.info(results)
-    logger.info("get_npo_applications End")
+    logger.info(f"get_npo_applications end ({len(results)} applications)")
 
     return {"applications": results}
 

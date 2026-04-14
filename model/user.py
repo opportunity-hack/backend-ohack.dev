@@ -1,5 +1,5 @@
 metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "volunteering", "linkedin_url", "instagram_url", "propel_id"]
-privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback"]
+privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback", "hackathon_history"]
 
 # Fields that should NEVER be shared publicly regardless of privacy settings
 pii_fields = ["email_address", "last_login", "propel_id", "volunteering"]
@@ -32,7 +32,7 @@ class User:
 
     @classmethod
     def deserialize(cls, d):
-        print(f"User.deserialize {d}")
+        # Debug logging removed to reduce log spam
         u = User()
         u.id = d['id']
         u.email_address = d['email_address']
@@ -149,16 +149,40 @@ class User:
             if hasattr(self, field) and getattr(self, field) is not None:
                 public_data[field] = getattr(self, field)
 
+        # Fields that need special handling (not simple attribute lookups)
+        special_fields = {"hackathon_history", "what", "how", "badges"}
+
         # Include privacy-controlled fields only if user made them public
         for field in privacy_fields:
             if field in pii_fields:
                 continue  # Never share PII fields
+
+            if field in special_fields:
+                continue  # Handled below
 
             if hasattr(self, field) and privacy_settings.get(field, False) == "public":
                 field_value = getattr(self, field)
 
                 if field_value is not None and field_value != "":
                     public_data[field] = field_value
+
+        # Hackathons: controlled by hackathon_history privacy field
+        if privacy_settings.get("hackathon_history", False) == "public":
+            public_data["hackathons"] = self.serialize_hackathons()
+
+        # Feedback history: what and how are independent privacy fields
+        # Nested under "history" to match the structure the frontend expects
+        history = {}
+        if privacy_settings.get("what", False) == "public" and hasattr(self, 'history') and 'what' in self.history:
+            history["what"] = self.history["what"]
+        if privacy_settings.get("how", False) == "public" and hasattr(self, 'history') and 'how' in self.history:
+            history["how"] = self.history["how"]
+        if history:
+            public_data["history"] = history
+
+        # Badges: stored as a list, not a simple field value
+        if privacy_settings.get("badges", False) == "public" and hasattr(self, 'badges') and self.badges:
+            public_data["badges"] = self.badges
 
         # Include privacy settings themselves for the frontend to know what's public
         public_data["privacy_settings"] = privacy_settings

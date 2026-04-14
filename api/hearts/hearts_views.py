@@ -42,11 +42,13 @@ def getOrgId(req):
 @auth.require_org_member_with_permission("heart.admin", req_to_org_id=getOrgId)
 def save_hearts():        
     debug(logger, "save_hearts endpoint called")
-    if auth_user and auth_user.user_id: 
-        debug(logger, "save_hearts request data", data=request.get_json())
-        logger.info(f"User {auth_user.user_id} is saving hearts")      
-        logger.info(f"Request data: {request.get_json()}")
-        res = hearts_service.save_hearts(auth_user.user_id, request.get_json())
-        return {"hearts": res}
+    if auth_user and auth_user.user_id:
+        logger.info(f"User {auth_user.user_id} is saving hearts")
+        try:
+            res = hearts_service.save_hearts(auth_user.user_id, request.get_json())
+            return {"hearts": res}
+        except Exception as e:
+            error(logger, "Error saving hearts", error=str(e))
+            return {"error": str(e)}, 400
     else:
-        return "Error: Could not obtain user details for POST /hearts"
+        return {"error": "Could not obtain user details"}, 401
