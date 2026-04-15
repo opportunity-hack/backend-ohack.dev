@@ -258,6 +258,10 @@ def get_profile_metadata_old(propel_id):
 
     email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_id)
 
+    if user_id is None:
+        logger.warning("Could not resolve user details from PropelAuth for propel_id=%s", propel_id)
+        return {"error": "Unable to resolve user profile", "status": "auth_failed"}
+
     send_slack_audit(
         action="login", message=f"User went to profile: {user_id} with email: {email}")
 

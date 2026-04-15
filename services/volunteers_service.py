@@ -1,5 +1,6 @@
 from typing import Dict, List, Optional, Union, Any, Tuple
 import uuid
+import time
 from datetime import datetime
 import pytz
 from functools import lru_cache
@@ -2162,33 +2163,45 @@ def list_all_resend_emails(filter_emails=None):
         # Safety cap of 100 pages (~10,000 emails); for-else detects if we hit it.
         all_emails = []
         max_pages = 100
+        max_retries = 2
         params = {"limit": 100}
         page_error_occurred = False
         truncated = False
 
         for page in range(max_pages):
-            try:
-                response = resend.Emails.list(params)
-                email_list = response.get('data', []) if isinstance(response, dict) else getattr(response, 'data', [])
-                all_emails.extend(email_list)
-                info(logger, "Fetched Resend emails page",
-                     page=page, count=len(email_list), total_so_far=len(all_emails))
+            retries = 0
+            while True:
+                try:
+                    response = resend.Emails.list(params)
+                    email_list = response.get('data', []) if isinstance(response, dict) else getattr(response, 'data', [])
+                    all_emails.extend(email_list)
+                    info(logger, "Fetched Resend emails page",
+                         page=page, count=len(email_list), total_so_far=len(all_emails))
 
-                has_more = response.get('has_more', False) if isinstance(response, dict) else getattr(response, 'has_more', False)
-                if not has_more or len(email_list) == 0:
+                    has_more = response.get('has_more', False) if isinstance(response, dict) else getattr(response, 'has_more', False)
+                    if not has_more or len(email_list) == 0:
+                        break
+
+                    # Use last email ID as cursor for next page
+                    last_item = email_list[-1]
+                    last_id = last_item.get('id', '') if isinstance(last_item, dict) else getattr(last_item, 'id', '')
+                    if not last_id:
+                        break
+                    params = {"limit": 100, "after": last_id}
+                    break  # success — move to next page
+
+                except Exception as page_error:
+                    retries += 1
+                    if retries <= max_retries:
+                        warning(logger, "Retrying Resend emails page fetch",
+                                page=page, retry=retries, exc_info=page_error)
+                        time.sleep(1 * retries)
+                        continue
+                    error(logger, "Error fetching Resend emails page after retries",
+                          page=page, exc_info=page_error)
+                    page_error_occurred = True
                     break
-
-                # Use last email ID as cursor for next page
-                last_item = email_list[-1]
-                last_id = last_item.get('id', '') if isinstance(last_item, dict) else getattr(last_item, 'id', '')
-                if not last_id:
-                    break
-                params = {"limit": 100, "after": last_id}
-
-            except Exception as page_error:
-                warning(logger, "Error fetching Resend emails page",
-                        page=page, exc_info=page_error)
-                page_error_occurred = True
+            if page_error_occurred:
                 break
         else:
             # Loop exhausted max_pages without a natural break — results are truncated.

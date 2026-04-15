@@ -30,7 +30,7 @@ def get_github_organizations(event_id: str) -> Dict[str, Any]:
         # Get the github_org from the hackathon document
         org_name = hackathon.get("github_org")
         if not org_name:
-            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)    
+            logger.warning("GitHub organization not found in hackathon data for event ID: %s", event_id)
             return {"github_organizations": []}
         
         return {
@@ -120,7 +120,7 @@ def get_github_contributors(event_id: str) -> Dict[str, Any]:
         # Get the github_org from the hackathon document
         org_name = hackathon.get("github_org")
         if not org_name:
-            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)            
+            logger.warning("GitHub organization not found in hackathon data for event ID: %s", event_id)
             return {"github_contributors": []}
         
         db = get_db()
@@ -170,7 +170,7 @@ def get_github_achievements(event_id: str) -> List[Dict]:
         # Get the github_org from the hackathon document
         org_name = hackathon.get("github_org")
         if not org_name:
-            logger.error("GitHub organization not found in hackathon data for event ID: %s", event_id)                    
+            logger.warning("GitHub organization not found in hackathon data for event ID: %s", event_id)
             return []
         
         db = get_db()
