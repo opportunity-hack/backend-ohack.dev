@@ -551,6 +551,8 @@ def admin_send_volunteer_message(volunteer_id):
         subject = request_data.get('subject', 'Message from Opportunity Hack Team')
         recipient_type = request_data.get('recipient_type', 'volunteer')
         recipient_id = request_data.get('recipient_id', volunteer_id)
+        fallback_email = request_data.get('email')
+        fallback_name = request_data.get('name')
 
         if not message:
             return _error_response("Message is required", 400)
@@ -564,7 +566,9 @@ def admin_send_volunteer_message(volunteer_id):
                 admin_user_id=auth_user.user_id,
                 admin_user=auth_user,
                 recipient_type=recipient_type,
-                recipient_id=recipient_id
+                recipient_id=recipient_id,
+                fallback_email=fallback_email,
+                fallback_name=fallback_name
             )
 
             if result['success']:

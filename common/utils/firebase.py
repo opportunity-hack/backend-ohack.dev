@@ -110,6 +110,35 @@ def get_user_by_email(email_address):
         adict["id"] = doc.id
         return adict
 
+def get_users_by_emails(email_addresses):
+    """Batch fetch users by email addresses using Firestore 'in' queries.
+    Returns a dict mapping email -> user dict. Chunks into groups of 30
+    (Firestore 'in' query limit)."""
+    if not email_addresses:
+        return {}
+
+    db = get_db()
+    user_map = {}
+    unique_emails = list(set(email_addresses))
+    CHUNK_SIZE = 30
+
+    for i in range(0, len(unique_emails), CHUNK_SIZE):
+        chunk = unique_emails[i:i + CHUNK_SIZE]
+        try:
+            docs = db.collection('users').where(
+                filter=FieldFilter("email_address", "in", chunk)
+            ).stream()
+            for doc in docs:
+                user = doc.to_dict()
+                user["id"] = doc.id
+                email = user.get("email_address")
+                if email:
+                    user_map[email] = user
+        except Exception as e:
+            logger.warning(f"Failed batch user lookup for chunk starting at index {i}: {e}")
+
+    return user_map
+
 
 def get_github_contributions_for_user(login):
     logger.info(f"Getting github contributions for user {login}")
@@ -538,7 +567,7 @@ def create_new_problem_statement(title, description, status, slack_channel, firs
 
 def save_certificate(certificate):
     db = get_db()  # this connects to our Firestore database
-    logger.info(f"Saving certificate {certificate}")
+    logger.info(f"Saving certificate file_id={certificate.get('file_id', 'unknown')}")
 
     db.collection("certificates").add(certificate)
 
@@ -554,8 +583,8 @@ def get_certficate_by_file_id(file_id):
     
 def get_recent_certs_from_db():
     db = get_db()  # this connects to our Firestore database
-    # Get the last 10 certificates by date
-    docs = db.collection('certificates').order_by("date", direction=firestore.Query.DESCENDING).limit(10).stream()
+    # Get recent certificates by date
+    docs = db.collection('certificates').order_by("date", direction=firestore.Query.DESCENDING).limit(50).stream()
 
     # dedupe by file_id
     certs = []
@@ -915,28 +944,40 @@ def add_reference_link_to_problem_statement(problem_statement_id, name, link):
     db.collection("problem_statements").document(problem_statement_id).set(
         {"references": reference_links}, merge=True)
     
-def add_certificate(user_id, certificate):
+def add_certificate(user_id, certificate, timestamp=None, reasons=None, hearts=None):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Adding certificate {certificate} to user {user_id}")
 
-    # Get history from user    
+    # Get history from user
     user = db.collection("users").document(user_id).get()
 
     if not user.exists:
         logger.error(f"**ERROR User {user_id} does not exist")
         raise Exception(f"User {user_id} does not exist")
 
-    # Set this as empty if it doesn't exist   
-    user_history = {}    
+    # Set this as empty if it doesn't exist
+    user_history = {}
 
     if "history" in user.to_dict():
-        user_history = user.to_dict()["history"]
-    
+        user_history = user.to_dict().get("history", {})
+
     # handle when certificate does not exist
     if "certificates" not in user_history:
         user_history["certificates"] = []
 
-    user_history["certificates"].append(certificate)
+    # Store as structured object with metadata when available,
+    # backward-compatible with old string-only entries
+    if timestamp or reasons or hearts is not None:
+        cert_entry = {"filename": certificate}
+        if timestamp:
+            cert_entry["timestamp"] = timestamp
+        if reasons:
+            cert_entry["reasons"] = reasons
+        if hearts is not None:
+            cert_entry["hearts"] = hearts
+        user_history["certificates"].append(cert_entry)
+    else:
+        user_history["certificates"].append(certificate)
 
     # Update user
     db.collection("users").document(user_id).set({"history": user_history}, merge=True)    
@@ -953,7 +994,7 @@ def add_hearts_for_user(user_id, hearts, reason):
         logger.error(f"**ERROR User {user_id} does not exist")
         raise Exception(f"User {user_id} does not exist")
     
-    user_history = user.to_dict()["history"]
+    user_history = user.to_dict().get("history", {})
     
     # 4 things in "how"
     if "how" not in user_history:
@@ -1226,7 +1267,17 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str, admin: bo
         logger.info(f"Retrieved {len(volunteers)} {volunteer_type}s for event_id={event_id}")
         logger.debug(f"get {volunteer_type}s end (with results)")
 
-        
+        # Enrich with certificate data from user records (admin only)
+        # Uses batch query to avoid N+1 individual lookups
+        if admin:
+            emails = [v["email"] for v in volunteers if v.get("email")]
+            user_map = get_users_by_emails(emails)
+            for volunteer in volunteers:
+                email = volunteer.get("email")
+                if email and email in user_map:
+                    user = user_map[email]
+                    if "history" in user and "certificates" in user["history"]:
+                        volunteer["certificates"] = user["history"]["certificates"]
 
         return {"data": volunteers}
 

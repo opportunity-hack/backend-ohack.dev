@@ -1,6 +1,7 @@
 from flask import Blueprint, jsonify, request
 from api.slack.slack_service import (
-    get_active_users, get_user_details, clear_slack_cache
+    get_active_users, get_user_details, clear_slack_cache,
+    sync_slack_users_to_firestore
 )
 from common.utils.slack import invite_user_to_channel
 
@@ -26,6 +27,43 @@ def admin_active_users():
     API endpoint to get active Slack users within a specified time period.
     """
     return active_users_helper(admin=True)
+
+
+@bp.route("/slack/admin/sync-users", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_sync_slack_users():
+    """
+    Sync recently active Slack workspace members into Firestore.
+    Creates user records for Slack members who don't already exist,
+    so they can receive hearts via give_hearts_to_user().
+
+    Request body (optional):
+        lookback_days: Number of days to look back for activity (default: 30, max: 365)
+    """
+    try:
+        request_data = request.get_json(silent=True) or {}
+        lookback_days = request_data.get("lookback_days", 30)
+
+        if not isinstance(lookback_days, int) or lookback_days < 1 or lookback_days > 365:
+            return jsonify({
+                "success": False,
+                "error": "lookback_days must be an integer between 1 and 365"
+            }), 400
+
+        result = sync_slack_users_to_firestore(lookback_days=lookback_days)
+
+        return jsonify({
+            "success": True,
+            **result
+        })
+
+    except Exception as e:
+        logger.error("Error syncing Slack users: %s", str(e))
+        return jsonify({
+            "success": False,
+            "error": "Failed to sync Slack users"
+        }), 500
 
 
 def active_users_helper(admin=False):

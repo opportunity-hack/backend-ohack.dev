@@ -247,14 +247,17 @@ def invite_user_to_channel(user_id, channel_name):
     add_bot_to_channel(channel_id)
 
     # Now invite the user
-    try:        
-        client.conversations_invite(channel=channel_id, users=user_id)        
+    try:
+        client.conversations_invite(channel=channel_id, users=user_id)
+    except SlackApiError as e:
+        if e.response.get("error") == "already_in_channel":
+            logger.info(f"User {user_id} is already in channel {channel_id}")
+        else:
+            logger.error(f"Failed to invite user {user_id} to channel {channel_id}: {e}")
+            return False
     except Exception as e:
-        logger.error(
-            "Caught exception - this might be okay if the user is already in the channel.")
-        #log error
-        logger.error(e)
-        return False        
+        logger.error(f"Unexpected error inviting user {user_id} to channel {channel_id}: {e}")
+        return False
 
     logger.debug("invite_user_to_channel end")
     return True
@@ -269,16 +272,17 @@ def invite_user_to_channel_id(user_id, channel_id):
     if "-" in user_id:
         user_id = user_id.split("-")[1]        
 
-    try:        
-        result = client.conversations_invite(channel=channel_id, users=user_id)        
+    try:
+        client.conversations_invite(channel=channel_id, users=user_id)
+    except SlackApiError as e:
+        if e.response.get("error") == "already_in_channel":
+            logger.info(f"User {user_id} is already in channel {channel_id}")
+        else:
+            logger.error(f"Failed to invite user {user_id} to channel {channel_id}: {e}")
     except Exception as e:
-        logger.error(
-            "Caught exception - this might be okay if the user is already in the channel.")
-        #log error stack trace
-        logger.error(e, exc_info=True)
-        
+        logger.error(f"Unexpected error inviting user {user_id} to channel {channel_id}: {e}")
 
-    logger.debug("invite_user_to_channel end")
+    logger.debug("invite_user_to_channel_id end")
 
 def create_slack_channel(channel_name):
     logger.debug("create_slack_channel start")

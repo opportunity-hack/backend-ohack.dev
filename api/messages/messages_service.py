@@ -298,8 +298,7 @@ def get_all_profiles():
         for doc in docs:
             results.append(doc_to_json(docid=doc.id, doc=doc))
 
-    # log result
-    logger.info(results)        
+    logger.info(f"get_all_profiles returned {len(results)} profiles")
     return { "profiles": results }
 
 

@@ -32,7 +32,7 @@ class User:
 
     @classmethod
     def deserialize(cls, d):
-        print(f"User.deserialize {d}")
+        # Debug logging removed to reduce log spam
         u = User()
         u.id = d['id']
         u.email_address = d['email_address']

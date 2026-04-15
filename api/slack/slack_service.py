@@ -1,10 +1,13 @@
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Any
-from common.log import get_logger
+from common.log import get_logger, info, warning, error
 from common.utils.slack import (
     get_client, userlist, get_user_info, rate_limited_get_user_info, presence
 )
 from common.utils.redis_cache import redis_cached, clear_pattern
+from common.utils.oauth_providers import normalize_slack_user_id
+from db.db import fetch_user_by_user_id
+from services.users_service import save_user
 
 logger = get_logger(__name__)
 
@@ -146,3 +149,123 @@ def clear_slack_cache() -> Dict[str, Any]:
         "success": active_users_cleared and user_details_cleared,
         "message": "All Slack caches cleared successfully"
     }
+
+
+def sync_slack_users_to_firestore(lookback_days: int = 30) -> Dict[str, Any]:
+    """
+    Sync Slack workspace users into Firestore. Creates user records for
+    recently active Slack members who don't already have a Firestore user
+    with a Slack-based user_id. This ensures give_hearts_to_user() can
+    find users by Slack ID even if they never logged in via Slack SSO.
+
+    Args:
+        lookback_days: Only process members whose Slack profile was updated
+                       within this many days (default: 30)
+
+    Returns:
+        Summary dict with counts of created, skipped, and errored users
+    """
+    info(logger, "Starting Slack user sync", lookback_days=lookback_days)
+
+    cutoff_time = datetime.now() - timedelta(days=lookback_days)
+
+    response = userlist()
+    if not response or "members" not in response:
+        error(logger, "Failed to retrieve Slack users list")
+        return {
+            "total_slack_members": 0,
+            "filtered_by_lookback": 0,
+            "created": 0,
+            "skipped_existing": 0,
+            "skipped_no_email": 0,
+            "errors": [{"reason": "Failed to retrieve Slack users list"}],
+        }
+
+    all_members = response["members"]
+    total_slack_members = len(all_members)
+
+    created = 0
+    skipped_existing = 0
+    skipped_no_email = 0
+    filtered_by_lookback = 0
+    errors = []
+
+    for member in all_members:
+        # Skip bots, deleted users, and restricted accounts (same filter as get_active_users)
+        if (
+            member.get("is_bot", False)
+            or member.get("deleted", False)
+            or member.get("is_restricted", False)
+            or member.get("is_ultra_restricted", False)
+            or member.get("name", "").startswith("slackbot")
+        ):
+            continue
+
+        # Filter by updated timestamp
+        updated_timestamp = member.get("updated", 0)
+        updated_date = datetime.fromtimestamp(updated_timestamp)
+        if updated_date < cutoff_time:
+            continue
+
+        filtered_by_lookback += 1
+        raw_slack_id = member["id"]
+        normalized_user_id = normalize_slack_user_id(raw_slack_id)
+
+        # Check if user already exists in Firestore
+        existing_user = fetch_user_by_user_id(normalized_user_id)
+        if existing_user is not None:
+            skipped_existing += 1
+            continue
+
+        # Check for email
+        email = member.get("profile", {}).get("email", "")
+        if not email:
+            skipped_no_email += 1
+            continue
+
+        # Extract profile data
+        profile = member.get("profile", {})
+        profile_image = profile.get("image_192", "")
+        name = member.get("real_name", member.get("name", ""))
+        nickname = profile.get("display_name", member.get("name", ""))
+        last_login = datetime.utcnow().isoformat() + "Z"
+
+        try:
+            result = save_user(
+                user_id=normalized_user_id,
+                email=email,
+                last_login=last_login,
+                profile_image=profile_image,
+                name=name,
+                nickname=nickname,
+                propel_id=None,
+            )
+            if result is not None:
+                created += 1
+                info(logger, "Created user from Slack sync",
+                     slack_id=raw_slack_id, email=email, name=name)
+            else:
+                errors.append({
+                    "slack_id": raw_slack_id,
+                    "name": name,
+                    "reason": "save_user returned None",
+                })
+        except Exception as e:
+            warning(logger, "Failed to create user during Slack sync",
+                    slack_id=raw_slack_id, name=name, error=str(e))
+            errors.append({
+                "slack_id": raw_slack_id,
+                "name": name,
+                "reason": str(e),
+            })
+
+    summary = {
+        "total_slack_members": total_slack_members,
+        "filtered_by_lookback": filtered_by_lookback,
+        "created": created,
+        "skipped_existing": skipped_existing,
+        "skipped_no_email": skipped_no_email,
+        "errors": errors,
+    }
+    info(logger, "Slack user sync complete", **{k: v for k, v in summary.items() if k != "errors"})
+    return summary
