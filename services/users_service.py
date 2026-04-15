@@ -190,6 +190,10 @@ def get_oauth_user_from_propel_user_id(propel_id):
         headers={"Authorization": f"Bearer {os.getenv('PROPEL_AUTH_KEY')}"}
     )
     logger.debug(f"Propel RESP: {resp}")
+    if resp.status_code != 200:
+        warning(logger, "PropelAuth API returned non-200",
+                status=resp.status_code, propel_id=propel_id)
+        return None
     json_resp = resp.json()
     logger.debug(f"Propel RESP JSON: {json_resp}")
 
