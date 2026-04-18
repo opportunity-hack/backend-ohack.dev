@@ -28,6 +28,27 @@ logger.setLevel(logging.DEBUG)
 MAX_PRAISES_ABOUT_USER = 50
 MAX_PRAISES = 20
 
+# Fields that must not appear in responses from the PUBLIC (unauthenticated)
+# volunteer endpoints. Any *new* field added to volunteer documents is public
+# by default; add sensitive keys here. Admin endpoints bypass this filter.
+PUBLIC_VOLUNTEER_DENYLIST = frozenset({
+    # direct PII / sensitive attendee data
+    "email", "ageRange", "shirtSize", "dietaryRestrictions",
+    "phone", "phoneNumber",
+    # identifiers / audit
+    "user_id", "slack_user_id",
+    "created_by", "updated_by",
+    "created_timestamp", "updated_timestamp", "timestamp",
+    # internal messaging state
+    "sent_emails",
+    # free-form fields that may contain PII
+    "additionalInfo", "whyJudge", "otherBackground",
+    # check-in audit (admin-only attendance data)
+    "checkedIn", "checkedInBy", "checkedInAt",
+    # admin-only enrichment
+    "certificates",
+})
+
 def get_db():
     if safe_get_env_var("ENVIRONMENT") == "test":
         return mockfirestore
@@ -1255,9 +1276,13 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str, admin: bo
         # Stream the documents and convert to list of dicts also with their id from the database
         volunteers = [ {**doc.to_dict(), "id": doc.id} for doc in query.stream() ]     
 
-        # With this dict, remove the "email" and "ageRange" and "shirtSize" and "dietaryRestrictions" field if it exists for each record without using pop
+        # Strip fields that must not be exposed on the public (unauthenticated)
+        # endpoints. See PUBLIC_VOLUNTEER_DENYLIST above.
         if not admin:
-            volunteers = [{k: v for k, v in volunteer.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for volunteer in volunteers]
+            volunteers = [
+                {k: v for k, v in volunteer.items() if k not in PUBLIC_VOLUNTEER_DENYLIST}
+                for volunteer in volunteers
+            ]
 
         if not volunteers:
             logger.info(f"No {volunteer_type}s found for event_id={event_id}")
