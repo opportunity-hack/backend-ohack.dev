@@ -1,10 +1,12 @@
 from common.utils import safe_get_env_var
 from common.utils.slack import send_slack_audit, send_slack, invite_user_to_channel
 from common.utils.firebase import get_github_contributions_for_user
+from common.utils.oauth_providers import is_slack_user_id, extract_slack_user_id
 from api.messages.message import Message
 from google.cloud.exceptions import NotFound
 
 from services.users_service import get_propel_user_details_by_id, get_slack_user_from_propel_user_id, get_user_from_slack_id, save_user
+from services.email_service import send_project_help_slack_invite_email
 import json
 import uuid
 from datetime import datetime
@@ -131,9 +133,22 @@ def save_helping_status_old(propel_user_id, json):
 
     send_slack_audit(action="helping", message=user_id, payload=to_add)
 
+    # Determine how to identify this user in the Slack post.
+    # Slack logins get a real <@Uxxx> mention + auto-invite to the project channel.
+    # Non-Slack logins (Google, etc.) fall back to their display name so we don't
+    # render a broken "@oauth2" mention, and get a follow-up email asking them to
+    # join the Slack workspace.
+    if is_slack_user_id(user_id):
+        slack_user_id = extract_slack_user_id(user_id)
+        mention = f"<@{slack_user_id}>"
+        is_slack_login = True
+        logger.info(f"save_helping_status_old: Slack login, mention={slack_user_id}")
+    else:
+        slack_user_id = None
+        mention = (user_obj.name or user_obj.nickname or user_obj.email_address or "A volunteer").strip()
+        is_slack_login = False
+        logger.info(f"save_helping_status_old: non-Slack login ({user_id}), mention={mention}")
 
-    slack_user_id = user_id.split("-")[1]  # Example user_id = oauth2|slack|T1Q7116BH-U041117EYTQ
-    slack_message = f"<@{slack_user_id}>"
     problem_statement_title = ps_dict["title"]
 
     if "slack_channel" in ps_dict:
@@ -146,15 +161,35 @@ def save_helping_status_old(propel_user_id, json):
             url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
 
         if "helping" == helping_status:
-            slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
+            slack_message = f"{mention} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
         else:
-            slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
+            slack_message = f"{mention} is _no longer able to help_ on *{problem_statement_title}* {url}"
 
-        invite_user_to_channel(user_id=slack_user_id,
-                            channel_name=problem_statement_slack_channel)
+        if is_slack_login and slack_user_id:
+            try:
+                invite_user_to_channel(user_id=slack_user_id,
+                                    channel_name=problem_statement_slack_channel)
+            except Exception as e:
+                logger.warning(f"invite_user_to_channel failed for {slack_user_id}: {e}")
 
         send_slack(message=slack_message,
                     channel=problem_statement_slack_channel)
+
+    # For non-Slack users who are signing up to help, email them with a Slack join CTA
+    # so their project team can actually reach them. Swallow errors so a Resend
+    # outage never breaks the help toggle.
+    if not is_slack_login and helping_status == "helping" and user_obj.email_address:
+        try:
+            send_project_help_slack_invite_email(
+                name=user_obj.name or user_obj.nickname,
+                email=user_obj.email_address,
+                problem_statement_title=ps_dict.get("title"),
+                mentor_or_hacker=mentor_or_hacker,
+                npo_id=npo_id or None,
+                problem_statement_id=problem_statement_id,
+            )
+        except Exception as e:
+            logger.warning(f"send_project_help_slack_invite_email failed for {user_obj.email_address}: {e}")
 
     return Message(
         "Updated helping status"
