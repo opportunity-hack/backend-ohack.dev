@@ -374,31 +374,19 @@ def get_history_old(db_id):
         logger.warning(f"User document exists but to_dict() returned None for db_id: {db_id}")
         return None
 
-    _hackathons=[]
-    if "hackathons" in res:
-        for h in res["hackathons"]:
-            rec = h.get().to_dict()
-            nonprofits = []
-            problem_statements = []
-
-            for n in rec["nonprofits"]:
-                npo_doc = n.get()
-                npo_id = npo_doc.id
-                npo = n.get().to_dict()
-                npo["id"] = npo_id
-
-                if npo and "problem_statements" in npo:
-                    # This is duplicate date as we should already have this
-                    del npo["problem_statements"]
-                nonprofits.append(npo)
-
-
-            _hackathons.append({
-                "nonprofits": nonprofits,                
-                "links": rec["links"],
-                "location": rec["location"],
-                "start_date": rec["start_date"]
-            })
+    # Hackathon history is now derived from the unified `volunteers` collection
+    # so attendance reflects who actually showed up (hackers always count;
+    # mentors/judges/volunteers must be selected AND checked in). The legacy
+    # `users.hackathons` ref array is no longer the source of truth.
+    try:
+        from services.volunteers_service import get_user_hackathon_attendance
+        _hackathons = get_user_hackathon_attendance(
+            user_id=res.get('user_id'),
+            email=res.get('email_address'),
+        )
+    except Exception as e:
+        logger.exception(f"Failed to load hackathon attendance for {db_id}: {e}")
+        _hackathons = []
 
     _badges=[]
     if "badges" in res:
@@ -413,6 +401,7 @@ def get_history_old(db_id):
         "history": res["history"] if "history" in res else "",
         "badges" : _badges,
         "hackathons" : _hackathons,
+        "hackathon_history": _hackathons,
         "expertise": res["expertise"] if "expertise" in res else "",
         "education": res["education"] if "education" in res else "",
         "shirt_size": res["shirt_size"] if "shirt_size" in res else "",

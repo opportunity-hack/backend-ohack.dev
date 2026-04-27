@@ -20,7 +20,8 @@ from common.utils.oauth_providers import (
     normalize_slack_user_id,
     is_oauth_user_id,
     get_oauth_provider_from_propel_response,
-    build_user_id_for_provider
+    build_user_id_for_provider,
+    extract_slack_user_id,
 )
 
 #TODO consts file?
@@ -585,6 +586,55 @@ def update_privacy_settings(propel_id, data):
     return user.get_privacy_settings()
 
 
+PUBLIC_PRAISES_PREVIEW_LIMIT = 3
+
+
+def _attach_hackathon_history(user, public_data, privacy_settings):
+    """Replace the legacy hackathons array with attendance derived from volunteers."""
+    if privacy_settings.get("hackathon_history") != "public":
+        return
+    try:
+        from services.volunteers_service import get_user_hackathon_attendance
+        history = get_user_hackathon_attendance(
+            user_id=getattr(user, 'user_id', None),
+            email=getattr(user, 'email_address', None),
+        )
+    except Exception as e:
+        warning(logger, "Failed to load hackathon attendance for public profile",
+                user_id=getattr(user, 'user_id', None), exc_info=e)
+        return
+
+    public_data["hackathon_history"] = history
+    # Keep the legacy key populated so older frontends don't break during rollout
+    public_data["hackathons"] = history
+
+
+def _attach_received_praises(user, public_data, privacy_settings):
+    """Attach praises_count + praises_recent when the user opts in."""
+    if privacy_settings.get("praises") != "public":
+        return
+    user_id = getattr(user, 'user_id', None)
+    if not user_id:
+        return
+    # Praise records key off the raw Slack user_id (e.g. 'U12345ABC'); our
+    # User.user_id is stored prefixed (e.g. 'oauth2|slack|T1Q7936BH-U12345ABC'),
+    # so strip the prefix before querying.
+    slack_user_id = extract_slack_user_id(user_id)
+    try:
+        from services.news_service import get_praises_about_user
+        message = get_praises_about_user(slack_user_id)
+        praises = message.text if hasattr(message, 'text') else []
+        if praises is None:
+            praises = []
+    except Exception as e:
+        warning(logger, "Failed to load praises for public profile",
+                user_id=user_id, exc_info=e)
+        return
+
+    public_data["praises_count"] = len(praises)
+    public_data["praises_recent"] = praises[:PUBLIC_PRAISES_PREVIEW_LIMIT]
+
+
 def get_privacy_filtered_profile_by_db_id(db_id):
     """Get privacy-filtered profile data by database ID"""
     logger.debug(f"Get Privacy-Filtered Profile By DB ID: {db_id}")
@@ -596,8 +646,54 @@ def get_privacy_filtered_profile_by_db_id(db_id):
 
     # Get privacy-filtered public data
     public_data = user.get_public_profile_data()
+    privacy_settings = user.get_privacy_settings()
+
+    _attach_hackathon_history(user, public_data, privacy_settings)
+    _attach_received_praises(user, public_data, privacy_settings)
+
     logger.debug(f"Privacy-Filtered Profile Result: {public_data}")
     return public_data
+
+
+def get_received_praises_by_db_id(db_id, limit=20, offset=0):
+    """Return praises received by the user identified by `db_id`, honoring privacy.
+
+    Returns a dict ``{"praises": [...], "total": int}`` or None if the user is
+    not found / has praises set to private.
+    """
+    logger.debug(f"Get Received Praises By DB ID: {db_id} limit={limit} offset={offset}")
+    user = get_user_profile_by_db_id(db_id)
+    if user is None:
+        return None
+
+    privacy_settings = user.get_privacy_settings()
+    if privacy_settings.get("praises") != "public":
+        return None
+
+    user_id = getattr(user, 'user_id', None)
+    if not user_id:
+        return {"praises": [], "total": 0}
+    slack_user_id = extract_slack_user_id(user_id)
+
+    try:
+        from services.news_service import get_praises_about_user
+        message = get_praises_about_user(slack_user_id)
+        praises = message.text if hasattr(message, 'text') else []
+        if praises is None:
+            praises = []
+    except Exception as e:
+        warning(logger, "Failed to load praises", user_id=user_id, exc_info=e)
+        return {"praises": [], "total": 0}
+
+    total = len(praises)
+    safe_limit = max(1, min(int(limit) if limit else 20, 50))
+    safe_offset = max(0, int(offset) if offset else 0)
+    return {
+        "praises": praises[safe_offset: safe_offset + safe_limit],
+        "total": total,
+        "limit": safe_limit,
+        "offset": safe_offset,
+    }
 
 
 def get_public_privacy_settings_by_db_id(db_id):

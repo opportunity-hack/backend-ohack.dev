@@ -202,9 +202,10 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
     
     try:
         volunteer_type_readable = volunteer_type.capitalize()
+        is_reviewed_role = volunteer_type.lower() in ("mentor", "judge")
         # Format the name properly, handling empty strings
         full_name = first_name + " " + last_name if first_name and last_name else first_name or last_name or "Volunteer"
-        
+
         # Check if we have calendar attachments
         calendar_note = ""
         if calendar_attachments and len(calendar_attachments) > 0:
@@ -214,23 +215,35 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <p style="margin: 5px 0 0 0; color: #34495e;">Your volunteering time slots have been attached as calendar files (.ics). Click on the attachments to add them to your Google Calendar, Outlook, or Apple Calendar.</p>
             </div>"""
             info(logger, "Including calendar attachments in email", email=email, attachment_count=len(calendar_attachments))
-        
+
+        # Pending-review banner (mentor + judge only — these roles are reviewed by staff)
+        pending_review_banner = ""
+        if is_reviewed_role:
+            pending_review_banner = f"""
+            <div style="background-color: #fff8e1; padding: 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+                <h3 style="color: #92400e; margin: 0 0 8px 0; font-size: 18px;">⏳ Your application is pending review</h3>
+                <p style="margin: 0 0 8px 0; font-size: 15px; color: #78350f;">
+                    Our staff reviews every {volunteer_type_readable.lower()} application by hand. <strong>Reviews typically take up to a week.</strong> You don't need to do anything else right now — we'll email you when your application is approved or if we have follow-up questions.
+                </p>
+            </div>"""
+
         # Generate volunteer type specific content
         volunteer_specific_content = ""
         if volunteer_type.lower() == "mentor":
             volunteer_specific_content = f"""
             <div style="background-color: #e8f5e8; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #27ae60;">
-                <h3 style="color: #27ae60; margin-top: 0;">🚀 Next Steps for Mentors</h3>
+                <h3 style="color: #27ae60; margin-top: 0;">🚀 Once approved — here's what to expect as a mentor</h3>
+                <p style="margin-bottom: 12px;">Mentor certificates at Opportunity Hack are awarded for <strong>proactive help</strong>, not attendance. That means: reaching out to teams in Slack, reviewing code, giving feedback on presentations, and sitting with teams to unblock them — not just being available.</p>
                 <p style="margin-bottom: 15px;">When you're ready to help teams during the event, please check in using the button below:</p>
                 <div style="text-align: center; margin: 20px 0;">
-                    <a href="https://www.ohack.dev/hack/{event_id}/mentor-checkin" 
+                    <a href="https://www.ohack.dev/hack/{event_id}/mentor-checkin"
                        style="background-color: #27ae60; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; font-size: 16px;">
                         ✅ Mentor Check-In
                     </a>
                 </div>
                 <p style="margin-bottom: 10px;">Learn more about the mentor role and what to expect:</p>
                 <div style="text-align: center;">
-                    <a href="https://www.ohack.dev/about/mentors" 
+                    <a href="https://www.ohack.dev/about/mentors"
                        style="color: #27ae60; text-decoration: none; font-weight: bold;">
                         📖 Mentor Guidelines & Information
                     </a>
@@ -239,32 +252,40 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         elif volunteer_type.lower() == "judge":
             volunteer_specific_content = """
             <div style="background-color: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
-                <h3 style="color: #856404; margin-top: 0;">⚖️ Information for Judges</h3>
+                <h3 style="color: #856404; margin-top: 0;">⚖️ Once approved — here's what to expect as a judge</h3>
+                <p style="margin-bottom: 12px;">Judges are expected to review each assigned project in depth and ask questions that probe gaps in the judging criteria (Scope, Documentation, Polish, Security). Strong judging makes the event meaningful for the teams and the nonprofits they're building for.</p>
                 <p style="margin-bottom: 15px;">Learn about the judging process, evaluation criteria, and what to expect:</p>
                 <div style="text-align: center;">
-                    <a href="https://www.ohack.dev/about/judges" 
+                    <a href="https://www.ohack.dev/hackathon-judging-criteria"
                        style="background-color: #ffc107; color: #212529; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; font-size: 16px;">
-                        📋 Judge Guidelines & Information
+                        📋 Judging Criteria
                     </a>
                 </div>
             </div>"""
-        
+
+        subject_prefix = "[Pending Review] " if is_reviewed_role else ""
+        intro_line = (
+            f"Thanks for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack — your application has been received."
+            if is_reviewed_role
+            else f"Thank you for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. We've received your information and our team will review it shortly."
+        )
+
         params = {
             "from": "Opportunity Hack <welcome@notifs.ohack.org>",
-            "to": [email],            
-            "subject": f"Thank you for applying as an Opportunity Hack {volunteer_type_readable}",
+            "to": [email],
+            "subject": f"{subject_prefix}Thanks for your Opportunity Hack {volunteer_type_readable} application",
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border-radius: 5px;">
                 <div style="text-align: center; margin-bottom: 20px;">
                     <img src="https://cdn.ohack.dev/ohack.dev/logos/OpportunityHack_2Letter_Dark_Blue.png" alt="Opportunity Hack Logo" style="max-width: 150px;">
                 </div>
-                <h2 style="color: #3498db; text-align: center;">Thank you for applying as an Opportunity Hack {volunteer_type_readable}!</h2>
+                <h2 style="color: #3498db; text-align: center;">Thanks for your Opportunity Hack {volunteer_type_readable} application!</h2>
                 <p style="font-size: 16px;">Hello {full_name},</p>
-                <p style="font-size: 16px;">Thank you for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. 
-                We've received your information and our team will review it shortly.</p>
+                <p style="font-size: 16px;">{intro_line}</p>
+                {pending_review_banner}
                 {calendar_note}
                 {volunteer_specific_content}
-                <p style="font-size: 16px;">We'll be in touch with next steps. In the meantime, feel free to explore our website and learn more about our mission and past events.</p>                
+                <p style="font-size: 16px;">In the meantime, feel free to explore our website and learn more about our mission and past events.</p>
                 <div style="margin-top: 30px; padding-top: 20px; border-top: 1px solid #eee;">
                     <p style="font-size: 14px; color: #777;">The Opportunity Hack Team</p>
                     <p style="font-size: 14px; color: #777;">Website: <a href="https://ohack.dev" style="color: #3498db;">ohack.dev</a></p>
@@ -1030,10 +1051,10 @@ def update_volunteer_selection(volunteer_id: str, selected: bool, updated_by: st
 def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:
     """
     Get all hackers for a specific event ID.
-    
+
     Args:
         event_id: The event ID
-        
+
     Returns:
         List of hacker records
     """
@@ -1044,6 +1065,153 @@ def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:
     # Remove sensitive info from the fields like: volunteers = [{k: v for k, v in volunteer.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for volunteer in volunteers]
     hacker_dict = [{k: v for k, v in hacker.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for hacker in hacker_dict]
     return hacker_dict
+
+
+# Roles whose attendance is gated on admin selection + check-in. Hackers are not
+# selection-gated; sponsors are not part of the user-facing hackathon history.
+SELECTABLE_ROLE_TYPES = {"mentor", "judge", "volunteer"}
+ATTENDANCE_ROLE_LABELS = {
+    "hacker": "Hacker",
+    "mentor": "Mentor",
+    "judge": "Judge",
+    "volunteer": "Volunteer",
+}
+
+
+def _did_volunteer_attend(vol: Dict[str, Any]) -> bool:
+    """Apply the attendance filter for a single volunteer record.
+
+    - hacker: attended iff the application exists
+    - mentor / judge / volunteer: attended iff isSelected AND a check-in exists
+    - everything else (sponsor, unknown): not counted as attendance
+    """
+    vtype = (vol.get('volunteer_type') or '').lower()
+    if vtype == 'hacker':
+        return True
+    if vtype in SELECTABLE_ROLE_TYPES:
+        return bool(vol.get('isSelected')) and bool(vol.get('checkInTime'))
+    return False
+
+
+def _enrich_with_hackathon(db, event_id: str) -> Optional[Dict[str, Any]]:
+    """Look up the hackathon doc for an event_id and trim it to display-friendly fields."""
+    try:
+        docs = db.collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
+    except Exception as e:
+        warning(logger, "Failed to query hackathon for event_id", event_id=event_id, exc_info=e)
+        return None
+
+    for doc in docs:
+        rec = doc.to_dict() or {}
+        rec['id'] = doc.id
+
+        # Resolve nonprofit Firestore refs into plain dicts (best-effort)
+        nonprofit_refs = rec.get('nonprofits') or []
+        resolved = []
+        if nonprofit_refs:
+            try:
+                npo_docs = db.get_all(nonprofit_refs)
+                for npo_doc in npo_docs:
+                    if not getattr(npo_doc, 'exists', True):
+                        continue
+                    npo = npo_doc.to_dict() or {}
+                    npo['id'] = getattr(npo_doc, 'id', npo.get('id'))
+                    npo.pop('problem_statements', None)
+                    resolved.append(npo)
+            except Exception as e:
+                warning(logger, "Failed to resolve nonprofit refs", event_id=event_id, exc_info=e)
+        rec['nonprofits'] = resolved
+
+        # Strip heavy fields the profile UI doesn't render.
+        for k in ('teams', 'donation_current', 'donation_goals'):
+            rec.pop(k, None)
+        return rec
+    return None
+
+
+def get_user_hackathon_attendance(
+    user_id: Optional[str] = None,
+    email: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Return the list of hackathons the user actually attended.
+
+    Sourced from the unified `volunteers` collection. We look up by `user_id`
+    and (as a fallback) `email` so we catch records created via either path.
+    Multiple roles for the same event collapse into one entry with a `roles`
+    list (e.g. a user who hacked AND mentored gets one card with two chips).
+
+    Returns shape consumed by both public and private profile views:
+        [{
+            "event_id": str,
+            "title": str,
+            "start_date": str,
+            "end_date": str,
+            "location": str,
+            "image_url": str,
+            "links": list,
+            "nonprofits": list,
+            "roles": list[str],
+        }, ...]
+    """
+    if not user_id and not email:
+        return []
+
+    db = get_db()
+    seen_ids = set()
+    volunteer_docs: List[Dict[str, Any]] = []
+
+    def _collect(query):
+        try:
+            for snap in query.stream():
+                if snap.id in seen_ids:
+                    continue
+                seen_ids.add(snap.id)
+                volunteer_docs.append(snap.to_dict() or {})
+        except Exception as e:
+            warning(logger, "volunteers query failed", exc_info=e)
+
+    if user_id:
+        _collect(db.collection('volunteers').where('user_id', '==', user_id))
+    if email:
+        _collect(db.collection('volunteers').where('email', '==', email))
+
+    # Group by event, accumulating role labels, applying the attendance filter
+    by_event: Dict[str, List[str]] = {}
+    for vol in volunteer_docs:
+        if not _did_volunteer_attend(vol):
+            continue
+        event_id = vol.get('event_id')
+        if not event_id:
+            continue
+        vtype = (vol.get('volunteer_type') or '').lower()
+        label = ATTENDANCE_ROLE_LABELS.get(vtype)
+        if not label:
+            continue
+        roles = by_event.setdefault(event_id, [])
+        if label not in roles:
+            roles.append(label)
+
+    # Enrich and shape the response
+    results: List[Dict[str, Any]] = []
+    for event_id, roles in by_event.items():
+        hackathon = _enrich_with_hackathon(db, event_id)
+        if not hackathon:
+            continue
+        results.append({
+            "event_id": event_id,
+            "title": hackathon.get('title') or hackathon.get('name') or '',
+            "start_date": hackathon.get('start_date', ''),
+            "end_date": hackathon.get('end_date', ''),
+            "location": hackathon.get('location', ''),
+            "image_url": hackathon.get('image_url', ''),
+            "links": hackathon.get('links', []),
+            "nonprofits": hackathon.get('nonprofits', []),
+            "devpost_url": hackathon.get('devpost_url') or '',
+            "roles": roles,
+        })
+
+    results.sort(key=lambda r: r.get('start_date') or '', reverse=True)
+    return results
 
 
 

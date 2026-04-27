@@ -16,6 +16,8 @@ class Hackathon:
         self.end_date = None
         self.image_url = ''
         self.event_id = ''
+        self.event_photos = []
+        self.social_posts = []
 
     @classmethod
     def deserialize(cls, d):
@@ -29,6 +31,8 @@ class Hackathon:
         h.event_id = d['event_id']
         h.end_date = d['end_date']
         h.image_url = d['image_url'] if 'image_url' in d else None
+        h.event_photos = d.get('event_photos', []) or []
+        h.social_posts = d.get('social_posts', []) or []
         h.nonprofits =  []
         h.teams = []
         return h

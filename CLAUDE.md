@@ -44,6 +44,12 @@ PropelAuth via `common/auth.py`. Routes get the authenticated user from `@auth.r
 ### Key environment variables
 `FLASK_APP=api`, `FLASK_RUN_PORT=6060`, `CLIENT_ORIGIN_URL`, `FIREBASE_CERT_CONFIG`, `OPENAI_API_KEY`, `PROPEL_AUTH_KEY`, `PROPEL_AUTH_URL`, `REDIS_URL` (optional), `IN_MEMORY_DATABASE` (optional), `ENVIRONMENT=test` (for MockFirestore).
 
+### Profile data sources
+- Hackathon attendance is derived from the `volunteers` collection via `services.volunteers_service.get_user_hackathon_attendance(user_id, email)` — hackers always count; mentors/judges/volunteers require `isSelected=True` AND `checkInTime`. The legacy `users.hackathons` Firestore-ref array is no longer the source of truth.
+- Public profile (`GET /api/users/<db_id>/profile/public`) augments with `hackathon_history` (volunteer-derived), `praises_count`, and `praises_recent` (top 3) when the corresponding privacy field is `"public"`.
+- Privacy fields (`model.user.privacy_fields`) include `praises`, which defaults to `"public"` (others default to `True` which is treated as private).
+- New public route: `GET /api/users/<db_id>/praises?limit=&offset=` returns paginated received praises (403 when private).
+
 ## Deployment
 Deployed to Fly.io (`fly.toml`, app: `backend-ohack`, region: `sjc`). Uses gunicorn (`Procfile`). Port 6060.
 

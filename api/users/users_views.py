@@ -144,3 +144,29 @@ def get_public_privacy_settings_by_db_id(user_id):
     if privacy_settings is not None:
         return {"privacy_settings": privacy_settings}
     return {"error": "User not found"}, 404
+
+
+@bp.route("/<user_id>/praises", methods=["GET"])
+def get_received_praises_by_db_id(user_id):
+    """Public, paginated list of praises received by a user.
+
+    Query params: ?limit=&offset=. Returns 404 when the user is not found and
+    403 when the user has hidden their praises.
+    """
+    try:
+        limit = int(request.args.get('limit', 20))
+    except (TypeError, ValueError):
+        limit = 20
+    try:
+        offset = int(request.args.get('offset', 0))
+    except (TypeError, ValueError):
+        offset = 0
+
+    user = users_service.get_user_by_db_id(user_id)
+    if user is None:
+        return {"error": "User not found"}, 404
+
+    result = users_service.get_received_praises_by_db_id(user_id, limit=limit, offset=offset)
+    if result is None:
+        return {"error": "Praises are private for this user"}, 403
+    return result

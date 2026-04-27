@@ -643,6 +643,8 @@ def save_hackathon(json_data, propel_id):
                 "swag": "0",
             }),
             "timezone": json_data.get("timezone", "America/Phoenix"),
+            "event_photos": json_data.get("event_photos", []),
+            "social_posts": json_data.get("social_posts", []),
             "last_updated": firestore.SERVER_TIMESTAMP,
             "last_updated_by": propel_id,
         }
