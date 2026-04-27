@@ -182,6 +182,85 @@ def send_welcome_email(name, email):
     return True
 
 
+def send_project_help_slack_invite_email(name, email, problem_statement_title, mentor_or_hacker, npo_id=None, problem_statement_id=None):
+    """Email a volunteer who signed up to help via a non-Slack login, asking them to join the OHack Slack workspace."""
+    resend.api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY")
+
+    if not email:
+        logger.warning("send_project_help_slack_invite_email skipped: no email address")
+        return False
+
+    if name is None or name == "" or name == "Unassigned" or name.isspace():
+        name = "OHack Friend"
+
+    role_label = "mentor" if mentor_or_hacker == "mentor" else "hacker"
+    project_title = problem_statement_title or "an Opportunity Hack project"
+    utm_content = f"help_signup_{role_label}"
+
+    slack_url = add_utm("https://slack.ohack.dev", content=utm_content)
+
+    project_link_html = ""
+    if problem_statement_id:
+        project_url = add_utm(f"https://ohack.dev/project/{problem_statement_id}", content=utm_content)
+        project_link_html += f'<li><a href="{project_url}">View the project</a></li>'
+    if npo_id:
+        npo_url = add_utm(f"https://ohack.dev/nonprofit/{npo_id}", content=utm_content)
+        project_link_html += f'<li><a href="{npo_url}">View the nonprofit</a></li>'
+    if project_link_html:
+        project_link_html = f"<ul>{project_link_html}</ul>"
+
+    subject = "Thanks for volunteering! Next step: join us on Slack"
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Thanks for volunteering with Opportunity Hack</title>
+    </head>
+    <body style="font-family: Arial, sans-serif; line-height: 1.6; color: #333; max-width: 600px; margin: 0 auto; padding: 20px;">
+        <h1 style="color: #0088FE;">Thanks {name}!</h1>
+
+        <p>We saw that you signed up to help as a <strong>{role_label}</strong> on <strong>{project_title}</strong>. That's awesome — thank you!</p>
+
+        {project_link_html}
+
+        <h2 style="color: #0088FE;">One more step: join us on Slack</h2>
+
+        <p>It looks like you signed in with Google instead of Slack. All of our project coordination, questions, and day-to-day collaboration with the nonprofit and other volunteers happens in our Slack workspace.</p>
+
+        <p>Please join us so your project team can reach you:</p>
+
+        <p style="text-align: center; margin: 28px 0;">
+            <a href="{slack_url}" style="background-color: #0088FE; color: #ffffff; padding: 14px 28px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block;">Join the Opportunity Hack Slack</a>
+        </p>
+
+        <p>Once you're in, say hi in <code>#general</code> and a team member will help you find the right project channel.</p>
+
+        <p>Questions? Just reply to this email — it goes straight to questions@ohack.org.</p>
+
+        <p>Thanks again for volunteering,<br>The Opportunity Hack Team</p>
+    </body>
+    </html>
+    """
+
+    params = {
+        "from": "Opportunity Hack <welcome@notifs.ohack.org>",
+        "to": f"{name} <{email}>",
+        "cc": "questions@ohack.org",
+        "reply_to": "questions@ohack.org",
+        "subject": subject,
+        "html": html_content,
+    }
+
+    logger.info(f"Sending project-help Slack invite email to {email}")
+    resend_email = resend.Emails.SendParams(params)
+    resend.Emails.send(resend_email)
+    logger.info(f"Sent project-help Slack invite email to {email}")
+    return True
+
+
 def send_welcome_emails():
     from db.db import get_db
     logger.info("Sending welcome emails")
