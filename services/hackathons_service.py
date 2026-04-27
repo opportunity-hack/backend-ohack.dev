@@ -242,11 +242,11 @@ def get_hackathon_list(is_current_only=None):
         query = query.where(filter=firestore.FieldFilter("end_date", ">=", today_str)).order_by("end_date", direction=firestore.Query.ASCENDING)
 
     elif is_current_only == "previous":
-        target_date = datetime.now() + timedelta(days=-3*365)
-        target_date_str = target_date.strftime("%Y-%m-%d")
-        logger.debug(f"Querying previous events ({target_date_str} <= end_date <= {today_str})")
-        query = query.where("end_date", ">=", target_date_str).where("end_date", "<=", today_str)
-        query = query.order_by("end_date", direction=firestore.Query.DESCENDING).limit(50)
+        # Return the full archive so /hack can show every past hackathon (back to 2014).
+        # Year chips on the frontend handle navigation; pagination is client-side.
+        logger.debug(f"Querying all previous events (end_date <= {today_str})")
+        query = query.where("end_date", "<=", today_str)
+        query = query.order_by("end_date", direction=firestore.Query.DESCENDING).limit(200)
 
     else:
         query = query.order_by("start_date")
