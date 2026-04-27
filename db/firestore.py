@@ -231,12 +231,22 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
                             user.hackathons.append(hackathon)
 
-                #TODO:
-                # if "badges" in res:
-                #     for h in res["badges"]:
-                #         _badges.append(h.get().to_dict())
+                # Resolve badge Firestore refs into plain dicts so the public
+                # profile and Profile.js Volunteer History tab can render them.
+                if "badges" in d and d["badges"]:
+                    badge_refs = d["badges"]
+                    try:
+                        badge_docs = db.get_all(badge_refs)
+                        for b_doc in badge_docs:
+                            if not getattr(b_doc, "exists", False):
+                                continue
+                            b = b_doc.to_dict() or {}
+                            b["id"] = b_doc.id
+                            user.badges.append(b)
+                    except Exception as e:
+                        logger.warning(f"Failed to resolve badge refs for user {db_id}: {e}")
 
-                
+
 
         return user
 

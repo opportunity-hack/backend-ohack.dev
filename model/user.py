@@ -1,11 +1,18 @@
 metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "volunteering", "linkedin_url", "instagram_url", "propel_id"]
-privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback", "hackathon_history"]
+privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback", "hackathon_history", "praises"]
+
+# Privacy fields that default to "public" for new/legacy users (everything else defaults private).
+default_public_privacy_fields = {"praises"}
 
 # Fields that should NEVER be shared publicly regardless of privacy settings
 pii_fields = ["email_address", "last_login", "propel_id", "volunteering"]
 
 # Fields that are always safe to share publicly (basic profile info)
 safe_public_fields = ["name", "nickname", "profile_image", "user_id"]
+
+
+def _default_privacy_value(field):
+    return "public" if field in default_public_privacy_fields else True
 
 class User:
     id = None
@@ -34,6 +41,13 @@ class User:
     def deserialize(cls, d):
         # Debug logging removed to reduce log spam
         u = User()
+        # Class-level [] defaults are shared across instances — reset to fresh
+        # lists per User so callers that .append() to badges/hackathons/teams
+        # don't bleed state across requests.
+        u.badges = []
+        u.hackathons = []
+        u.teams = []
+        u.volunteering = []
         u.id = d['id']
         u.email_address = d['email_address']
         u.last_login = d['last_login']
@@ -125,16 +139,24 @@ class User:
         return
 
     def get_privacy_settings(self):
-        """Get privacy settings, initializing defaults if needed"""
+        """Get privacy settings, initializing defaults if needed.
+
+        Backfills any newly-introduced privacy fields for existing users so the
+        shape stays in sync with privacy_fields.
+        """
         if not self.privacy_settings:
-            self.privacy_settings = {field: True for field in privacy_fields}
+            self.privacy_settings = {f: _default_privacy_value(f) for f in privacy_fields}
+        else:
+            for f in privacy_fields:
+                if f not in self.privacy_settings:
+                    self.privacy_settings[f] = _default_privacy_value(f)
         return self.privacy_settings
 
     def update_privacy_setting(self, field, is_public):
         """Update a specific privacy setting"""
         if field in privacy_fields:
             if not self.privacy_settings:
-                self.privacy_settings = {field: True for field in privacy_fields}
+                self.privacy_settings = {f: _default_privacy_value(f) for f in privacy_fields}
             self.privacy_settings[field] = is_public
             return True
         return False
