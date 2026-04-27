@@ -138,32 +138,38 @@ def save_helping_status_old(propel_user_id, json):
     # Non-Slack logins (Google, etc.) fall back to their display name so we don't
     # render a broken "@oauth2" mention, and get a follow-up email asking them to
     # join the Slack workspace.
+    display_name = (user_obj.name or user_obj.nickname or user_obj.email_address or "A volunteer").strip()
+    profile_url = f"https://ohack.dev/profile/{user_obj.id}" if user_obj.id else None
+
     if is_slack_user_id(user_id):
         slack_user_id = extract_slack_user_id(user_id)
-        mention = f"<@{slack_user_id}>"
+        if profile_url:
+            mention = f"<@{slack_user_id}> (<{profile_url}|profile>)"
+        else:
+            mention = f"<@{slack_user_id}>"
         is_slack_login = True
         logger.info(f"save_helping_status_old: Slack login, mention={slack_user_id}")
     else:
         slack_user_id = None
-        mention = (user_obj.name or user_obj.nickname or user_obj.email_address or "A volunteer").strip()
+        mention = f"<{profile_url}|{display_name}>" if profile_url else display_name
         is_slack_login = False
-        logger.info(f"save_helping_status_old: non-Slack login ({user_id}), mention={mention}")
+        logger.info(f"save_helping_status_old: non-Slack login ({user_id}), mention={display_name}")
 
     problem_statement_title = ps_dict["title"]
 
     if "slack_channel" in ps_dict:
         problem_statement_slack_channel = ps_dict["slack_channel"]
 
-        url = ""
-        if npo_id == "":
-            url = f"for project https://ohack.dev/project/{problem_statement_id}"
+        project_link = f"<https://ohack.dev/project/{problem_statement_id}|{problem_statement_title}>"
+        if npo_id:
+            suffix = f" for <https://ohack.dev/nonprofit/{npo_id}|the nonprofit>"
         else:
-            url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
+            suffix = ""
 
         if "helping" == helping_status:
-            slack_message = f"{mention} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
+            slack_message = f"{mention} is helping as a *{mentor_or_hacker}* on *{project_link}*{suffix}"
         else:
-            slack_message = f"{mention} is _no longer able to help_ on *{problem_statement_title}* {url}"
+            slack_message = f"{mention} is _no longer able to help_ on *{project_link}*{suffix}"
 
         if is_slack_login and slack_user_id:
             try:
