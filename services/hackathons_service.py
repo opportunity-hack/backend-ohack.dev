@@ -649,6 +649,9 @@ def save_hackathon(json_data, propel_id):
             "last_updated_by": propel_id,
         }
 
+        if "planning" in json_data:
+            hackathon_data["planning"] = json_data["planning"]
+
         if "nonprofits" in json_data:
             hackathon_data["nonprofits"] = [db.collection("nonprofits").document(npo) for npo in json_data["nonprofits"]]
         if "teams" in json_data:
