@@ -206,11 +206,20 @@ def get_board(event_id):
 _USER_PROFILES_CACHE = {"profiles": None, "expires_at": 0}
 
 
-def _resolve_public_user_profiles(propel_ids):
-    """Return {propel_id: {name, profile_image, nickname}} for the given set.
+_PROPEL_FALLBACK_CACHE = {}  # propel_id -> {profile dict, expires_at}
+_PROPEL_FALLBACK_TTL = 300
 
-    Public-safe fields only. Returns {} when the set is empty so the call
-    site can skip the work.
+
+def _resolve_public_user_profiles(propel_ids):
+    """Return {propel_id: {name, profile_image, nickname, db_id}} for the given set.
+
+    Public-safe fields only. db_id is the Firestore document ID — used by the
+    frontend to link to /profile/{db_id}. None when the user has no profile
+    record yet (just authenticated, never triggered profile save).
+
+    Falls back to a one-shot PropelAuth OAuth lookup when a propel_id isn't
+    in the cached Firestore user index — covers users who logged in but
+    haven't yet been auto-saved to the users collection.
     """
     import time
     if not propel_ids:
@@ -230,6 +239,7 @@ def _resolve_public_user_profiles(propel_ids):
                     "name": getattr(u, "name", "") or getattr(u, "nickname", "") or "",
                     "nickname": getattr(u, "nickname", "") or "",
                     "profile_image": getattr(u, "profile_image", "") or "",
+                    "db_id": getattr(u, "id", None),
                 }
             _USER_PROFILES_CACHE["profiles"] = indexed
             _USER_PROFILES_CACHE["expires_at"] = now + 60
@@ -238,7 +248,35 @@ def _resolve_public_user_profiles(propel_ids):
             return {}
 
     indexed = _USER_PROFILES_CACHE["profiles"] or {}
-    return {pid: indexed[pid] for pid in propel_ids if pid in indexed}
+    out = {}
+    for pid in propel_ids:
+        if pid in indexed:
+            out[pid] = indexed[pid]
+            continue
+        # Fallback for users who have never been saved to the users collection.
+        cached = _PROPEL_FALLBACK_CACHE.get(pid)
+        if cached and cached["expires_at"] > now:
+            out[pid] = cached["profile"]
+            continue
+        try:
+            from services.users_service import get_oauth_user_from_propel_user_id
+            oauth = get_oauth_user_from_propel_user_id(pid)
+            if oauth:
+                profile = {
+                    "name": oauth.get("name") or oauth.get("given_name") or "",
+                    "nickname": oauth.get("given_name") or "",
+                    "profile_image": (
+                        oauth.get("https://slack.com/user_image_192")
+                        or oauth.get("picture")
+                        or ""
+                    ),
+                    "db_id": None,  # No Firestore record yet
+                }
+                _PROPEL_FALLBACK_CACHE[pid] = {"profile": profile, "expires_at": now + _PROPEL_FALLBACK_TTL}
+                out[pid] = profile
+        except Exception:
+            logger.exception("PropelAuth fallback failed for %s", pid)
+    return out
 
 
 def _maybe_flush_digests_read_driven(hackathon_doc):
