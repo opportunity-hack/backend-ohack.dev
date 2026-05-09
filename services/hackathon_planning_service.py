@@ -28,18 +28,23 @@ ADMIN_PERMISSION = "volunteer.admin"
 def is_admin(propel_user) -> bool:
     """Return True if the authenticated user has the global volunteer.admin permission.
 
-    PropelAuth's flask SDK exposes per-org info on ``current_user.org_id_to_org_info``.
-    OHack only has one org ("Opportunity Hack Org") so we accept ``volunteer.admin`` in
-    any org membership. If the user has no org memberships at all, they are not admin.
+    PropelAuth's User object exposes per-org info on
+    ``user.org_id_to_org_member_info`` (a dict of {org_id: OrgMemberInfo}).
+    OHack only has one org so we accept ``volunteer.admin`` in any org membership.
     """
     if not propel_user or not getattr(propel_user, "user_id", None):
         return False
-    org_id_to_org_info = getattr(propel_user, "org_id_to_org_info", None) or {}
-    for org_info in org_id_to_org_info.values():
-        # PropelAuth OrgMemberInfo is an object, not a dict
-        permissions = getattr(org_info, "user_permissions", None) or []
-        if ADMIN_PERMISSION in permissions:
-            return True
+    org_id_to_org_member_info = (
+        getattr(propel_user, "org_id_to_org_member_info", None) or {}
+    )
+    for org_info in org_id_to_org_member_info.values():
+        try:
+            if org_info.user_has_permission(ADMIN_PERMISSION):
+                return True
+        except Exception:
+            permissions = getattr(org_info, "user_permissions", None) or []
+            if ADMIN_PERMISSION in permissions:
+                return True
     return False
 
 
