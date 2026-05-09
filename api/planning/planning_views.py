@@ -856,6 +856,28 @@ def seed_template(event_id):
 
 
 # ---------------------------------------------------------------------------
+# Profile resolution by exact propel_id list — used by the admin editors
+# manager to render real names / avatars instead of opaque IDs. Reuses the
+# same public-safe resolver as the board snapshot (Firestore index +
+# PropelAuth fallback for users who haven't yet triggered profile creation).
+# ---------------------------------------------------------------------------
+
+@bp.route("/_users/by-ids", methods=["GET"])
+@auth.require_user
+def resolve_users_by_ids():
+    """Return {propel_id: {name, profile_image, nickname, db_id}} for the IDs.
+
+    Any logged-in user. Public-safe fields only (no email, no Slack ID) —
+    matches the data shape already exposed in the board snapshot's `users` map.
+    """
+    raw = (request.args.get("ids") or "").strip()
+    if not raw:
+        return jsonify({"users": {}}), 200
+    ids = [p for p in (s.strip() for s in raw.split(",")) if p][:50]
+    return jsonify({"users": _resolve_public_user_profiles(set(ids))}), 200
+
+
+# ---------------------------------------------------------------------------
 # @-mention search — any logged-in user can search for someone to mention
 # in a comment. Returns minimal public-safe fields only (no email, no Slack
 # ID), so this can never be used to harvest PII.
