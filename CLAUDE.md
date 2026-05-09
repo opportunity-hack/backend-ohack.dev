@@ -65,3 +65,54 @@ Deployed to Fly.io (`fly.toml`, app: `backend-ohack`, region: `sjc`). Uses gunic
 - Naming: snake_case for variables/functions, PascalCase for classes
 - Error handling: try/except with specific exceptions
 - Linting: pylint (`.pylintrc` disables missing-module-docstring, missing-function-docstring, too-few-public-methods)
+
+## Gotchas (load-bearing — every one of these has bitten us)
+
+### Python 3.9 — no PEP 604 union syntax
+Backend runs on Python 3.9. `def foo() -> X | None:` raises `TypeError` at *import time*, blowing up every endpoint that imports the module. Use `Optional[X]` from `typing`. Audit any new `services/` module before committing.
+
+### PropelAuth user object — correct attribute names
+`auth_user` (`current_user` from `propelauth_flask`) wraps the full PropelAuth `User` class. The attributes are NOT what they look like:
+
+- `user.org_id_to_org_member_info` — dict of `{org_id: OrgMemberInfo}`. **NOT** `org_id_to_org_info` (which silently returns `None` from `getattr`, leaving every admin check returning `False`).
+- Each `OrgMemberInfo` is an *object*, not a dict. Use `.user_permissions` (attribute) or `.user_has_permission(perm)` (method). `org_info.get("user_permissions")` always returns `None`.
+
+Pattern for "is this user a global admin":
+```python
+def is_admin(propel_user) -> bool:
+    if not propel_user or not getattr(propel_user, "user_id", None):
+        return False
+    for org_info in (getattr(propel_user, "org_id_to_org_member_info", None) or {}).values():
+        if org_info.user_has_permission("volunteer.admin"):
+            return True
+    return False
+```
+
+For most route protection, prefer the existing decorator: `@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)`. Only roll your own check when combining multiple gates (per-resource editors list, etc.).
+
+### Firestore compound queries require composite indexes in production
+`.where("X", "==", v).order_by("Y")` (where `Y != X`) needs a composite index declared in `firestore.indexes.json` AND deployed via `firebase deploy --only firestore:indexes`. The local Firestore emulator silently allows these queries; production Firestore returns 500 with "The query requires an index" — the route just hangs/errors.
+
+Two options:
+1. **Sort in Python after a single-field where** (preferred when the result set is small): `sorted([... for d in coll.where(...).stream()], key=lambda x: x["pos"])`. No index needed because single-field equality is auto-indexed.
+2. **Add the composite index to `firestore.indexes.json`** AND deploy. Don't forget the deploy step — committing to the repo doesn't apply it.
+
+### Lazy user profile creation in the `users` collection
+A user authenticated via PropelAuth may NOT exist in the Firestore `users` collection. The collection is populated lazily — only when someone hits `GET /api/users/profile` or saves profile metadata. Never assume `fetch_users()` includes everyone with a `propel_user_id` referenced elsewhere (assignees, editors, mentions, etc.).
+
+When resolving propel_id → display profile, fall back to `services.users_service.get_oauth_user_from_propel_user_id(pid)` for IDs not in the cached `fetch_users()` index. Cache the fallback aggressively (5 min minimum) — PropelAuth API calls aren't free.
+
+### OAuth provider response shapes (Slack vs Google)
+`get_oauth_user_from_propel_user_id(propel_id)` returns the raw OAuth userinfo. Provider-specific fields:
+
+- **Slack**: `https://slack.com/user_id` (e.g. `UC31XTRT5`) is the Slack workspace user ID. `https://slack.com/user_image_192` for avatar. `email` always present.
+- **Google**: no Slack ID. `picture` for avatar. `email` always present.
+- Detect by presence of `https://slack.com/user_id` — Google responses don't have it.
+
+To send a Slack DM, pass the Slack user ID as `channel`: `send_slack(message=..., channel="UC31XTRT5")`. `chat.postMessage` opens (or reuses) a DM channel.
+
+### `User.id` vs `User.user_id`
+- `User.id` = Firestore document ID (used by `/api/users/{id}/profile/public` and the frontend `/profile/{id}` route).
+- `User.user_id` = PropelAuth user ID (the `propel_id`, what's stored in `assignees[]`, `editors[]`, etc.).
+
+These are DIFFERENT VALUES. When bundling user data for the frontend, include both: `{user_id: propel_id, db_id: firestore_doc_id, name, profile_image}`. The frontend needs `db_id` to build profile links and `user_id` (propel) for matching against assignees/editors/mentions.
