@@ -711,6 +711,54 @@ def seed_template(event_id):
 
 
 # ---------------------------------------------------------------------------
+# Admin user search — for the editors picker (no PropelAuth ID memorization)
+# ---------------------------------------------------------------------------
+
+@bp.route("/_users/search", methods=["GET"])
+@auth.require_user
+def search_users_for_editor_picker():
+    """Substring match across Firestore users by name/email/nickname.
+
+    Admin-only. Returns up to 25 candidates with the propel user_id needed
+    by the editors[] list. Q is required and at least 2 chars to avoid
+    dumping the whole user table.
+    """
+    if not is_admin(auth_user):
+        return jsonify({"error": "Forbidden"}), 403
+
+    q = (request.args.get("q") or "").strip().lower()
+    if len(q) < 2:
+        return jsonify({"users": []}), 200
+
+    from db.db import fetch_users
+    try:
+        all_users = fetch_users() or []
+    except Exception:
+        logger.exception("fetch_users failed")
+        return jsonify({"users": []}), 200
+
+    results = []
+    for u in all_users:
+        propel_id = getattr(u, "user_id", None)
+        if not propel_id:
+            continue
+        name = (getattr(u, "name", None) or "").lower()
+        nickname = (getattr(u, "nickname", None) or "").lower()
+        email = (getattr(u, "email_address", None) or "").lower()
+        if q in name or q in nickname or q in email:
+            results.append({
+                "user_id": propel_id,
+                "name": getattr(u, "name", None) or getattr(u, "nickname", None) or "",
+                "email": getattr(u, "email_address", None) or "",
+                "profile_image": getattr(u, "profile_image", None) or "",
+            })
+            if len(results) >= 25:
+                break
+
+    return jsonify({"users": results}), 200
+
+
+# ---------------------------------------------------------------------------
 # Advisory editing heartbeat (Redis-backed, gracefully degraded)
 # ---------------------------------------------------------------------------
 
