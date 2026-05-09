@@ -36,9 +36,8 @@ def is_admin(propel_user) -> bool:
         return False
     org_id_to_org_info = getattr(propel_user, "org_id_to_org_info", None) or {}
     for org_info in org_id_to_org_info.values():
-        if not isinstance(org_info, dict):
-            continue
-        permissions = org_info.get("user_permissions") or []
+        # PropelAuth OrgMemberInfo is an object, not a dict
+        permissions = getattr(org_info, "user_permissions", None) or []
         if ADMIN_PERMISSION in permissions:
             return True
     return False
