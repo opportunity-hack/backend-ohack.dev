@@ -613,6 +613,29 @@ def create_comment(event_id, card_id):
     card_ref.update({"comment_count": Increment(1), "last_activity_at": now})
 
     _record_activity(g.hackathon, "comment_added", "Added a comment", g.propel_user_id, card_id=card_id)
+
+    # Best-effort @-mention notifications. Failures here must not break the
+    # comment write; the comment is already persisted above.
+    try:
+        from services.planning_mention_notifier import (
+            parse_mention_ids,
+            notify_mentions,
+        )
+        mentioned = parse_mention_ids(body)
+        if mentioned:
+            card_data = card_snap.to_dict() or {}
+            notify_mentions(
+                mentioned_propel_ids=mentioned,
+                actor_propel_id=g.propel_user_id,
+                actor_name=author_info.get("name") or "Someone",
+                hackathon_event_id=event_id,
+                card_title=card_data.get("title", "(untitled)"),
+                card_id=card_id,
+                comment_body=body,
+            )
+    except Exception:
+        logger.exception("Mention notification dispatch failed")
+
     return jsonify({"id": doc_ref.id, **comment}), 201
 
 
@@ -769,6 +792,45 @@ def seed_template(event_id):
 
     _record_activity(g.hackathon, "template_seeded", "Applied OHack default template", g.propel_user_id)
     return jsonify({"message": "Template applied"}), 200
+
+
+# ---------------------------------------------------------------------------
+# @-mention search — any logged-in user can search for someone to mention
+# in a comment. Returns minimal public-safe fields only (no email, no Slack
+# ID), so this can never be used to harvest PII.
+# ---------------------------------------------------------------------------
+
+@bp.route("/_users/mention-search", methods=["GET"])
+@auth.require_user
+def mention_search_users():
+    """Substring match across cached user list. Public-safe fields only.
+
+    Min 2 chars (avoids dumping the user table). Capped at 10 results.
+    Reuses the same 60s cache as the board snapshot's user resolver.
+    """
+    q = (request.args.get("q") or "").strip().lower()
+    if len(q) < 2:
+        return jsonify({"users": []}), 200
+
+    # Force a populate of _USER_PROFILES_CACHE if cold by calling with a
+    # placeholder — cheaper than duplicating the fetch logic.
+    _resolve_public_user_profiles({"__warm__"})  # noqa
+    indexed = _USER_PROFILES_CACHE.get("profiles") or {}
+
+    out = []
+    for pid, profile in indexed.items():
+        name = (profile.get("name") or "").lower()
+        nickname = (profile.get("nickname") or "").lower()
+        if q in name or q in nickname:
+            out.append({
+                "user_id": pid,
+                "name": profile.get("name") or profile.get("nickname") or "",
+                "profile_image": profile.get("profile_image") or "",
+            })
+            if len(out) >= 10:
+                break
+
+    return jsonify({"users": out}), 200
 
 
 # ---------------------------------------------------------------------------
