@@ -468,6 +468,29 @@ def _validate_sponsor(sponsor):
     }
 
 
+@bp.route("/<event_id>/cards/<card_id>", methods=["GET"])
+def get_card(event_id, card_id):
+    """Public-read single card — used by the SSR permalink page for OG meta tags.
+
+    Only returns when planning.enabled is true so disabled boards stay invisible
+    (mirrors get_board's gate).
+    """
+    hackathon = load_hackathon_or_404(event_id)
+    planning = hackathon.get(PLANNING_FIELD) or {}
+    if not planning.get("enabled"):
+        return jsonify({"error": "Planning board not enabled"}), 404
+
+    db = get_db()
+    href = db.collection("hackathons").document(hackathon["id"])
+    snap = href.collection("planning_cards").document(card_id).get()
+    if not snap.exists:
+        return jsonify({"error": "Card not found"}), 404
+    data = snap.to_dict() or {}
+    if data.get("archived"):
+        return jsonify({"error": "Card not found"}), 404
+    return jsonify({"id": snap.id, **data}), 200
+
+
 @bp.route("/<event_id>/cards/<card_id>", methods=["PATCH"])
 @require_plan_editor()
 def update_card(event_id, card_id):
