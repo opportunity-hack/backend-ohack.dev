@@ -159,20 +159,14 @@ def get_board(event_id):
     db = get_db()
     href = db.collection("hackathons").document(hid)
 
-    lists_docs = [
-        {**d.to_dict(), "id": d.id}
-        for d in href.collection("planning_lists")
-        .where("archived", "==", False)
-        .order_by("position")
-        .stream()
-    ]
-    cards_docs = [
-        {**d.to_dict(), "id": d.id}
-        for d in href.collection("planning_cards")
-        .where("archived", "==", False)
-        .order_by("position")
-        .stream()
-    ]
+    lists_docs = sorted(
+        [{**d.to_dict(), "id": d.id} for d in href.collection("planning_lists").where("archived", "==", False).stream()],
+        key=lambda x: x.get("position", ""),
+    )
+    cards_docs = sorted(
+        [{**d.to_dict(), "id": d.id} for d in href.collection("planning_cards").where("archived", "==", False).stream()],
+        key=lambda x: x.get("position", ""),
+    )
     labels_docs = [
         {**d.to_dict(), "id": d.id}
         for d in href.collection("planning_labels").stream()

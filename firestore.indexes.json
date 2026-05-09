@@ -1,6 +1,22 @@
 {
   "indexes": [
     {
+      "collectionGroup": "planning_lists",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "archived", "order": "ASCENDING" },
+        { "fieldPath": "position", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "planning_cards",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "archived", "order": "ASCENDING" },
+        { "fieldPath": "position", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "planning_cards",
       "queryScope": "COLLECTION",
       "fields": [
