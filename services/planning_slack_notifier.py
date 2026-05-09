@@ -9,6 +9,7 @@ Without Redis or external cron, digests fire on the next page load after the win
 """
 import logging
 from datetime import datetime, timezone, timedelta
+from typing import Optional
 
 from common.utils.firebase import get_db
 
@@ -31,7 +32,7 @@ def _get_deadline_key(hackathon_id: str) -> str:
     return f"planning:digest_deadline:{hackathon_id}"
 
 
-def _get_or_set_deadline(hackathon_doc: dict) -> datetime | None:
+def _get_or_set_deadline(hackathon_doc: dict) -> Optional[datetime]:
     """Return the current digest deadline, or None if no pending events exist."""
     hid = hackathon_doc["id"]
 
