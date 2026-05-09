@@ -22,6 +22,7 @@ ALLOWED_OUTREACH_STATUSES = {
     "no-response",
 }
 ALLOWED_SPONSOR_TIERS = {"visionary", "transformer", "changemaker", "in-kind", "tbd"}
+ALLOWED_CARD_STATUSES = {"planned", "in_progress", "blocked", "completed"}
 
 MAX_PLANNING_LISTS = 50
 MAX_PLANNING_CARDS_PER_LIST = 200

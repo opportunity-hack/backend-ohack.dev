@@ -24,6 +24,7 @@ from model.planning import (
     ALLOWED_BUDGET_BUCKETS,
     ALLOWED_BUDGET_STATES,
     ALLOWED_CARD_KINDS,
+    ALLOWED_CARD_STATUSES,
     ALLOWED_OUTREACH_STATUSES,
     ALLOWED_SPONSOR_TIERS,
     MAX_ATTACHMENTS_PER_CARD,
@@ -179,15 +180,65 @@ def get_board(event_id):
     # Lazy Slack digest flush when past deadline
     _maybe_flush_digests_read_driven(hackathon)
 
+    # Resolve display profiles for everyone referenced in cards.assignees + planning.editors
+    # so the frontend can render avatars without per-user round-trips.
+    referenced_ids = set()
+    for c in cards_docs:
+        referenced_ids.update(c.get("assignees") or [])
+    referenced_ids.update(planning.get("editors") or [])
+    users_map = _resolve_public_user_profiles(referenced_ids)
+
     resp = jsonify({
         "event_id": event_id,
         "planning": planning,
         "lists": lists_docs,
         "cards": cards_docs,
         "labels": labels_docs,
+        "users": users_map,
     })
     resp.headers["ETag"] = etag
     return resp, 200
+
+
+# Cache resolved user profiles briefly so the board snapshot doesn't pay for
+# fetch_users() on every poll. 60s is short enough that name/avatar changes
+# show up quickly while cutting the read load by ~10x for an active board.
+_USER_PROFILES_CACHE = {"profiles": None, "expires_at": 0}
+
+
+def _resolve_public_user_profiles(propel_ids):
+    """Return {propel_id: {name, profile_image, nickname}} for the given set.
+
+    Public-safe fields only. Returns {} when the set is empty so the call
+    site can skip the work.
+    """
+    import time
+    if not propel_ids:
+        return {}
+
+    now = time.time()
+    if not _USER_PROFILES_CACHE["profiles"] or _USER_PROFILES_CACHE["expires_at"] < now:
+        try:
+            from db.db import fetch_users
+            all_users = fetch_users() or []
+            indexed = {}
+            for u in all_users:
+                pid = getattr(u, "user_id", None)
+                if not pid:
+                    continue
+                indexed[pid] = {
+                    "name": getattr(u, "name", "") or getattr(u, "nickname", "") or "",
+                    "nickname": getattr(u, "nickname", "") or "",
+                    "profile_image": getattr(u, "profile_image", "") or "",
+                }
+            _USER_PROFILES_CACHE["profiles"] = indexed
+            _USER_PROFILES_CACHE["expires_at"] = now + 60
+        except Exception:
+            logger.exception("Failed to resolve user profiles for board snapshot")
+            return {}
+
+    indexed = _USER_PROFILES_CACHE["profiles"] or {}
+    return {pid: indexed[pid] for pid in propel_ids if pid in indexed}
 
 
 def _maybe_flush_digests_read_driven(hackathon_doc):
@@ -430,6 +481,16 @@ def update_card(event_id, card_id):
         if kind not in ALLOWED_CARD_KINDS:
             return jsonify({"error": f"Invalid kind: {kind}"}), 400
         updates["kind"] = kind
+
+    if "status" in data:
+        status = data["status"]
+        # null/empty clears the status (back to "no status set")
+        if status in (None, "", "none"):
+            updates["status"] = None
+        elif status in ALLOWED_CARD_STATUSES:
+            updates["status"] = status
+        else:
+            return jsonify({"error": f"Invalid status: {status}"}), 400
 
     if "checklists" in data:
         checklists = data["checklists"]
