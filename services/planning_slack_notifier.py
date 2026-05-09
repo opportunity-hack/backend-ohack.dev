@@ -147,6 +147,55 @@ def format_planning_digest(events: list, hackathon_doc: dict) -> str:
     return "\n".join(lines)
 
 
+def _post_to_channel(channel: str, message: str):
+    """Send a message to a Slack channel. Returns (ok: bool, error: Optional[str]).
+
+    Joins the channel first so chat.postMessage doesn't silently fail with
+    not_in_channel. The shared common.utils.slack.send_slack helper swallows
+    SlackApiError and returns nothing — that's why "Send digest now" was
+    returning 200 with no Slack message.
+    """
+    try:
+        from common.utils.slack import (
+            add_bot_to_channel,
+            get_channel_id_from_channel_name,
+            get_client,
+            is_channel_id,
+        )
+        from slack_sdk.errors import SlackApiError
+        from slack_sdk.models.blocks import SectionBlock
+
+        channel_id = channel if is_channel_id(channel) else get_channel_id_from_channel_name(channel)
+        if not channel_id:
+            return False, f"Slack channel '#{channel}' not found"
+
+        # Best-effort join; OK if already a member.
+        add_bot_to_channel(channel_id)
+
+        client = get_client()
+        try:
+            client.chat_postMessage(
+                channel=channel_id,
+                text=message,
+                blocks=[SectionBlock(text={"type": "mrkdwn", "text": message})],
+                username="Hackathon Bot",
+                icon_url="https://cdn.ohack.dev/ohack.dev/logos/OpportunityHack_2Letter_Light_Blue.png",
+            )
+            return True, None
+        except SlackApiError as e:
+            err = (e.response or {}).get("error") or str(e)
+            logger.error("Slack chat.postMessage failed for #%s: %s", channel, err)
+            if err == "not_in_channel":
+                return False, (
+                    f"Bot couldn't post to #{channel} — try inviting the OHack bot "
+                    f"to the channel via /invite @ohack-bot"
+                )
+            return False, f"Slack error: {err}"
+    except Exception as e:
+        logger.exception("Unexpected error posting to Slack #%s", channel)
+        return False, f"Unexpected error: {e}"
+
+
 def _do_flush(hackathon_doc: dict) -> int:
     """Flush pending events into a Slack message. Returns count of events sent."""
     events = _collect_and_clear_events(hackathon_doc)
@@ -162,12 +211,11 @@ def _do_flush(hackathon_doc: dict) -> int:
         return 0
 
     message = format_planning_digest(events, hackathon_doc)
-    try:
-        from common.utils.slack import send_slack
-        send_slack(message, channel=channel)
+    ok, err = _post_to_channel(channel, message)
+    if ok:
         logger.info("Planning digest sent to #%s (%d events)", channel, len(events))
-    except Exception:
-        logger.exception("Failed to send planning Slack digest to #%s", channel)
+    else:
+        logger.error("Planning digest send failed for #%s: %s", channel, err)
 
     _clear_deadline(hackathon_doc)
     return len(events)
@@ -202,10 +250,55 @@ def lazy_flush_if_due(hackathon_doc: dict) -> None:
     flush_digests_if_due(hackathon_doc)
 
 
-def send_manual_digest(hackathon_doc: dict) -> None:
-    """Admin 'Send digest now' — flushes the current board state immediately."""
-    events = _collect_and_clear_events(hackathon_doc)
-    _do_flush(hackathon_doc)
+def send_manual_digest(hackathon_doc: dict):
+    """Admin 'Send digest now' — posts a current-state snapshot of the board.
+
+    Bypasses the queued-events digest entirely (per the design plan: "post the
+    current state, one line per non-empty list with card counts"). Returns
+    (ok: bool, error_or_message: str) so the route handler can surface
+    success/error to the admin.
+    """
+    planning = hackathon_doc.get("planning") or {}
+    slack = planning.get("slack") or {}
+    channel = (slack.get("channel") or "").strip()
+    if not channel:
+        return False, "No Slack channel configured for this board"
+
+    event_id = hackathon_doc.get("event_id") or hackathon_doc.get("id")
+    title = hackathon_doc.get("title") or event_id
+
+    # Compose a current-state digest: list titles + non-archived card counts.
+    db = get_db()
+    href = db.collection("hackathons").document(hackathon_doc["id"])
+    lists_docs = sorted(
+        [{**d.to_dict(), "id": d.id} for d in href.collection("planning_lists").where("archived", "==", False).stream()],
+        key=lambda x: x.get("position", ""),
+    )
+    cards_docs = [
+        {**d.to_dict(), "id": d.id}
+        for d in href.collection("planning_cards").where("archived", "==", False).stream()
+    ]
+    counts = {}
+    for c in cards_docs:
+        lid = c.get("list_id")
+        if lid:
+            counts[lid] = counts.get(lid, 0) + 1
+
+    plan_url = f"https://www.ohack.dev/hack/{event_id}/plan"
+    lines = [f"📋 *{title} — planning board snapshot*"]
+    for lst in lists_docs:
+        n = counts.get(lst["id"], 0)
+        if n > 0:
+            lines.append(f"• *{lst.get('title', '(untitled)')}*: {n} card{'s' if n != 1 else ''}")
+    if len(lines) == 1:
+        lines.append("_(no cards yet)_")
+    lines.append(f"<{plan_url}|Open the board>")
+    message = "\n".join(lines)
+
+    ok, err = _post_to_channel(channel, message)
+    if ok:
+        return True, f"Digest posted to #{channel}"
+    return False, err or "Slack send failed"
 
 
 def flush_all_pending_digests() -> int:

@@ -1001,8 +1001,12 @@ def editing_heartbeat(event_id, card_id):
 def slack_notify(event_id):
     try:
         from services.planning_slack_notifier import send_manual_digest
-        send_manual_digest(g.hackathon)
-        return jsonify({"message": "Digest sent"}), 200
+        ok, msg = send_manual_digest(g.hackathon)
+        if ok:
+            return jsonify({"message": msg}), 200
+        # 502 — upstream (Slack) said no. Surface the error so the admin
+        # knows whether it's a config issue vs. a missing channel invite.
+        return jsonify({"error": msg}), 502
     except Exception as e:
         logger.exception("Manual Slack digest failed")
         return jsonify({"error": str(e)}), 500
