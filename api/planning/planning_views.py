@@ -683,9 +683,13 @@ def create_comment(event_id, card_id):
             notify_mentions,
         )
         mentioned = parse_mention_ids(body)
+        logger.info(
+            "Comment %s on card %s: parsed %d mention(s): %s",
+            doc_ref.id, card_id, len(mentioned), sorted(mentioned),
+        )
         if mentioned:
             card_data = card_snap.to_dict() or {}
-            notify_mentions(
+            results = notify_mentions(
                 mentioned_propel_ids=mentioned,
                 actor_propel_id=g.propel_user_id,
                 actor_name=author_info.get("name") or "Someone",
@@ -694,8 +698,9 @@ def create_comment(event_id, card_id):
                 card_id=card_id,
                 comment_body=body,
             )
+            logger.info("Comment %s mention dispatch results: %s", doc_ref.id, results)
     except Exception:
-        logger.exception("Mention notification dispatch failed")
+        logger.exception("Mention notification dispatch failed for comment %s", doc_ref.id)
 
     return jsonify({"id": doc_ref.id, **comment}), 201
 
