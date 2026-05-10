@@ -25,8 +25,10 @@ from cachetools import TTLCache, cached
 logger = logging.getLogger("planning_mention_notifier")
 
 # Token: @[Name with spaces & punctuation](propel_user_id)
-# Name allows anything but `]`, propel_user_id is alphanumeric + dashes/underscores.
-MENTION_RE = re.compile(r"@\[([^\]]{1,80})\]\(([A-Za-z0-9_\-|]{1,64})\)")
+# Name is non-greedy so display names containing `]` (e.g. "Greg V [Staff/Mentor]")
+# parse correctly — the trailing `](propel_id)` is unambiguous given the
+# restricted propel_id charset.
+MENTION_RE = re.compile(r"@\[(.{1,120}?)\]\(([A-Za-z0-9_\-|]{1,64})\)", re.DOTALL)
 
 
 def parse_mention_ids(text: str):
@@ -163,11 +165,6 @@ def notify_mentions(
 
     results = {}
     for pid in mentioned_propel_ids:
-        if pid == actor_propel_id:
-            logger.info("Mention -> %s: skipped (self-mention)", pid)
-            results[pid] = "skipped"
-            continue
-
         oauth_user = _get_oauth_user_cached(pid)
         if oauth_user is None:
             logger.warning(
