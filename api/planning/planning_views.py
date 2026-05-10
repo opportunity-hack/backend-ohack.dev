@@ -210,6 +210,55 @@ _PROPEL_FALLBACK_CACHE = {}  # propel_id -> {profile dict, expires_at}
 _PROPEL_FALLBACK_TTL = 300
 
 
+def invalidate_user_profile_cache(propel_id):
+    """Drop any cached entry (positive or negative) for a propel_id.
+
+    Called by other modules (e.g. the mention dispatcher) when they learn
+    a previously-broken user is now resolvable, so the next board fetch
+    re-queries instead of serving the stale negative cache.
+    """
+    if not propel_id:
+        return
+    _PROPEL_FALLBACK_CACHE.pop(propel_id, None)
+
+
+def _seed_firestore_user_from_oauth(propel_id, oauth):
+    """Write/refresh a user record in the Firestore users collection from
+    the OAuth dict we already have in hand. Best-effort — failures are
+    logged but don't break the caller.
+
+    Calling this after a successful PropelAuth fallback means the user
+    appears in fetch_users() on the next 60s refresh, so subsequent
+    board fetches get them from the cached index instead of the slower
+    PropelAuth fallback path. Permanent self-heal.
+    """
+    try:
+        from db.db import fetch_user_by_user_id, insert_user, update_user
+        from model.user import User
+        from datetime import datetime
+        existing = fetch_user_by_user_id(propel_id)
+        last_login = datetime.utcnow().isoformat() + "Z"
+        if existing is None:
+            u = User()
+            u.user_id = propel_id
+            u.propel_id = propel_id
+            u.email_address = oauth.get("email") or ""
+            u.name = oauth.get("name") or oauth.get("given_name") or ""
+            u.nickname = oauth.get("given_name") or ""
+            u.profile_image = (
+                oauth.get("https://slack.com/user_image_192")
+                or oauth.get("picture")
+                or ""
+            )
+            u.last_login = last_login
+            insert_user(u)
+            logger.info("Self-heal: inserted Firestore user record for propel_id=%s", propel_id)
+        # If the record already exists we don't touch it — fetch_users() will
+        # pick up our positive lookup via the cached index, no write needed.
+    except Exception:
+        logger.exception("Self-heal user-seed failed for propel_id=%s", propel_id)
+
+
 def _resolve_public_user_profiles(propel_ids):
     """Return {propel_id: {name, profile_image, nickname, db_id}} for the given set.
 
@@ -280,6 +329,10 @@ def _resolve_public_user_profiles(propel_ids):
                 }
                 _PROPEL_FALLBACK_CACHE[pid] = {"profile": profile, "expires_at": now + _PROPEL_FALLBACK_TTL}
                 out[pid] = profile
+                # Self-heal: seed a Firestore user record so the next 60s
+                # refresh of _USER_PROFILES_CACHE picks them up via the
+                # fast cached index instead of the slower PropelAuth path.
+                _seed_firestore_user_from_oauth(pid, oauth)
             else:
                 # PropelAuth returned no OAuth profile. Log ONCE per TTL with
                 # the propel_id (the inner warning in users_service.py only

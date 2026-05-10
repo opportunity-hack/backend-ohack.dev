@@ -42,7 +42,22 @@ def parse_mention_ids(text: str):
 def _get_oauth_user_cached(propel_id):
     try:
         from services.users_service import get_oauth_user_from_propel_user_id
-        return get_oauth_user_from_propel_user_id(propel_id)
+        result = get_oauth_user_from_propel_user_id(propel_id)
+        if result:
+            # Self-heal: a successful resolve means this user CAN be looked
+            # up. Drop any stale negative cache in planning_views and seed
+            # a Firestore record so future board snapshots get them via
+            # the fast fetch_users() path instead of repeating PropelAuth.
+            try:
+                from api.planning.planning_views import (
+                    invalidate_user_profile_cache,
+                    _seed_firestore_user_from_oauth,
+                )
+                invalidate_user_profile_cache(propel_id)
+                _seed_firestore_user_from_oauth(propel_id, result)
+            except Exception:
+                logger.exception("Self-heal hook failed for %s (non-fatal)", propel_id)
+        return result
     except Exception:
         logger.exception("Failed to fetch OAuth user for %s", propel_id)
         return None
