@@ -254,9 +254,15 @@ def _resolve_public_user_profiles(propel_ids):
             out[pid] = indexed[pid]
             continue
         # Fallback for users who have never been saved to the users collection.
+        # We cache BOTH positive and negative results — without negative
+        # caching, a propel_id whose PropelAuth /oauth_token returns {}
+        # (deleted account, removed Slack integration, expired token) gets
+        # re-queried on every 6s board poll, spamming logs and PropelAuth.
         cached = _PROPEL_FALLBACK_CACHE.get(pid)
         if cached and cached["expires_at"] > now:
-            out[pid] = cached["profile"]
+            if cached["profile"] is not None:
+                out[pid] = cached["profile"]
+            # negative-cached: skip silently
             continue
         try:
             from services.users_service import get_oauth_user_from_propel_user_id
@@ -274,8 +280,20 @@ def _resolve_public_user_profiles(propel_ids):
                 }
                 _PROPEL_FALLBACK_CACHE[pid] = {"profile": profile, "expires_at": now + _PROPEL_FALLBACK_TTL}
                 out[pid] = profile
+            else:
+                # PropelAuth returned no OAuth profile. Log ONCE per TTL with
+                # the propel_id (the inner warning in users_service.py only
+                # shows response={} which is unhelpful for triage).
+                logger.info(
+                    "No OAuth profile for propel_id=%s — negative-caching for %ds",
+                    pid, _PROPEL_FALLBACK_TTL,
+                )
+                _PROPEL_FALLBACK_CACHE[pid] = {"profile": None, "expires_at": now + _PROPEL_FALLBACK_TTL}
         except Exception:
             logger.exception("PropelAuth fallback failed for %s", pid)
+            # Short negative cache on transient errors so we recover quickly
+            # if PropelAuth is just briefly down.
+            _PROPEL_FALLBACK_CACHE[pid] = {"profile": None, "expires_at": now + 60}
     return out
 
 
