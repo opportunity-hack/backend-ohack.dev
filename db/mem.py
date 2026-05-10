@@ -212,7 +212,8 @@ class InMemoryDatabaseInterface(DatabaseInterface):
              'description': problem_statement.description, 
              'first_thought_of': problem_statement.first_thought_of, 
              'github': problem_statement.github, 
-             'profile_image': problem_statement.status}
+               'profile_image': problem_statement.status,
+               'rank': problem_statement.rank}
         
         logger.debug(f'Inserting problem statement\n: {d}')
 
@@ -234,6 +235,7 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         d.first_thought_of = problem_statement.first_thought_of
         d.github = problem_statement.github
         d.status = problem_statement.status
+        d.rank = problem_statement.rank
 
         self.flush_problem_statements()
 

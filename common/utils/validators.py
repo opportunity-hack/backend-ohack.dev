@@ -159,6 +159,11 @@ def validate_hackathon_data(data):
     if social_posts is not None:
         validate_social_posts(social_posts)
 
+    # Validate planning subobject if present
+    planning = data.get("planning")
+    if planning is not None:
+        validate_planning_subobject(planning)
+
 
 ALLOWED_DIETARY_TAGS = {
     "vegetarian",
@@ -274,6 +279,57 @@ def validate_social_posts(posts):
         caption = post.get("caption")
         if caption is not None and not isinstance(caption, str):
             raise ValueError(f"social_posts[{i}].caption must be a string")
+
+
+_SLACK_CHANNEL_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,79}$")
+
+
+def validate_planning_subobject(planning):
+    """Validate the per-hackathon `planning` subobject persisted on a hackathon doc."""
+    if not isinstance(planning, dict):
+        raise ValueError("planning must be an object")
+
+    enabled = planning.get("enabled", False)
+    if not isinstance(enabled, bool):
+        raise ValueError("planning.enabled must be a boolean")
+
+    editors = planning.get("editors", [])
+    if not isinstance(editors, list):
+        raise ValueError("planning.editors must be a list of PropelAuth user IDs")
+    if len(editors) > 200:
+        raise ValueError("planning.editors may not exceed 200 entries")
+    seen_editors = set()
+    for i, ed in enumerate(editors):
+        if not isinstance(ed, str) or not ed.strip():
+            raise ValueError(f"planning.editors[{i}] must be a non-empty string")
+        if ed in seen_editors:
+            raise ValueError(f"planning.editors[{i}] duplicated: {ed}")
+        seen_editors.add(ed)
+
+    slack = planning.get("slack")
+    if slack is not None:
+        if not isinstance(slack, dict):
+            raise ValueError("planning.slack must be an object")
+        channel = slack.get("channel", "")
+        if channel:
+            if not isinstance(channel, str):
+                raise ValueError("planning.slack.channel must be a string")
+            normalized = channel.lstrip("#").strip()
+            if normalized and not _SLACK_CHANNEL_RE.match(normalized):
+                raise ValueError(
+                    "planning.slack.channel must be lowercase letters, digits, hyphens or underscores (max 80 chars)"
+                )
+        notify = slack.get("notify_on_card_change", False)
+        if not isinstance(notify, bool):
+            raise ValueError("planning.slack.notify_on_card_change must be a boolean")
+
+    seeded = planning.get("template_seeded", False)
+    if not isinstance(seeded, bool):
+        raise ValueError("planning.template_seeded must be a boolean")
+
+    budget_widget = planning.get("budget_widget_on_event_page", False)
+    if not isinstance(budget_widget, bool):
+        raise ValueError("planning.budget_widget_on_event_page must be a boolean")
 
 
 if __name__ == "__main__":

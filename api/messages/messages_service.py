@@ -222,6 +222,7 @@ def save_problem_statement_old(json):
     github = json["github"]
     references = json["references"]
     status = json["status"]
+    rank = json.get("rank")
         
 
     collection = db.collection('problem_statements')
@@ -232,7 +233,8 @@ def save_problem_statement_old(json):
         "first_thought_of": first_thought_of,
         "github": github,
         "references": references,
-        "status": status        
+        "status": status,
+        "rank": rank
     })
 
     logger.debug(f"Insert Result: {insert_res}")

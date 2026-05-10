@@ -382,6 +382,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             insert_data['references'] = problem_statement.references
         if hasattr(problem_statement, 'skills'):
             insert_data['skills'] = problem_statement.skills
+        if hasattr(problem_statement, 'rank'):
+            insert_data['rank'] = problem_statement.rank
 
         insert_res = collection.document(problem_statement.id).set(insert_data)
 
@@ -415,6 +417,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             update_data['references'] = problem_statement.references
         if hasattr(problem_statement, 'skills'):
             update_data['skills'] = problem_statement.skills
+        if hasattr(problem_statement, 'rank'):
+            update_data['rank'] = problem_statement.rank
 
         # Use update() instead of set() to only modify specified fields
         update_res = collection.document(problem_statement.id).update(update_data)
