@@ -11,6 +11,8 @@ from services.volunteers_service import (
     create_or_update_volunteer,
     update_volunteer_selection,
     refund_hacker_deposit,
+    bulk_refund_eligible_hacker_deposits,
+    handle_stripe_hacker_deposit_event,
     get_all_hackers_by_event_id,
     get_mentor_checkin_status,
     mentor_checkin,
@@ -432,6 +434,59 @@ def admin_refund_hacker_deposit(user, org, volunteer_id):
     except Exception as e:
         logger.error(f"Error refunding hacker deposit: {str(e)}", exc_info=True)
         return _error_response(f"Failed to refund deposit: {str(e)}", 500)
+
+
+# Bulk refund for end-of-event cleanup. Refunds every hacker whose deposit is
+# paid + disposition=refund for the given event. Donate-disposition hackers
+# are excluded by design (override is a per-row decision).
+@bp.route('/admin/hackathon/<event_id>/refund-eligible-deposits', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_bulk_refund_eligible_deposits(user, org, event_id):
+    try:
+        result = bulk_refund_eligible_hacker_deposits(
+            event_id=event_id,
+            admin_user_id=user.user_id,
+        )
+        send_slack_audit(
+            action="hacker_deposit_bulk_refund",
+            message=(
+                f"{user.user_id} ran bulk refund for event {event_id}: "
+                f"{len(result['refunded'])} refunded "
+                f"(${result['total_amount_cents'] / 100:.2f}), "
+                f"{len(result['failed'])} failed"
+            ),
+        )
+        return _success_response(result, "Bulk refund processed")
+    except Exception as e:
+        logger.error(f"Bulk refund failed for {event_id}: {str(e)}", exc_info=True)
+        return _error_response(f"Bulk refund failed: {str(e)}", 500)
+
+
+# Stripe webhook for hacker-deposit events. Stripe signature is the only auth —
+# no PropelAuth decorator here. Returns 200 for anything we successfully
+# parsed (including events we chose to ignore) so Stripe doesn't retry
+# unnecessarily; only signature/parse failures return 4xx, and only config
+# failures return 5xx.
+@bp.route('/webhooks/stripe/hacker-deposit', methods=['POST'])
+def stripe_webhook_hacker_deposit():
+    payload = request.get_data()
+    sig_header = request.headers.get('Stripe-Signature')
+    try:
+        ok, msg = handle_stripe_hacker_deposit_event(payload, sig_header)
+        logger.info(f"Stripe webhook ok={ok}: {msg}")
+        return {"ok": ok, "message": msg}, 200
+    except ValueError as e:
+        # Signature or payload problem — Stripe should NOT retry these.
+        logger.warning(f"Stripe webhook rejected: {str(e)}")
+        return {"ok": False, "error": str(e)}, 400
+    except RuntimeError as e:
+        # Server misconfiguration (missing webhook secret).
+        logger.error(f"Stripe webhook config error: {str(e)}")
+        return {"ok": False, "error": str(e)}, 500
+    except Exception as e:
+        logger.error(f"Stripe webhook unexpected error: {str(e)}", exc_info=True)
+        # Return 500 so Stripe retries (transient errors are worth retrying).
+        return {"ok": False, "error": str(e)}, 500
 
 
 # Generic hacker routes
