@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, Optional, Tuple
 from flask import Blueprint, request, jsonify
-from common.auth import auth, auth_user
+from common.auth import auth, auth_user, getOrgId
 from common.log import get_logger
 from common.exceptions import InvalidUsageError
 from common.utils.slack import send_slack_audit
@@ -629,10 +629,6 @@ def mentor_checkout_endpoint(event_id):
         logger.error(f"Error during mentor check-out: {str(e)}")
         return _error_response(f"Failed to check out: {str(e)}")
 
-
-def getOrgId(req):
-    # Get the org_id from the req
-    return req.headers.get("X-Org-Id")
 
 @bp.route('/admin/<volunteer_id>/message', methods=['POST'])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
