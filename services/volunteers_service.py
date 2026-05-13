@@ -1275,9 +1275,14 @@ def handle_stripe_hacker_deposit_event(
     message — Stripe needs a 2xx response or it will retry, and the only thing
     a retry helps with is transient errors, not 'we ignored an event by design'.
     """
-    webhook_secret = os.environ.get('STRIPE_WEBHOOK_SECRET')
+    # Renamed from STRIPE_WEBHOOK_SECRET so the hacker-deposit endpoint can't
+    # collide with the store webhook's secret on the frontend. Each Stripe
+    # webhook endpoint in the dashboard has its own signing secret.
+    webhook_secret = os.environ.get('STRIPE_HACKER_DEPOSIT_WEBHOOK_SECRET')
     if not webhook_secret:
-        raise RuntimeError("STRIPE_WEBHOOK_SECRET is not configured on this server")
+        raise RuntimeError(
+            "STRIPE_HACKER_DEPOSIT_WEBHOOK_SECRET is not configured on this server"
+        )
     if not sig_header:
         raise ValueError("Missing Stripe-Signature header")
 
