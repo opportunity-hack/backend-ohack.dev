@@ -10,6 +10,7 @@ from services.volunteers_service import (
     get_volunteers_by_event,
     create_or_update_volunteer,
     update_volunteer_selection,
+    refund_hacker_deposit,
     get_all_hackers_by_event_id,
     get_mentor_checkin_status,
     mentor_checkin,
@@ -380,13 +381,13 @@ def admin_update_selection(user, org, volunteer_id):
     try:
         data = _process_request()
         selected = data.get('selected', False)
-        
+
         updated_volunteer = update_volunteer_selection(
             volunteer_id=volunteer_id,
             selected=selected,
             updated_by=user.user_id
         )
-        
+
         if updated_volunteer:
             return _success_response(updated_volunteer, "Selection status updated successfully")
         else:
@@ -394,7 +395,45 @@ def admin_update_selection(user, org, volunteer_id):
     except Exception as e:
         logger.error(f"Error updating volunteer selection: {str(e)}")
         return _error_response(f"Failed to update selection status: {str(e)}")
-    
+
+
+# Admin hacker deposit refund — irreversible, real money. Uses the stricter
+# volunteer.admin permission rather than the lighter "all" used for isSelected
+# toggles.
+@bp.route('/admin/hacker/<volunteer_id>/refund-deposit', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_refund_hacker_deposit(user, org, volunteer_id):
+    """Issue a Stripe refund for a hacker's deposit. Body: {"override": bool}."""
+    try:
+        data = _process_request()
+        override = bool(data.get('override', False))
+
+        updated = refund_hacker_deposit(
+            volunteer_id=volunteer_id,
+            admin_user_id=user.user_id,
+            override=override,
+        )
+        send_slack_audit(
+            action="hacker_deposit_refund",
+            message=(
+                f"{user.user_id} refunded hacker deposit for volunteer {volunteer_id} "
+                f"(refund_id={updated.get('deposit_refund_id')}, "
+                f"amount_cents={updated.get('deposit_refund_amount_cents')}, "
+                f"override={override})"
+            ),
+        )
+        return _success_response(updated, "Deposit refunded successfully")
+    except ValueError as e:
+        # Caller-facing validation errors — bad state, missing PI, donate-without-override.
+        return _error_response(str(e), 400)
+    except RuntimeError as e:
+        # Stripe rejection or missing API key — upstream/config problem.
+        return _error_response(str(e), 502)
+    except Exception as e:
+        logger.error(f"Error refunding hacker deposit: {str(e)}", exc_info=True)
+        return _error_response(f"Failed to refund deposit: {str(e)}", 500)
+
+
 # Generic hacker routes
 @bp.route('/hacker/application/<event_id>/submit', methods=['POST'])
 @auth.optional_user

@@ -14,6 +14,7 @@ from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, 
 import os
 import requests
 import resend
+import stripe
 import markdown
 import re
 import base64
@@ -1037,15 +1038,130 @@ def update_volunteer_selection(volunteer_id: str, selected: bool, updated_by: st
     }
     
     volunteer_ref.update(update_data)
-    
+
     # Clear all related caches
     user_id = volunteer_data.get('user_id')
     email = volunteer_data.get('email')
     event_id = volunteer_data.get('event_id')
     volunteer_type = volunteer_data.get('volunteer_type')
     _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
-    
+
     return {**volunteer_data, **update_data}
+
+
+def refund_hacker_deposit(
+    volunteer_id: str,
+    admin_user_id: str,
+    override: bool = False,
+) -> Dict[str, Any]:
+    """Issue a Stripe refund for a hacker's deposit and update the volunteer doc.
+
+    Ordering matters: Stripe is the irreversible step, so we call Stripe FIRST and
+    then update Firestore. If Firestore fails AFTER a successful refund, the
+    refund_id is in the Stripe dashboard and the failure is logged for human
+    reconciliation — we do NOT try to undo the refund.
+
+    Raises ValueError for caller-facing validation errors (400-class), and
+    RuntimeError when Stripe rejects the refund or the secret key is missing
+    (502-class).
+    """
+    db = get_db()
+    volunteer_ref = db.collection('volunteers').document(volunteer_id)
+    snapshot = volunteer_ref.get()
+    if not snapshot.exists:
+        raise ValueError("Volunteer not found")
+    volunteer_data = snapshot.to_dict()
+
+    if volunteer_data.get('volunteer_type') != 'hacker':
+        raise ValueError("Only hacker deposits can be refunded via this endpoint")
+
+    payment_intent_id = volunteer_data.get('stripe_payment_intent_id')
+    if not payment_intent_id:
+        raise ValueError("This hacker has no recorded deposit payment")
+
+    current_status = volunteer_data.get('deposit_status') or 'paid'
+    if current_status == 'refunded':
+        raise ValueError("Deposit has already been refunded")
+
+    disposition = volunteer_data.get('deposit_disposition')
+    if disposition == 'donate' and not override:
+        raise ValueError(
+            "This hacker chose to donate. Pass override=true to refund anyway."
+        )
+
+    stripe_api_key = os.environ.get('STRIPE_SECRET_KEY')
+    if not stripe_api_key:
+        raise RuntimeError("STRIPE_SECRET_KEY is not configured on this server")
+    stripe.api_key = stripe_api_key
+
+    now = _get_current_timestamp()
+
+    try:
+        refund = stripe.Refund.create(
+            payment_intent=payment_intent_id,
+            metadata={
+                'volunteer_id': volunteer_id,
+                'event_id': volunteer_data.get('event_id', ''),
+                'admin_user_id': admin_user_id,
+                'override': 'true' if override else 'false',
+            },
+        )
+    except stripe.error.StripeError as e:
+        # Surface the failure on the doc so the admin sees it without re-grepping logs.
+        msg = getattr(e, 'user_message', None) or str(e)
+        fail_update = {
+            'deposit_status': 'refund_failed',
+            'deposit_refund_status_msg': msg,
+            'updated_by': admin_user_id,
+            'updated_timestamp': now,
+        }
+        try:
+            volunteer_ref.update(fail_update)
+        except Exception as inner:
+            exception(
+                logger,
+                "Failed to persist refund_failed status",
+                exc_info=inner,
+                volunteer_id=volunteer_id,
+            )
+        exception(
+            logger,
+            "Stripe refund failed",
+            exc_info=e,
+            volunteer_id=volunteer_id,
+            payment_intent_id=payment_intent_id,
+        )
+        raise RuntimeError(f"Stripe refund failed: {msg}")
+
+    update_data = {
+        'deposit_status': 'refunded',
+        'deposit_refund_id': refund.id,
+        'deposit_refund_amount_cents': refund.amount,
+        'deposit_refunded_at': now,
+        'deposit_refunded_by': admin_user_id,
+        'deposit_refund_status_msg': None,
+        'updated_by': admin_user_id,
+        'updated_timestamp': now,
+    }
+    volunteer_ref.update(update_data)
+
+    user_id = volunteer_data.get('user_id')
+    email = volunteer_data.get('email')
+    event_id = volunteer_data.get('event_id')
+    volunteer_type = volunteer_data.get('volunteer_type')
+    _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+
+    info(
+        logger,
+        "Hacker deposit refunded",
+        volunteer_id=volunteer_id,
+        refund_id=refund.id,
+        amount_cents=refund.amount,
+        admin_user_id=admin_user_id,
+        override=override,
+    )
+
+    return {**volunteer_data, **update_data, 'id': volunteer_id}
 
 
 def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:
