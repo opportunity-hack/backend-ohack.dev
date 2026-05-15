@@ -116,3 +116,11 @@ To send a Slack DM, pass the Slack user ID as `channel`: `send_slack(message=...
 - `User.user_id` = PropelAuth user ID (the `propel_id`, what's stored in `assignees[]`, `editors[]`, etc.).
 
 These are DIFFERENT VALUES. When bundling user data for the frontend, include both: `{user_id: propel_id, db_id: firestore_doc_id, name, profile_image}`. The frontend needs `db_id` to build profile links and `user_id` (propel) for matching against assignees/editors/mentions.
+
+## Hackathon roster import + audit scripts
+Two scripts live in `scripts/` for diagnosing and backfilling team rosters on `/hack/<event_id>`:
+
+- `audit_hackathon_team_users.py --event-id <id>` (read-only) — walks `hackathons/{id}.teams[] -> teams/{id}.users[]` and reports per-team member counts, dangling refs (team points to deleted user doc), and "ghost" users (no name + no propel_id = imported but never logged in).
+- `import_hackathon_users_from_csv.py --csv <path> --event-id <id> --csv-type {registrants|projects|roster} [--apply]` — dry-run by default. `projects` parses Devpost projects CSVs (variable-length team-member triplets starting at col 22, 1-indexed); `roster` parses a generic `team,email[,first_name,last_name,name]` CSV for backfilling memberships; `registrants` just seeds user docs. Users are matched by `email_address` (case-insensitive). Imported users get `imported=True`, `import_source`, `import_event_id`, blank `user_id`/`propel_id`. Team membership writes are additive — never removes existing members. Re-runnable.
+
+The frontend `/hack/<event_id>` page's "Team Members:" list is `teams.users[]` (DocumentReferences). The bug pattern that motivated this: a team's `users[]` only contains the user who created the team on ohack.dev; everyone else registered via Devpost/JotForm and was never linked. Use `audit` first to confirm, then `import ... --csv-type roster` (or `projects` for old Devpost exports) to backfill.

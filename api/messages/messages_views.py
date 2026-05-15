@@ -72,6 +72,8 @@ from services.hackathons_service import (
     update_hackathon_visible_problem_statements,
     get_hackathon_list,
     get_volunteer_by_event,
+    get_hackathon_funnel,
+    get_hackathon_funnel_aggregate,
 )
 
 logger = get_logger("messages_views")
@@ -291,6 +293,18 @@ def get_volunteers_checked_in_by_event_api(event_id, volunteer_type):
 def get_single_hackathon_by_event(event_id):
     logger.info(f"GET /hackathon/{event_id} called")
     return (get_single_hackathon_event(event_id))
+
+
+@bp.route("/hackathon/<event_id>/funnel", methods=["GET"])
+def get_hackathon_funnel_by_event(event_id):
+    logger.info(f"GET /hackathon/{event_id}/funnel called")
+    return get_hackathon_funnel(event_id)
+
+
+@bp.route("/hackathons/funnel/aggregate", methods=["GET"])
+def get_hackathon_funnel_aggregate_api():
+    logger.info("GET /hackathons/funnel/aggregate called")
+    return get_hackathon_funnel_aggregate()
 
 # -- Public APIs that call get_volunteer_by_event with admin=False
 @bp.route("/hackathon/<event_id>/mentor", methods=["GET"])
