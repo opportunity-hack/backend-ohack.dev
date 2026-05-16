@@ -7,6 +7,7 @@ from functools import lru_cache
 from ratelimiter import RateLimiter
 from db.db import get_db
 from google.cloud import firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.log import get_logger, info, debug, warning, error, exception
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern, get_cached, set_cached
@@ -14,6 +15,7 @@ from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, 
 import os
 import requests
 import resend
+import stripe
 import markdown
 import re
 import base64
@@ -1037,15 +1039,408 @@ def update_volunteer_selection(volunteer_id: str, selected: bool, updated_by: st
     }
     
     volunteer_ref.update(update_data)
-    
+
     # Clear all related caches
     user_id = volunteer_data.get('user_id')
     email = volunteer_data.get('email')
     event_id = volunteer_data.get('event_id')
     volunteer_type = volunteer_data.get('volunteer_type')
     _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
-    
+
     return {**volunteer_data, **update_data}
+
+
+def refund_hacker_deposit(
+    volunteer_id: str,
+    admin_user_id: str,
+    override: bool = False,
+) -> Dict[str, Any]:
+    """Issue a Stripe refund for a hacker's deposit and update the volunteer doc.
+
+    Ordering matters: Stripe is the irreversible step, so we call Stripe FIRST and
+    then update Firestore. If Firestore fails AFTER a successful refund, the
+    refund_id is in the Stripe dashboard and the failure is logged for human
+    reconciliation — we do NOT try to undo the refund.
+
+    Raises ValueError for caller-facing validation errors (400-class), and
+    RuntimeError when Stripe rejects the refund or the secret key is missing
+    (502-class).
+    """
+    db = get_db()
+    volunteer_ref = db.collection('volunteers').document(volunteer_id)
+    snapshot = volunteer_ref.get()
+    if not snapshot.exists:
+        raise ValueError("Volunteer not found")
+    volunteer_data = snapshot.to_dict()
+
+    if volunteer_data.get('volunteer_type') != 'hacker':
+        raise ValueError("Only hacker deposits can be refunded via this endpoint")
+
+    payment_intent_id = volunteer_data.get('stripe_payment_intent_id')
+    if not payment_intent_id:
+        raise ValueError("This hacker has no recorded deposit payment")
+
+    current_status = volunteer_data.get('deposit_status') or 'paid'
+    if current_status == 'refunded':
+        raise ValueError("Deposit has already been refunded")
+
+    disposition = volunteer_data.get('deposit_disposition')
+    if disposition == 'donate' and not override:
+        raise ValueError(
+            "This hacker chose to donate. Pass override=true to refund anyway."
+        )
+
+    stripe_api_key = os.environ.get('STRIPE_SECRET_KEY')
+    if not stripe_api_key:
+        raise RuntimeError("STRIPE_SECRET_KEY is not configured on this server")
+    stripe.api_key = stripe_api_key
+
+    now = _get_current_timestamp()
+
+    try:
+        refund = stripe.Refund.create(
+            payment_intent=payment_intent_id,
+            metadata={
+                'volunteer_id': volunteer_id,
+                'event_id': volunteer_data.get('event_id', ''),
+                'admin_user_id': admin_user_id,
+                'override': 'true' if override else 'false',
+            },
+        )
+    except stripe.error.StripeError as e:
+        # Surface the failure on the doc so the admin sees it without re-grepping logs.
+        msg = getattr(e, 'user_message', None) or str(e)
+        fail_update = {
+            'deposit_status': 'refund_failed',
+            'deposit_refund_status_msg': msg,
+            'updated_by': admin_user_id,
+            'updated_timestamp': now,
+        }
+        try:
+            volunteer_ref.update(fail_update)
+        except Exception as inner:
+            exception(
+                logger,
+                "Failed to persist refund_failed status",
+                exc_info=inner,
+                volunteer_id=volunteer_id,
+            )
+        exception(
+            logger,
+            "Stripe refund failed",
+            exc_info=e,
+            volunteer_id=volunteer_id,
+            payment_intent_id=payment_intent_id,
+        )
+        raise RuntimeError(f"Stripe refund failed: {msg}")
+
+    update_data = {
+        'deposit_status': 'refunded',
+        'deposit_refund_id': refund.id,
+        'deposit_refund_amount_cents': refund.amount,
+        'deposit_refunded_at': now,
+        'deposit_refunded_by': admin_user_id,
+        'deposit_refund_status_msg': None,
+        'updated_by': admin_user_id,
+        'updated_timestamp': now,
+    }
+    volunteer_ref.update(update_data)
+
+    user_id = volunteer_data.get('user_id')
+    email = volunteer_data.get('email')
+    event_id = volunteer_data.get('event_id')
+    volunteer_type = volunteer_data.get('volunteer_type')
+    _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+
+    info(
+        logger,
+        "Hacker deposit refunded",
+        volunteer_id=volunteer_id,
+        refund_id=refund.id,
+        amount_cents=refund.amount,
+        admin_user_id=admin_user_id,
+        override=override,
+    )
+
+    return {**volunteer_data, **update_data, 'id': volunteer_id}
+
+
+def bulk_refund_eligible_hacker_deposits(
+    event_id: str,
+    admin_user_id: str,
+) -> Dict[str, Any]:
+    """Refund every hacker for this event whose deposit is paid + disposition=refund.
+
+    Excludes donate-disposition (override is a per-row decision by design) and
+    refund_failed rows (those likely need human triage; admin can retry per-row).
+    Per-row failures are collected, not fatal — one bad row does not abort the
+    rest of the batch.
+    """
+    db = get_db()
+    query = (
+        db.collection('volunteers')
+        .where(filter=FieldFilter('event_id', '==', event_id))
+        .where(filter=FieldFilter('volunteer_type', '==', 'hacker'))
+        .where(filter=FieldFilter('deposit_status', '==', 'paid'))
+        .where(filter=FieldFilter('deposit_disposition', '==', 'refund'))
+    )
+
+    refunded = []
+    failed = []
+    total_amount_cents = 0
+
+    for snap in query.stream():
+        vol_id = snap.id
+        doc = snap.to_dict()
+        display_name = doc.get('name') or doc.get('email') or vol_id
+        try:
+            updated = refund_hacker_deposit(
+                volunteer_id=vol_id,
+                admin_user_id=admin_user_id,
+                override=False,
+            )
+            amount = updated.get('deposit_refund_amount_cents') or 0
+            refunded.append({
+                'id': vol_id,
+                'name': display_name,
+                'email': doc.get('email'),
+                'amount_cents': amount,
+            })
+            total_amount_cents += amount
+        except Exception as e:  # noqa: BLE001 — surface every error per-row
+            failed.append({
+                'id': vol_id,
+                'name': display_name,
+                'email': doc.get('email'),
+                'error': str(e),
+            })
+            exception(
+                logger,
+                "Bulk refund failed for volunteer",
+                exc_info=e,
+                volunteer_id=vol_id,
+            )
+
+    info(
+        logger,
+        "Bulk refund batch complete",
+        event_id=event_id,
+        admin_user_id=admin_user_id,
+        refunded_count=len(refunded),
+        failed_count=len(failed),
+        total_amount_cents=total_amount_cents,
+    )
+
+    return {
+        'refunded': refunded,
+        'failed': failed,
+        'total_amount_cents': total_amount_cents,
+    }
+
+
+def _find_hacker_by_email_and_event(email: str, event_id: str) -> Optional[Tuple[str, Dict[str, Any]]]:
+    """Return (doc_id, doc_dict) for the most-recent hacker app matching email+event, or None."""
+    if not email or not event_id:
+        return None
+    db = get_db()
+    query = (
+        db.collection('volunteers')
+        .where(filter=FieldFilter('event_id', '==', event_id))
+        .where(filter=FieldFilter('volunteer_type', '==', 'hacker'))
+        .where(filter=FieldFilter('email', '==', email))
+    )
+    # Pick the most recently updated one in Python (avoids requiring a composite index).
+    best_snap = None
+    best_ts = ''
+    for snap in query.stream():
+        data = snap.to_dict() or {}
+        ts = data.get('updated_timestamp') or data.get('timestamp') or ''
+        if ts >= best_ts:
+            best_snap = snap
+            best_ts = ts
+    if not best_snap:
+        return None
+    return best_snap.id, best_snap.to_dict()
+
+
+def handle_stripe_hacker_deposit_event(
+    payload_bytes: bytes,
+    sig_header: Optional[str],
+) -> Tuple[bool, str]:
+    """Verify and process a Stripe webhook event for the hacker-deposit flow.
+
+    Returns (ok, message). Raises ValueError for bad signatures (caller should
+    return 400) and RuntimeError for config issues (caller should return 500).
+    All other event-specific issues are returned as ok=True with a descriptive
+    message — Stripe needs a 2xx response or it will retry, and the only thing
+    a retry helps with is transient errors, not 'we ignored an event by design'.
+    """
+    # Renamed from STRIPE_WEBHOOK_SECRET so the hacker-deposit endpoint can't
+    # collide with the store webhook's secret on the frontend. Each Stripe
+    # webhook endpoint in the dashboard has its own signing secret.
+    webhook_secret = os.environ.get('STRIPE_HACKER_DEPOSIT_WEBHOOK_SECRET')
+    if not webhook_secret:
+        raise RuntimeError(
+            "STRIPE_HACKER_DEPOSIT_WEBHOOK_SECRET is not configured on this server"
+        )
+    if not sig_header:
+        raise ValueError("Missing Stripe-Signature header")
+
+    stripe_api_key = os.environ.get('STRIPE_SECRET_KEY')
+    if stripe_api_key:
+        stripe.api_key = stripe_api_key
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload_bytes,
+            sig_header=sig_header,
+            secret=webhook_secret,
+        )
+    except ValueError as e:
+        raise ValueError(f"Invalid payload: {e}")
+    except stripe.error.SignatureVerificationError as e:
+        raise ValueError(f"Signature verification failed: {e}")
+
+    event_type = event.get('type')
+    obj = event.get('data', {}).get('object', {}) or {}
+
+    if event_type == 'checkout.session.completed':
+        return _handle_checkout_session_completed(obj)
+    if event_type == 'charge.refunded':
+        return _handle_charge_refunded(obj)
+
+    return True, f"Ignored event type {event_type}"
+
+
+def _handle_checkout_session_completed(session: Dict[str, Any]) -> Tuple[bool, str]:
+    """Self-heal the volunteer doc when Stripe confirms a checkout payment.
+
+    The volunteer doc is created when the hacker clicks Submit on the
+    application form AFTER returning from Stripe. The webhook may arrive
+    before, during, or after that submit. When it arrives BEFORE, there's
+    nothing to update and we no-op — the form submit handler still records
+    the deposit from its own session-status read.
+
+    When the webhook arrives AFTER, we update missing deposit fields. We
+    never regress state: a doc already in 'refunded' stays refunded.
+    """
+    metadata = session.get('metadata') or {}
+    if metadata.get('kind') != 'hacker_deposit':
+        return True, "Ignored: not a hacker_deposit checkout"
+
+    event_id = metadata.get('event_id')
+    email = (
+        metadata.get('hacker_email')
+        or session.get('customer_email')
+        or (session.get('customer_details') or {}).get('email')
+    )
+    payment_intent_id = session.get('payment_intent')
+    amount_total = session.get('amount_total')
+    disposition = metadata.get('disposition') or 'refund'
+
+    if not (event_id and email and payment_intent_id):
+        return True, (
+            f"Skipped: missing fields (event_id={event_id}, "
+            f"email={'set' if email else 'none'}, "
+            f"payment_intent={'set' if payment_intent_id else 'none'})"
+        )
+
+    match = _find_hacker_by_email_and_event(email, event_id)
+    if not match:
+        # Application doc not yet created. The form-submit path will record
+        # the deposit when the hacker hits Submit; no action needed here.
+        warning(
+            logger,
+            "Webhook: no volunteer doc yet — deposit recorded only in Stripe for now",
+            event_id=event_id,
+            payment_intent_id=payment_intent_id,
+        )
+        return True, "No matching volunteer doc (webhook beat submit)"
+
+    vol_id, doc = match
+    if doc.get('deposit_status') == 'refunded':
+        return True, "Already refunded — not regressing"
+    if (
+        doc.get('deposit_status') == 'paid'
+        and doc.get('stripe_payment_intent_id') == payment_intent_id
+    ):
+        return True, "Already paid (idempotent no-op)"
+
+    db = get_db()
+    update = {
+        'deposit_status': 'paid',
+        'stripe_payment_intent_id': payment_intent_id,
+        'deposit_amount_cents': amount_total,
+        # Preserve a previously-stored disposition; only fill in if missing.
+        'deposit_disposition': doc.get('deposit_disposition') or disposition,
+        'updated_timestamp': _get_current_timestamp(),
+    }
+    db.collection('volunteers').document(vol_id).update(update)
+    _clear_volunteer_caches(
+        doc.get('user_id'), email, event_id, 'hacker',
+    )
+    info(
+        logger,
+        "Webhook self-healed paid deposit",
+        volunteer_id=vol_id,
+        payment_intent_id=payment_intent_id,
+    )
+    return True, f"Self-healed volunteer {vol_id}"
+
+
+def _handle_charge_refunded(charge: Dict[str, Any]) -> Tuple[bool, str]:
+    """Confirm a refund settled. Only acts on refunds we created (volunteer_id metadata)."""
+    refunds_data = (charge.get('refunds') or {}).get('data') or []
+    our_refund = None
+    for r in refunds_data:
+        rmeta = r.get('metadata') or {}
+        if rmeta.get('volunteer_id'):
+            our_refund = r
+            break
+    if not our_refund:
+        return True, "Ignored charge.refunded — no hacker_deposit refund metadata"
+
+    volunteer_id = our_refund['metadata']['volunteer_id']
+    refund_id = our_refund['id']
+    refund_amount = our_refund.get('amount')
+
+    db = get_db()
+    doc_ref = db.collection('volunteers').document(volunteer_id)
+    snap = doc_ref.get()
+    if not snap.exists:
+        return True, f"No volunteer doc for {volunteer_id}"
+    doc = snap.to_dict()
+    if (
+        doc.get('deposit_status') == 'refunded'
+        and doc.get('deposit_refund_id') == refund_id
+    ):
+        return True, "Already recorded as refunded (idempotent)"
+
+    update = {
+        'deposit_status': 'refunded',
+        'deposit_refund_id': refund_id,
+        'deposit_refund_amount_cents': refund_amount,
+        'deposit_refund_status_msg': None,
+        'updated_timestamp': _get_current_timestamp(),
+    }
+    if not doc.get('deposit_refunded_at'):
+        update['deposit_refunded_at'] = _get_current_timestamp()
+    if not doc.get('deposit_refunded_by'):
+        update['deposit_refunded_by'] = (
+            our_refund['metadata'].get('admin_user_id') or 'stripe_webhook'
+        )
+
+    doc_ref.update(update)
+    _clear_volunteer_caches(
+        doc.get('user_id'), doc.get('email'), doc.get('event_id'), 'hacker',
+    )
+    info(
+        logger,
+        "Webhook confirmed refund settled",
+        volunteer_id=volunteer_id,
+        refund_id=refund_id,
+    )
+    return True, f"Recorded refund for {volunteer_id}"
 
 
 def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:

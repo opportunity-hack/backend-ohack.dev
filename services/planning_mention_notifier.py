@@ -22,13 +22,13 @@ import os
 import re
 from cachetools import TTLCache, cached
 
-from common.utils.slack import send_slack
-
 logger = logging.getLogger("planning_mention_notifier")
 
 # Token: @[Name with spaces & punctuation](propel_user_id)
-# Name allows anything but `]`, propel_user_id is alphanumeric + dashes/underscores.
-MENTION_RE = re.compile(r"@\[([^\]]{1,80})\]\(([A-Za-z0-9_\-|]{1,64})\)")
+# Name is non-greedy so display names containing `]` (e.g. "Greg V [Staff/Mentor]")
+# parse correctly — the trailing `](propel_id)` is unambiguous given the
+# restricted propel_id charset.
+MENTION_RE = re.compile(r"@\[(.{1,120}?)\]\(([A-Za-z0-9_\-|]{1,64})\)", re.DOTALL)
 
 
 def parse_mention_ids(text: str):
@@ -44,7 +44,22 @@ def parse_mention_ids(text: str):
 def _get_oauth_user_cached(propel_id):
     try:
         from services.users_service import get_oauth_user_from_propel_user_id
-        return get_oauth_user_from_propel_user_id(propel_id)
+        result = get_oauth_user_from_propel_user_id(propel_id)
+        if result:
+            # Self-heal: a successful resolve means this user CAN be looked
+            # up. Drop any stale negative cache in planning_views and seed
+            # a Firestore record so future board snapshots get them via
+            # the fast fetch_users() path instead of repeating PropelAuth.
+            try:
+                from api.planning.planning_views import (
+                    invalidate_user_profile_cache,
+                    _seed_firestore_user_from_oauth,
+                )
+                invalidate_user_profile_cache(propel_id)
+                _seed_firestore_user_from_oauth(propel_id, result)
+            except Exception:
+                logger.exception("Self-heal hook failed for %s (non-fatal)", propel_id)
+        return result
     except Exception:
         logger.exception("Failed to fetch OAuth user for %s", propel_id)
         return None
@@ -64,13 +79,43 @@ def _extract_email(oauth_user):
 
 
 def _send_slack_dm(slack_user_id, message):
-    """chat.postMessage to a user ID opens (or reuses) a DM channel."""
+    """chat.postMessage to a user ID opens (or reuses) a DM channel.
+
+    Bypasses common.utils.slack.send_slack — that helper silently swallows
+    SlackApiError, which made every DM look successful even when Slack
+    actually rejected it (account_inactive, user_not_found, etc.).
+    """
     try:
-        send_slack(message=message, channel=slack_user_id)
-        return True
-    except Exception:
-        logger.exception("Slack DM failed for %s", slack_user_id)
-        return False
+        from common.utils.slack import get_client
+        from slack_sdk.errors import SlackApiError
+        from slack_sdk.models.blocks import SectionBlock
+
+        client = get_client()
+        try:
+            resp = client.chat_postMessage(
+                channel=slack_user_id,
+                text=message,
+                blocks=[SectionBlock(text={"type": "mrkdwn", "text": message})],
+                username="Hackathon Bot",
+                icon_url="https://cdn.ohack.dev/ohack.dev/logos/OpportunityHack_2Letter_Light_Blue.png",
+            )
+            ts = (resp or {}).get("ts")
+            logger.info("Slack DM sent to user %s (ts=%s)", slack_user_id, ts)
+            return True, None
+        except SlackApiError as e:
+            err = (e.response or {}).get("error") or str(e)
+            logger.error("Slack DM rejected for user %s: %s", slack_user_id, err)
+            return False, err
+    except Exception as e:
+        logger.exception("Slack DM unexpected error for %s", slack_user_id)
+        return False, str(e)
+
+
+# Resend "from" must be a verified sender. The proven working domain in
+# email_service.py is notifs.ohack.org — ohack.dev itself is not verified
+# in our Resend account, so welcome@ohack.dev / noreply@ohack.dev get
+# rejected silently. Override via MENTION_EMAIL_FROM env var if needed.
+DEFAULT_MENTION_FROM = "Opportunity Hack <welcome@notifs.ohack.org>"
 
 
 def _send_email(to_email, subject, html_body):
@@ -80,9 +125,9 @@ def _send_email(to_email, subject, html_body):
         api_key = os.getenv("RESEND_WELCOME_EMAIL_KEY") or os.getenv("RESEND_API_KEY")
         if not api_key:
             logger.warning("No Resend API key configured; skipping mention email to %s", to_email)
-            return False
+            return False, "no Resend API key configured"
         resend.api_key = api_key
-        from_addr = os.getenv("MENTION_EMAIL_FROM", "Opportunity Hack <noreply@ohack.dev>")
+        from_addr = os.getenv("MENTION_EMAIL_FROM", DEFAULT_MENTION_FROM)
         params = {
             "from": from_addr,
             "to": to_email,
@@ -90,11 +135,13 @@ def _send_email(to_email, subject, html_body):
             "html": html_body,
         }
         msg = resend.Emails.SendParams(params)
-        resend.Emails.send(msg)
-        return True
-    except Exception:
+        result = resend.Emails.send(msg)
+        rid = (result or {}).get("id") if isinstance(result, dict) else None
+        logger.info("Email sent to %s via Resend (id=%s, from=%s)", to_email, rid, from_addr)
+        return True, None
+    except Exception as e:
         logger.exception("Email send failed to %s", to_email)
-        return False
+        return False, str(e)
 
 
 def notify_mentions(
@@ -111,23 +158,42 @@ def notify_mentions(
 
     Returns dict {propel_id: "slack" | "email" | "skipped"}.
     """
+    logger.info(
+        "Mention dispatch started: actor=%s event=%s card=%s mentions=%d",
+        actor_propel_id, hackathon_event_id, card_id, len(mentioned_propel_ids),
+    )
+
     results = {}
     for pid in mentioned_propel_ids:
-        if pid == actor_propel_id:
-            results[pid] = "skipped"
+        oauth_user = _get_oauth_user_cached(pid)
+        if oauth_user is None:
+            logger.warning(
+                "Mention -> %s: PropelAuth OAuth lookup returned None — "
+                "user may not have a refreshable OAuth token",
+                pid,
+            )
+            results[pid] = "oauth-lookup-failed"
             continue
 
-        oauth_user = _get_oauth_user_cached(pid)
         slack_id = _extract_slack_user_id(oauth_user)
         email = _extract_email(oauth_user)
-        plan_url = f"https://www.ohack.dev/hack/{hackathon_event_id}/plan"
+        provider = "slack" if slack_id else ("google" if email else "unknown")
+        logger.info(
+            "Mention -> %s: resolved provider=%s slack_id=%s email=%s",
+            pid, provider, slack_id, ("***@" + email.split("@", 1)[1]) if email else None,
+        )
+        plan_url = f"https://www.ohack.dev/hack/{hackathon_event_id}/plan/c/{card_id}"
 
         if not slack_id and not email:
-            logger.warning("No Slack ID or email for mentioned user %s; dropping notification", pid)
+            logger.warning(
+                "Mention -> %s: no Slack ID or email available; dropping notification",
+                pid,
+            )
             results[pid] = "no-channel"
             continue
 
         sent = []
+        errors = []
 
         # Slack DM (when Slack OAuth identity exists). Both Slack-auth and
         # Google-auth users have email; only Slack-auth has a Slack user ID.
@@ -137,10 +203,13 @@ def notify_mentions(
             msg = (
                 f"📋 *{actor_name}* mentioned you in *{card_title}*\n"
                 f">{preview}\n"
-                f"<{plan_url}|Open the planning board>"
+                f"<{plan_url}|Open card on the planning board>"
             )
-            if _send_slack_dm(slack_id, msg):
+            ok, err = _send_slack_dm(slack_id, msg)
+            if ok:
                 sent.append("slack")
+            else:
+                errors.append(f"slack:{err}")
 
         # Email — sent in addition to Slack so the mention is also durable
         # in the recipient's inbox (Slack-only mentions get buried fast).
@@ -153,15 +222,28 @@ def notify_mentions(
                 f"<strong>{card_title}</strong>:</p>"
                 f"<blockquote style=\"border-left:3px solid #1976d2;padding-left:8px;color:#444;\">"
                 f"{preview_html}</blockquote>"
-                f"<p><a href=\"{plan_url}\">Open the planning board</a></p>"
+                f"<p><a href=\"{plan_url}\">Open card on the planning board</a></p>"
                 f"<p style=\"color:#888;font-size:12px;\">"
-                f"You’re getting this because someone mentioned you in a comment on a "
+                f"You're getting this because someone mentioned you in a comment on a "
                 f"public Opportunity Hack planning board.</p>"
             )
             subject = f"[OHack] {actor_name} mentioned you on the {hackathon_event_id} board"
-            if _send_email(email, subject, html):
+            ok, err = _send_email(email, subject, html)
+            if ok:
                 sent.append("email")
+            else:
+                errors.append(f"email:{err}")
 
-        results[pid] = "+".join(sent) if sent else "failed"
+        if sent:
+            outcome = "+".join(sent)
+            if errors:
+                outcome += f" (partial; failures: {', '.join(errors)})"
+            results[pid] = outcome
+            logger.info("Mention -> %s: %s", pid, outcome)
+        else:
+            outcome = f"failed ({', '.join(errors)})" if errors else "failed"
+            results[pid] = outcome
+            logger.error("Mention -> %s: %s", pid, outcome)
 
+    logger.info("Mention dispatch complete: %s", results)
     return results

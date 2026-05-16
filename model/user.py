@@ -49,10 +49,10 @@ class User:
         u.teams = []
         u.volunteering = []
         u.id = d['id']
-        u.email_address = d['email_address']
-        u.last_login = d['last_login']
-        u.user_id = d['user_id']
-        u.profile_image = d['profile_image']
+        u.email_address = d.get('email_address', '')
+        u.last_login = d.get('last_login')
+        u.user_id = d.get('user_id', '')
+        u.profile_image = d.get('profile_image')
         u.name = d['name'] if 'name' in d else ''
         u.nickname = d['nickname'] if 'nickname' in d else ''
         u.expertise = d['expertise'] if 'expertise' in d else ''

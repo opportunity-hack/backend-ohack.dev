@@ -45,6 +45,8 @@ def clear_cache():
     get_single_hackathon_event.cache_clear()
     get_single_hackathon_id.cache_clear()
     get_hackathon_list.cache_clear()
+    get_hackathon_funnel.cache_clear()
+    get_hackathon_funnel_aggregate.cache_clear()
 
 
 def add_nonprofit_to_hackathon(json):
@@ -192,6 +194,312 @@ def get_volunteer_checked_in_by_event(event_id, volunteer_type):
         count = len(results.get("data", [])) if isinstance(results, dict) else 0
         logger.debug(f"get {volunteer_type} end ({count} results)")
         return results
+
+
+@cached(cache=TTLCache(maxsize=200, ttl=300))
+@limits(calls=2000, period=ONE_MINUTE)
+def get_hackathon_funnel(event_id):
+    """
+    Return the "hacker funnel" for a hackathon: registered -> started ->
+    submitted -> won -> founding engineers.
+
+    The first three stages come from a public-safe, PII-free summary doc at
+    hackathons/{doc_id}/funnel/summary (written by
+    scripts/backfill_devpost_funnel.py). The last two are computed live from
+    the teams collection so they're always fresh after judging changes.
+
+    Returns:
+      {
+        "event_id": ...,
+        "summary": {<devpost-derived counts>} | None,
+        "winners": {
+            "won_prize": int,             # any winning status
+            "founding_engineers": int,    # 1st place
+            "completion_support": int,    # 2nd place
+            "category_winner": int,       # category winners
+        },
+        "teams_total": int,
+      }
+    """
+    logger.debug(f"get_hackathon_funnel start event_id={event_id}")
+    db = _get_db()
+
+    docs = list(
+        db.collection("hackathons").where(
+            filter=firestore.FieldFilter("event_id", "==", event_id)
+        ).stream()
+    )
+    if not docs:
+        logger.warning(f"get_hackathon_funnel: hackathon event_id={event_id} not found")
+        return {"event_id": event_id, "summary": None, "winners": None, "teams_total": 0}
+    hackathon_doc = docs[0]
+    hackathon_data = hackathon_doc.to_dict() or {}
+
+    # Pull the devpost-derived summary, if it exists.
+    summary_snap = (
+        db.collection("hackathons")
+        .document(hackathon_doc.id)
+        .collection("funnel")
+        .document("summary")
+        .get()
+    )
+    summary = summary_snap.to_dict() if summary_snap.exists else None
+
+    # Compute winner counts and team-membership counts from the team docs
+    # linked to this hackathon. The funnel reports people (not teams), so
+    # we dedupe user-doc IDs per stage. We also keep per-status TEAM counts
+    # under `*_teams` keys for any consumer that wants them.
+    team_refs = hackathon_data.get("teams") or []
+    won_prize_teams = 0
+    founding_engineers_teams = 0
+    completion_support_teams = 0
+    category_winner_teams = 0
+    unique_team_member_ids = set()       # everyone on any team
+    won_prize_member_ids = set()         # everyone on any winning team
+    founding_engineers_member_ids = set()
+    completion_support_member_ids = set()
+    category_winner_member_ids = set()
+    if team_refs:
+        team_docs = db.get_all(team_refs)
+        for td in team_docs:
+            if not td.exists:
+                continue
+            td_dict = td.to_dict() or {}
+            status = td_dict.get("status") or ""
+            user_ids = [
+                u_ref.id for u_ref in (td_dict.get("users") or [])
+                if hasattr(u_ref, "id") and u_ref.id
+            ]
+            unique_team_member_ids.update(user_ids)
+            if status == "FOUNDING_ENGINEERS":
+                founding_engineers_teams += 1
+                won_prize_teams += 1
+                founding_engineers_member_ids.update(user_ids)
+                won_prize_member_ids.update(user_ids)
+            elif status == "COMPLETION_SUPPORT":
+                completion_support_teams += 1
+                won_prize_teams += 1
+                completion_support_member_ids.update(user_ids)
+                won_prize_member_ids.update(user_ids)
+            elif status == "CATEGORY_WINNER":
+                category_winner_teams += 1
+                won_prize_teams += 1
+                category_winner_member_ids.update(user_ids)
+                won_prize_member_ids.update(user_ids)
+
+    # Count hacker applicants (volunteers/{event_id} with volunteer_type=hacker).
+    # Matches the count surfaced in HackathonResults.js (no isSelected filter
+    # for hackers — every applicant counts).
+    applied_as_hacker = 0
+    try:
+        applied_as_hacker = sum(
+            1
+            for _ in db.collection("volunteers")
+            .where(filter=firestore.FieldFilter("event_id", "==", event_id))
+            .where(filter=firestore.FieldFilter("volunteer_type", "==", "hacker"))
+            .stream()
+        )
+    except Exception as e:
+        logger.warning(f"get_hackathon_funnel: hacker count query failed: {e}")
+
+    result = {
+        "event_id": event_id,
+        "summary": summary,
+        "participation": {
+            "applied_as_hacker": applied_as_hacker,
+            "formed_team": len(unique_team_member_ids),
+        },
+        # All counts here are PEOPLE (deduped by user-doc id). Team counts
+        # are provided alongside under *_teams for any consumer that wants
+        # them, but the funnel UI uses the people counts.
+        "winners": {
+            "won_prize": len(won_prize_member_ids),
+            "founding_engineers": len(founding_engineers_member_ids),
+            "completion_support": len(completion_support_member_ids),
+            "category_winner": len(category_winner_member_ids),
+            "won_prize_teams": won_prize_teams,
+            "founding_engineers_teams": founding_engineers_teams,
+            "completion_support_teams": completion_support_teams,
+            "category_winner_teams": category_winner_teams,
+        },
+        "teams_total": len(team_refs),
+    }
+    logger.info(
+        f"get_hackathon_funnel end event_id={event_id} "
+        f"applied_hacker={applied_as_hacker} formed_team={len(unique_team_member_ids)} "
+        f"won={len(won_prize_member_ids)}p/{won_prize_teams}t "
+        f"founding={len(founding_engineers_member_ids)}p/{founding_engineers_teams}t "
+        f"teams={len(team_refs)} summary={'yes' if summary else 'no'}"
+    )
+    return result
+
+
+@cached(cache=TTLCache(maxsize=1, ttl=600))
+@limits(calls=200, period=ONE_MINUTE)
+def get_hackathon_funnel_aggregate():
+    """
+    Aggregate funnel across every hackathon. No cross-event dedup — a person
+    on multiple events counts in each one, which is what we want for an
+    "all-time" view.
+
+    Returns the same shape as get_hackathon_funnel(), plus:
+      - events_total: int           total hackathons iterated
+      - events_with_summary: int    how many have a funnel/summary doc
+      - events_with_winners: int    how many have at least one winning team
+    """
+    logger.debug("get_hackathon_funnel_aggregate start")
+    from collections import Counter as _Counter
+
+    db = _get_db()
+
+    agg_summary_keys = (
+        "registered", "started_project", "submitted_project", "submitted_gallery_visible",
+        "started_project_teams", "submitted_project_teams", "submitted_gallery_visible_teams",
+    )
+    agg_breakdown_keys = (
+        "status_breakdown", "step_breakdown", "referral_breakdown",
+        "teammate_intent_breakdown", "country_breakdown",
+    )
+
+    summed = {k: 0 for k in agg_summary_keys}
+    breakdowns = {k: _Counter() for k in agg_breakdown_keys}
+
+    applied_as_hacker_total = 0
+    formed_team_total = 0
+    won_prize_total = 0
+    founding_engineers_total = 0
+    completion_support_total = 0
+    category_winner_total = 0
+    won_prize_teams_total = 0
+    founding_engineers_teams_total = 0
+    completion_support_teams_total = 0
+    category_winner_teams_total = 0
+    teams_total = 0
+
+    events_total = 0
+    events_with_summary = 0
+    events_with_winners = 0
+
+    for hackathon_doc in db.collection("hackathons").stream():
+        events_total += 1
+        h_data = hackathon_doc.to_dict() or {}
+        event_id = h_data.get("event_id")
+
+        # Pull the devpost summary doc, if present.
+        summary_snap = (
+            db.collection("hackathons")
+            .document(hackathon_doc.id)
+            .collection("funnel")
+            .document("summary")
+            .get()
+        )
+        if summary_snap.exists:
+            events_with_summary += 1
+            s = summary_snap.to_dict() or {}
+            for k in agg_summary_keys:
+                v = s.get(k)
+                if isinstance(v, (int, float)):
+                    summed[k] += int(v)
+            for k in agg_breakdown_keys:
+                bd = s.get(k) or {}
+                if isinstance(bd, dict):
+                    for label, count in bd.items():
+                        if isinstance(count, (int, float)):
+                            breakdowns[k][label] += int(count)
+
+        # Team membership + winner counts (live, like per-event endpoint).
+        team_refs = h_data.get("teams") or []
+        if team_refs:
+            team_docs = db.get_all(team_refs)
+            event_winners = 0
+            unique_member_ids = set()
+            for td in team_docs:
+                if not td.exists:
+                    continue
+                td_dict = td.to_dict() or {}
+                status = td_dict.get("status") or ""
+                user_ids = [
+                    u.id for u in (td_dict.get("users") or [])
+                    if hasattr(u, "id") and u.id
+                ]
+                unique_member_ids.update(user_ids)
+                # Per-event dedupe (same person on two winning teams in one
+                # event won't double-count). Across events: no dedup.
+                if status == "FOUNDING_ENGINEERS":
+                    founding_engineers_teams_total += 1
+                    won_prize_teams_total += 1
+                    founding_engineers_total += len(set(user_ids))
+                    won_prize_total += len(set(user_ids))
+                    event_winners += 1
+                elif status == "COMPLETION_SUPPORT":
+                    completion_support_teams_total += 1
+                    won_prize_teams_total += 1
+                    completion_support_total += len(set(user_ids))
+                    won_prize_total += len(set(user_ids))
+                    event_winners += 1
+                elif status == "CATEGORY_WINNER":
+                    category_winner_teams_total += 1
+                    won_prize_teams_total += 1
+                    category_winner_total += len(set(user_ids))
+                    won_prize_total += len(set(user_ids))
+                    event_winners += 1
+            formed_team_total += len(unique_member_ids)
+            teams_total += len(team_refs)
+            if event_winners:
+                events_with_winners += 1
+
+        # Hacker applicants for this event (volunteers/{event_id}+hacker).
+        if event_id:
+            try:
+                applied_as_hacker_total += sum(
+                    1
+                    for _ in db.collection("volunteers")
+                    .where(filter=firestore.FieldFilter("event_id", "==", event_id))
+                    .where(filter=firestore.FieldFilter("volunteer_type", "==", "hacker"))
+                    .stream()
+                )
+            except Exception as e:
+                logger.warning(
+                    f"get_hackathon_funnel_aggregate: hacker count failed for {event_id}: {e}"
+                )
+
+    aggregated_summary = {
+        **summed,
+        **{k: dict(v) for k, v in breakdowns.items()},
+        "source": "aggregate",
+        "source_files": [],
+        "last_updated": datetime.now().isoformat(),
+        "last_updated_by": "services/hackathons_service.get_hackathon_funnel_aggregate",
+    }
+
+    result = {
+        "event_id": "__aggregate__",
+        "summary": aggregated_summary,
+        "participation": {
+            "applied_as_hacker": applied_as_hacker_total,
+            "formed_team": formed_team_total,
+        },
+        "winners": {
+            "won_prize": won_prize_total,
+            "founding_engineers": founding_engineers_total,
+            "completion_support": completion_support_total,
+            "category_winner": category_winner_total,
+            "won_prize_teams": won_prize_teams_total,
+            "founding_engineers_teams": founding_engineers_teams_total,
+            "completion_support_teams": completion_support_teams_total,
+            "category_winner_teams": category_winner_teams_total,
+        },
+        "teams_total": teams_total,
+        "events_total": events_total,
+        "events_with_summary": events_with_summary,
+        "events_with_winners": events_with_winners,
+    }
+    logger.info(
+        f"get_hackathon_funnel_aggregate end events={events_total} "
+        f"with_summary={events_with_summary} with_winners={events_with_winners} "
+        f"won={won_prize_total}p founding={founding_engineers_total}p teams={teams_total}"
+    )
+    return result
 
 
 @cached(cache=TTLCache(maxsize=100, ttl=600))

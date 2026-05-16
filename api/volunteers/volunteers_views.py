@@ -1,7 +1,7 @@
 import logging
 from typing import Dict, Any, Optional, Tuple
 from flask import Blueprint, request, jsonify
-from common.auth import auth, auth_user
+from common.auth import auth, auth_user, getOrgId
 from common.log import get_logger
 from common.exceptions import InvalidUsageError
 from common.utils.slack import send_slack_audit
@@ -10,6 +10,9 @@ from services.volunteers_service import (
     get_volunteers_by_event,
     create_or_update_volunteer,
     update_volunteer_selection,
+    refund_hacker_deposit,
+    bulk_refund_eligible_hacker_deposits,
+    handle_stripe_hacker_deposit_event,
     get_all_hackers_by_event_id,
     get_mentor_checkin_status,
     mentor_checkin,
@@ -380,13 +383,13 @@ def admin_update_selection(user, org, volunteer_id):
     try:
         data = _process_request()
         selected = data.get('selected', False)
-        
+
         updated_volunteer = update_volunteer_selection(
             volunteer_id=volunteer_id,
             selected=selected,
             updated_by=user.user_id
         )
-        
+
         if updated_volunteer:
             return _success_response(updated_volunteer, "Selection status updated successfully")
         else:
@@ -394,7 +397,98 @@ def admin_update_selection(user, org, volunteer_id):
     except Exception as e:
         logger.error(f"Error updating volunteer selection: {str(e)}")
         return _error_response(f"Failed to update selection status: {str(e)}")
-    
+
+
+# Admin hacker deposit refund — irreversible, real money. Uses the stricter
+# volunteer.admin permission rather than the lighter "all" used for isSelected
+# toggles.
+@bp.route('/admin/hacker/<volunteer_id>/refund-deposit', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_refund_hacker_deposit(user, org, volunteer_id):
+    """Issue a Stripe refund for a hacker's deposit. Body: {"override": bool}."""
+    try:
+        data = _process_request()
+        override = bool(data.get('override', False))
+
+        updated = refund_hacker_deposit(
+            volunteer_id=volunteer_id,
+            admin_user_id=user.user_id,
+            override=override,
+        )
+        send_slack_audit(
+            action="hacker_deposit_refund",
+            message=(
+                f"{user.user_id} refunded hacker deposit for volunteer {volunteer_id} "
+                f"(refund_id={updated.get('deposit_refund_id')}, "
+                f"amount_cents={updated.get('deposit_refund_amount_cents')}, "
+                f"override={override})"
+            ),
+        )
+        return _success_response(updated, "Deposit refunded successfully")
+    except ValueError as e:
+        # Caller-facing validation errors — bad state, missing PI, donate-without-override.
+        return _error_response(str(e), 400)
+    except RuntimeError as e:
+        # Stripe rejection or missing API key — upstream/config problem.
+        return _error_response(str(e), 502)
+    except Exception as e:
+        logger.error(f"Error refunding hacker deposit: {str(e)}", exc_info=True)
+        return _error_response(f"Failed to refund deposit: {str(e)}", 500)
+
+
+# Bulk refund for end-of-event cleanup. Refunds every hacker whose deposit is
+# paid + disposition=refund for the given event. Donate-disposition hackers
+# are excluded by design (override is a per-row decision).
+@bp.route('/admin/hackathon/<event_id>/refund-eligible-deposits', methods=['POST'])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_bulk_refund_eligible_deposits(user, org, event_id):
+    try:
+        result = bulk_refund_eligible_hacker_deposits(
+            event_id=event_id,
+            admin_user_id=user.user_id,
+        )
+        send_slack_audit(
+            action="hacker_deposit_bulk_refund",
+            message=(
+                f"{user.user_id} ran bulk refund for event {event_id}: "
+                f"{len(result['refunded'])} refunded "
+                f"(${result['total_amount_cents'] / 100:.2f}), "
+                f"{len(result['failed'])} failed"
+            ),
+        )
+        return _success_response(result, "Bulk refund processed")
+    except Exception as e:
+        logger.error(f"Bulk refund failed for {event_id}: {str(e)}", exc_info=True)
+        return _error_response(f"Bulk refund failed: {str(e)}", 500)
+
+
+# Stripe webhook for hacker-deposit events. Stripe signature is the only auth —
+# no PropelAuth decorator here. Returns 200 for anything we successfully
+# parsed (including events we chose to ignore) so Stripe doesn't retry
+# unnecessarily; only signature/parse failures return 4xx, and only config
+# failures return 5xx.
+@bp.route('/webhooks/stripe/hacker-deposit', methods=['POST'])
+def stripe_webhook_hacker_deposit():
+    payload = request.get_data()
+    sig_header = request.headers.get('Stripe-Signature')
+    try:
+        ok, msg = handle_stripe_hacker_deposit_event(payload, sig_header)
+        logger.info(f"Stripe webhook ok={ok}: {msg}")
+        return {"ok": ok, "message": msg}, 200
+    except ValueError as e:
+        # Signature or payload problem — Stripe should NOT retry these.
+        logger.warning(f"Stripe webhook rejected: {str(e)}")
+        return {"ok": False, "error": str(e)}, 400
+    except RuntimeError as e:
+        # Server misconfiguration (missing webhook secret).
+        logger.error(f"Stripe webhook config error: {str(e)}")
+        return {"ok": False, "error": str(e)}, 500
+    except Exception as e:
+        logger.error(f"Stripe webhook unexpected error: {str(e)}", exc_info=True)
+        # Return 500 so Stripe retries (transient errors are worth retrying).
+        return {"ok": False, "error": str(e)}, 500
+
+
 # Generic hacker routes
 @bp.route('/hacker/application/<event_id>/submit', methods=['POST'])
 @auth.optional_user
@@ -535,10 +629,6 @@ def mentor_checkout_endpoint(event_id):
         logger.error(f"Error during mentor check-out: {str(e)}")
         return _error_response(f"Failed to check out: {str(e)}")
 
-
-def getOrgId(req):
-    # Get the org_id from the req
-    return req.headers.get("X-Org-Id")
 
 @bp.route('/admin/<volunteer_id>/message', methods=['POST'])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
