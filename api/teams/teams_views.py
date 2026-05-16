@@ -87,10 +87,28 @@ def add_devpost_to_team_api(teamid):
         logger.info(f"Devpost link: {devpost_link}")
         if not devpost_link:
             return {"error": "Devpost link is required"}, 400
-        
+
         return edit_team({"id": teamid, "devpost_link": devpost_link})
-    
+
     logger.error("Could not obtain user details for POST /team/<teamid>/devpost")
+    return {"error": "Unauthorized"}, 401
+
+@bp.route("/<teamid>/demo-video", methods=["POST"])
+@auth.require_user
+def add_demo_video_to_team_api(teamid):
+    """
+    Add or clear a demo video URL for a team.
+    Requires user to be authenticated (team self-serve, mirrors devpost endpoint).
+    Pass demo_video_url as empty string or null to clear.
+    """
+    logger.info(f"POST /team/{teamid}/demo-video called")
+    if auth_user and auth_user.user_id:
+        body = request.get_json() or {}
+        demo_video_url = body.get("demo_video_url", "")
+        # Allow empty string to clear the field; edit_team normalizes to None
+        return edit_team({"id": teamid, "demo_video_url": demo_video_url})
+
+    logger.error("Could not obtain user details for POST /team/<teamid>/demo-video")
     return {"error": "Unauthorized"}, 401
 
 @bp.route("/<teamid>/member", methods=["POST"])
