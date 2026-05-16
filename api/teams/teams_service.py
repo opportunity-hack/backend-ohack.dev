@@ -268,11 +268,23 @@ def edit_team(json):
         "location": "location",
         "admin_notes": "admin_notes",
         "devpost_link": "devpost_link",
+        "demo_video_url": "demo_video_url",
     }
-    
+
+    # Normalize demo_video_url: trim, cap at 500 chars, empty string => clear
+    if "demo_video_url" in json:
+        raw = json.get("demo_video_url")
+        if isinstance(raw, str):
+            trimmed = raw.strip()[:500]
+            json["demo_video_url"] = trimmed if trimmed else None
+
     # If this is the first time setting devpost_link, set devpost_link_submitted date
     if "devpost_link" in json and "devpost_link" not in team_data:
         update_data["devpost_link_submitted"] = datetime.now().isoformat()
+
+    # If this is the first time setting demo_video_url, stamp demo_video_url_submitted
+    if json.get("demo_video_url") and not team_data.get("demo_video_url"):
+        update_data["demo_video_url_submitted"] = datetime.now().isoformat()
 
     for db_field, json_field in field_mappings.items():
         if json_field in json:
