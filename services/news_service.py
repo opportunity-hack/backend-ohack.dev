@@ -31,14 +31,16 @@ def save_news(json):
     news_image = generate_and_save_image_to_cdn(cdn_dir, json["title"])
     json["image"] = f"{CDN_SERVER}/{cdn_dir}/{news_image}"
     json["last_updated"] = datetime.now().isoformat()
-    upsert_news(json)
+    news_id = upsert_news(json)
 
     logger.info("Updated news successfully")
 
     get_news.cache_clear()
     logger.info("Cleared cache for get_news")
 
-    return Message("Saved News")
+    msg = Message("Saved News")
+    msg.id = news_id
+    return msg
 
 
 def save_praise(json):
