@@ -29,6 +29,10 @@ from services.news_service import (
     get_all_praises,
     get_praises_about_user,
     save_praise,
+    admin_create_news,
+    admin_update_news,
+    admin_delete_news,
+    admin_list_news,
 )
 from services.feedback_service import save_feedback, get_user_feedback
 from services.giveaway_service import save_giveaway, get_user_giveaway, get_all_giveaways
@@ -509,6 +513,65 @@ def read_news():
 def get_single_news(id):
     logger.info(f"GET /news/{id} called")
     return vars(get_news(news_limit=1,news_id=id))
+
+
+# -------------------- Admin Blog routes begin here --------------------------- #
+# These power the /admin/blog UI. The original public POST /news above keeps its
+# X-Api-Key auth (Slack integration relies on it). Admin CRUD lives here under
+# /admin/news to keep the auth model unambiguous.
+
+def _actor_from_request():
+    try:
+        return {
+            "propel_user_id": auth_user.user_id if auth_user else None,
+            "email": getattr(auth_user, "email", None) if auth_user else None,
+        }
+    except Exception:
+        return None
+
+
+@bp.route("/admin/news", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_get_all_news():
+    logger.info("GET /admin/news called")
+    limit_arg = request.args.get("limit")
+    status_filter = request.args.get("status")
+    limit = 500
+    if limit_arg:
+        try:
+            limit = max(1, min(2000, int(limit_arg)))
+        except ValueError:
+            pass
+    return vars(admin_list_news(limit=limit, status_filter=status_filter))
+
+
+@bp.route("/admin/news", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_post_news():
+    logger.info("POST /admin/news called")
+    msg, status_code = admin_create_news(request.get_json(), _actor_from_request())
+    return vars(msg), status_code
+
+
+@bp.route("/admin/news/<news_id>", methods=["PATCH"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_patch_news(news_id):
+    logger.info(f"PATCH /admin/news/{news_id} called")
+    msg, status_code = admin_update_news(news_id, request.get_json(), _actor_from_request())
+    return vars(msg), status_code
+
+
+@bp.route("/admin/news/<news_id>", methods=["DELETE"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_delete_news_route(news_id):
+    logger.info(f"DELETE /admin/news/{news_id} called")
+    msg, status_code = admin_delete_news(news_id)
+    return vars(msg), status_code
+# -------------------- Admin Blog routes end here --------------------------- #
 
 
 @bp.route("/lead", methods=["POST"])

@@ -1186,6 +1186,56 @@ def upsert_news(news):
     _, doc_ref = db.collection("news").add(news)
     return doc_ref.id
 
+
+def update_news_partial(news_id, patch):
+    """Partial update of a news doc. Returns True if the doc existed and was updated."""
+    db = get_db()
+    doc_ref = db.collection("news").document(news_id)
+    snap = doc_ref.get()
+    if not snap.exists:
+        logger.warning(f"update_news_partial: news_id={news_id} not found")
+        return False
+    if "title" in patch and isinstance(patch["title"], str):
+        patch["title"] = patch["title"].replace('"', "").replace("'", "").replace("\\", "")
+    patch["last_updated"] = datetime.datetime.now().isoformat()
+    doc_ref.set(patch, merge=True)
+    logger.info(f"update_news_partial: updated news_id={news_id} with keys={list(patch.keys())}")
+    return True
+
+
+def delete_news(news_id):
+    """Hard delete of a news doc. Returns True if the doc existed and was removed."""
+    db = get_db()
+    doc_ref = db.collection("news").document(news_id)
+    snap = doc_ref.get()
+    if not snap.exists:
+        logger.warning(f"delete_news: news_id={news_id} not found")
+        return False
+    doc_ref.delete()
+    logger.info(f"delete_news: removed news_id={news_id}")
+    return True
+
+
+def get_all_news_admin(limit=500, status_filter=None):
+    """Admin list of news including drafts/archived. Ordered by slack_ts desc.
+
+    status_filter: None | "draft" | "published" | "archived" | "all" (treated like None).
+    """
+    db = get_db()
+    query = db.collection("news").order_by("slack_ts", direction=firestore.Query.DESCENDING).limit(limit)
+    docs = query.stream()
+    results = []
+    for doc in docs:
+        d = doc.to_dict()
+        d["id"] = doc.id
+        if status_filter and status_filter != "all":
+            doc_status = d.get("status", "published")
+            if doc_status != status_filter:
+                continue
+        results.append(d)
+    return results
+
+
 def upsert_praise(praise):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Adding praise {praise}")
