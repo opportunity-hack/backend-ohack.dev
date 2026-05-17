@@ -1179,11 +1179,12 @@ def upsert_news(news):
         news_messageTs = news_messageTs[0]
         news_messageTs = news_messageTs.reference
         db.collection("news").document(news_messageTs.id).set(news, merge=True)        
-        return news_messageTs
+        return news_messageTs.id
     else:
         logger.info("news does not exist")
 
-    db.collection("news").add(news)
+    _, doc_ref = db.collection("news").add(news)
+    return doc_ref.id
 
 def upsert_praise(praise):
     db = get_db()  # this connects to our Firestore database
