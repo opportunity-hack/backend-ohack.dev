@@ -1,4 +1,5 @@
 from openai import OpenAI
+import base64
 import os
 import urllib.request
 from common.utils.cdn import upload_to_cdn
@@ -128,24 +129,23 @@ def generate_and_save_image_to_cdn(directory, text):
     processed_text = preprocess_text_for_image_generation(text)
     logger.info(f"Processed text for image generation: {processed_text}")
     
-    prompt = f"""Create a purely visual artistic image with absolutely no text, letters, words, numbers, symbols, or written characters of any kind. 
-        Style: Choose from abstract art, impressionist painting, digital art, watercolor, or detailed sketch.
-        Quality: High detail, 4K resolution, professional quality.
-        Content: Visual interpretation of: {processed_text}
-        Focus: Colors, shapes, textures, lighting, composition, and mood only.
-        Important: Zero text, lettering, or readable characters anywhere in the image."""
+    prompt = f"""Create a purely visual, emotionally evocative artistic image — absolutely no text, letters, words, numbers, symbols, or written characters anywhere.
+        Style: Bold digital painting blended with impressionist brushwork — vivid colors, strong contrast, and dramatic cinematic lighting (golden hour, rim light, or atmospheric haze).
+        Composition: Rule of thirds, single clear focal point, thumbnail-optimized so the subject reads instantly at small sizes.
+        Mood: Capture the emotional tone and energy of the subject — hopeful, urgent, contemplative, or celebratory as appropriate.
+        Content: Abstract visual metaphor for: {processed_text}
+        Details: Rich textures, dynamic depth of field, professional editorial quality.
+        Absolute requirement: Zero text, lettering, numbers, or readable characters anywhere in the image."""
 
     logger.info(f"Generating image with prompt: {prompt}")
 
     openai_response = client.images.generate(
-        model="dall-e-3",  # Updated to use DALL-E 3 (gpt-image-1 might be outdated)
+        model="gpt-image-1",
         prompt=prompt,
         n=1,
         size="1024x1024"       
     ) 
 
-    image_url = openai_response.data[0].url
-    
     # Create a short filename from input text
     filename = text.replace(" ", "_").replace(".", "").replace(",", "").replace("?", "").replace("!", "").replace(":", "").replace(";", "").replace("(", "").replace(")", "").replace("\"", "").replace("\'", "").replace("/", "").replace("\\", "")
     # Make sure filename is less than 100 characters
@@ -154,7 +154,13 @@ def generate_and_save_image_to_cdn(directory, text):
     filename = f"{filename}.png"
 
     print(f"Saving to {filename}...")
-    urllib.request.urlretrieve(image_url, filename)
+    # gpt-image-1 returns base64 data; fall back to URL for other models
+    image_data = openai_response.data[0]
+    if getattr(image_data, "b64_json", None):
+        with open(filename, "wb") as f:
+            f.write(base64.b64decode(image_data.b64_json))
+    else:
+        urllib.request.urlretrieve(image_data.url, filename)
     
     print(f"Saving to CDN: {directory}/{filename}...")
     
