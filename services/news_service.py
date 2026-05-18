@@ -40,10 +40,10 @@ def save_news(json):
     cdn_dir = "ohack.dev/news"
     try:
         news_image = generate_and_save_image_to_cdn(cdn_dir, json["title"])
+        json["image"] = f"{CDN_SERVER}/{cdn_dir}/{news_image}"
     except Exception as e:
         logger.exception(f"Image generation failed for title '{json['title']}': {e}")
-        raise
-    json["image"] = f"{CDN_SERVER}/{cdn_dir}/{news_image}"
+        json["image"] = None
     json["last_updated"] = datetime.now().isoformat()
     news_id = upsert_news(json)
 
