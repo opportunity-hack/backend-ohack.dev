@@ -325,8 +325,40 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         debug(logger, "Fetching all problem statements")
         db = self.get_db()
         try:
-            docs = db.collection('problem_statements').stream()
-            results = [convert_to_entity(doc, ProblemStatement) for doc in docs or []]
+            docs = list(db.collection('problem_statements').stream())
+
+            # Collect every unique event DocumentReference across all docs so we
+            # can batch-fetch them in a single RPC instead of one per ref (N+1).
+            raw_data = []
+            all_event_refs: dict = {}
+            for doc in docs:
+                d = doc.to_dict() or {}
+                d['id'] = doc.id
+                raw_data.append(d)
+                for ref in d.get('events', []):
+                    if isinstance(ref, firestore.DocumentReference):
+                        all_event_refs[ref.id] = ref
+
+            # Single batch read for all referenced hackathon docs.
+            hackathon_map: dict = {}
+            if all_event_refs:
+                for snap in db.get_all(list(all_event_refs.values())):
+                    if snap.exists:
+                        h_data = snap.to_dict() or {}
+                        h_data['id'] = snap.id
+                        hackathon_map[snap.id] = Hackathon.deserialize(h_data)
+
+            # Build ProblemStatement objects using the prefetched hackathons.
+            results = []
+            for d in raw_data:
+                if 'events' in d:
+                    d['events'] = [
+                        hackathon_map[ref.id]
+                        for ref in d['events']
+                        if isinstance(ref, firestore.DocumentReference) and ref.id in hackathon_map
+                    ]
+                results.append(ProblemStatement.deserialize(d))
+
             info(logger, "Successfully fetched problem statements", count=len(results))
             return results
         except Exception as e:
@@ -419,6 +451,8 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             update_data['skills'] = problem_statement.skills
         if hasattr(problem_statement, 'rank'):
             update_data['rank'] = problem_statement.rank
+        if hasattr(problem_statement, 'slack_channel'):
+            update_data['slack_channel'] = problem_statement.slack_channel
 
         # Use update() instead of set() to only modify specified fields
         update_res = collection.document(problem_statement.id).update(update_data)
