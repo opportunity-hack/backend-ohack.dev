@@ -1,4 +1,5 @@
 import re
+from copy import deepcopy
 from urllib.parse import urlparse
 import logging
 from datetime import datetime
@@ -163,6 +164,140 @@ def validate_hackathon_data(data):
     planning = data.get("planning")
     if planning is not None:
         validate_planning_subobject(planning)
+
+
+def validate_hackathon_data_partial(data):
+    """Validate hackathon data with partial-save semantics.
+
+    Required fields and date integrity always raise ValueError (hard fail).
+    Each optional field is validated individually; failures strip the field
+    from the returned data and record it in skipped_fields.
+
+    Returns:
+        (cleaned_data, skipped_fields) where cleaned_data is a deep copy of
+        ``data`` with invalid optional fields removed, and skipped_fields is a
+        list of ``{"field": str, "reason": str}`` dicts.
+
+    Raises:
+        ValueError: if a required field is missing/empty or dates are invalid.
+    """
+    # Hard fail: required fields and date ordering
+    required_fields = ["title", "description", "location", "start_date", "end_date", "type", "image_url", "event_id"]
+    for field in required_fields:
+        if field not in data or not data[field]:
+            raise ValueError(f"Missing required field: {field}")
+    try:
+        start_date = datetime.fromisoformat(data["start_date"])
+        end_date = datetime.fromisoformat(data["end_date"])
+        if end_date <= start_date:
+            raise ValueError(f"End date must be after start date: start_date={start_date}, end_date={end_date}")
+    except ValueError:
+        raise
+
+    cleaned = deepcopy(data)
+    skipped = []
+
+    def _skip(field, reason):
+        skipped.append({"field": field, "reason": reason})
+        logger.warning("Field '%s' failed validation and will not be saved: %s", field, reason)
+
+    # Timezone
+    timezone = cleaned.get("timezone")
+    if timezone:
+        try:
+            ZoneInfo(timezone)
+        except (ZoneInfoNotFoundError, KeyError):
+            _skip("timezone", f"Invalid timezone: {timezone}")
+            cleaned.pop("timezone", None)
+
+    # Constraints — validate sub-fields individually
+    constraints = cleaned.get("constraints")
+    if constraints is not None:
+        if not isinstance(constraints, dict):
+            _skip("constraints", "constraints must be an object")
+            cleaned.pop("constraints", None)
+        else:
+            c = dict(constraints)
+
+            for k in ["max_people_per_team", "max_teams_per_problem", "min_people_per_team"]:
+                if k in c and not isinstance(c[k], int):
+                    _skip(f"constraints.{k}", "must be an integer")
+                    c.pop(k)
+
+            if "hacker_required_questions" in c:
+                try:
+                    hrq = c["hacker_required_questions"]
+                    questions = hrq.get("questions", [])
+                    if not isinstance(questions, list):
+                        raise ValueError("hacker_required_questions.questions must be a list")
+                    for i, q in enumerate(questions):
+                        if not isinstance(q, dict):
+                            raise ValueError(f"Question {i} must be an object")
+                        if not isinstance(q.get("question"), str) or not q.get("question"):
+                            raise ValueError(f"Question {i} must have a non-empty 'question' string")
+                        if not isinstance(q.get("required_answer"), bool):
+                            raise ValueError(f"Question {i} must have a boolean 'required_answer'")
+                        if not isinstance(q.get("error"), str) or not q.get("error"):
+                            raise ValueError(f"Question {i} must have a non-empty 'error' string")
+                except ValueError as e:
+                    _skip("constraints.hacker_required_questions", str(e))
+                    c.pop("hacker_required_questions")
+
+            arrival = c.get("judge_venue_arrival_time")
+            if arrival not in (None, ""):
+                if not isinstance(arrival, str) or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", arrival):
+                    _skip("constraints.judge_venue_arrival_time", "must be HH:MM (24-hour)")
+                    c.pop("judge_venue_arrival_time")
+
+            if "hacker_deposit" in c and c["hacker_deposit"] is not None:
+                try:
+                    hd = c["hacker_deposit"]
+                    if not isinstance(hd, dict):
+                        raise ValueError("hacker_deposit must be an object")
+                    if "enabled" in hd and not isinstance(hd["enabled"], bool):
+                        raise ValueError("hacker_deposit.enabled must be boolean")
+                    amount = hd.get("default_amount_cents")
+                    if amount is not None:
+                        if not isinstance(amount, int) or amount < 0 or amount > 50000:
+                            raise ValueError("hacker_deposit.default_amount_cents must be a non-negative integer (cents) up to 50000")
+                except ValueError as e:
+                    _skip("constraints.hacker_deposit", str(e))
+                    c.pop("hacker_deposit")
+
+            if "meals" in c and c["meals"] is not None:
+                try:
+                    validate_meals(c["meals"])
+                except ValueError as e:
+                    _skip("constraints.meals", str(e))
+                    c.pop("meals")
+
+            cleaned["constraints"] = c
+
+    # event_photos
+    if "event_photos" in cleaned and cleaned["event_photos"] is not None:
+        try:
+            validate_event_photos(cleaned["event_photos"])
+        except ValueError as e:
+            _skip("event_photos", str(e))
+            cleaned.pop("event_photos")
+
+    # social_posts
+    if "social_posts" in cleaned and cleaned["social_posts"] is not None:
+        try:
+            validate_social_posts(cleaned["social_posts"])
+        except ValueError as e:
+            _skip("social_posts", str(e))
+            cleaned.pop("social_posts")
+
+    # planning
+    if "planning" in cleaned and cleaned["planning"] is not None:
+        try:
+            validate_planning_subobject(cleaned["planning"])
+        except ValueError as e:
+            _skip("planning", str(e))
+            cleaned.pop("planning")
+
+    return cleaned, skipped
 
 
 ALLOWED_DIETARY_TAGS = {
