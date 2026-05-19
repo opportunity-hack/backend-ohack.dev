@@ -27,6 +27,7 @@ class ProblemStatement:
         self.events = [] # TODO: Breaking change. This used to be called "events"
         self.status = None
         self.skills = []  # This is a list of skills, not a string
+        self.slack_channel = None
         
 
     @classmethod
@@ -40,6 +41,7 @@ class ProblemStatement:
         p.github = d['github'] if 'github' in d else None
         p.status = d['status'] if 'status' in d else None
         p.skills = d['skills'] if 'skills' in d else []
+        p.slack_channel = d['slack_channel'] if 'slack_channel' in d else None
 
         if 'events' in d:
             p.events = d['events']
@@ -75,7 +77,6 @@ class ProblemStatement:
             for event in self.events:
                 if event is not None:
                     if isinstance(event, dict):
-                        print(f"Event is already a dict: {event}")
                         d['events'].append(event)
                     else:
                         d['events'].append(event.serialize())
@@ -101,7 +102,7 @@ class ProblemStatement:
             d['references'] = []
 
         # Add remaining fields that aren't special cases
-        for field in ['github', 'status', 'first_thought_of', 'skills', 'rank']:
+        for field in ['github', 'status', 'first_thought_of', 'skills', 'rank', 'slack_channel']:
             if hasattr(self, field):
                 d[field] = getattr(self, field)
 
