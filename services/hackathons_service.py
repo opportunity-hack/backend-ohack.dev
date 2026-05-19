@@ -16,7 +16,7 @@ from common.utils.firebase import (
     get_volunteer_from_db_by_event,
     get_volunteer_checked_in_from_db_by_event,
 )
-from common.utils.validators import validate_hackathon_data
+from common.utils.validators import validate_hackathon_data_partial
 from common.utils.firestore_helpers import (
     doc_to_json,
     doc_to_json_recursive,
@@ -918,54 +918,57 @@ def save_hackathon(json_data, propel_id):
     send_slack_audit(action="save_hackathon", message="Saving/Updating", payload=json_data)
 
     try:
-        validate_hackathon_data(json_data)
+        data, skipped_fields = validate_hackathon_data_partial(json_data)
 
-        doc_id = json_data.get("id") or uuid.uuid1().hex
+        if skipped_fields:
+            logger.warning("save_hackathon: %d field(s) skipped due to validation errors: %s", len(skipped_fields), skipped_fields)
+
+        doc_id = data.get("id") or uuid.uuid1().hex
         is_update = "id" in json_data
 
         hackathon_data = {
-            "title": json_data["title"],
-            "description": json_data["description"],
-            "location": json_data["location"],
-            "start_date": json_data["start_date"],
-            "end_date": json_data["end_date"],
-            "type": json_data["type"],
-            "image_url": json_data["image_url"],
-            "event_id": json_data["event_id"],
-            "links": json_data.get("links", []),
-            "countdowns": json_data.get("countdowns", []),
-            "constraints": json_data.get("constraints", {
+            "title": data["title"],
+            "description": data["description"],
+            "location": data["location"],
+            "start_date": data["start_date"],
+            "end_date": data["end_date"],
+            "type": data["type"],
+            "image_url": data["image_url"],
+            "event_id": data["event_id"],
+            "links": data.get("links", []),
+            "countdowns": data.get("countdowns", []),
+            "constraints": data.get("constraints", {
                 "max_people_per_team": 5,
                 "max_teams_per_problem": 10,
                 "min_people_per_team": 2,
             }),
-            "donation_current": json_data.get("donation_current", {
+            "donation_current": data.get("donation_current", {
                 "food": "0",
                 "prize": "0",
                 "swag": "0",
                 "thank_you": "",
             }),
-            "donation_goals": json_data.get("donation_goals", {
+            "donation_goals": data.get("donation_goals", {
                 "food": "0",
                 "prize": "0",
                 "swag": "0",
             }),
-            "timezone": json_data.get("timezone", "America/Phoenix"),
-            "event_photos": json_data.get("event_photos", []),
-            "social_posts": json_data.get("social_posts", []),
+            "timezone": data.get("timezone", "America/Phoenix"),
+            "event_photos": data.get("event_photos", []),
+            "social_posts": data.get("social_posts", []),
             "last_updated": firestore.SERVER_TIMESTAMP,
             "last_updated_by": propel_id,
         }
 
-        if "planning" in json_data:
-            hackathon_data["planning"] = json_data["planning"]
+        if "planning" in data:
+            hackathon_data["planning"] = data["planning"]
 
-        if "nonprofits" in json_data:
-            hackathon_data["nonprofits"] = [db.collection("nonprofits").document(npo) for npo in json_data["nonprofits"]]
-        if "teams" in json_data:
-            hackathon_data["teams"] = [db.collection("teams").document(team) for team in json_data["teams"]]
-        if "visible_problem_statements" in json_data:
-            hackathon_data["visible_problem_statements"] = json_data["visible_problem_statements"]
+        if "nonprofits" in data:
+            hackathon_data["nonprofits"] = [db.collection("nonprofits").document(npo) for npo in data["nonprofits"]]
+        if "teams" in data:
+            hackathon_data["teams"] = [db.collection("teams").document(team) for team in data["teams"]]
+        if "visible_problem_statements" in data:
+            hackathon_data["visible_problem_statements"] = data["visible_problem_statements"]
 
         @firestore.transactional
         def update_hackathon(transaction):
@@ -983,9 +986,10 @@ def save_hackathon(json_data, propel_id):
         clear_cache()
 
         logger.info(f"Hackathon {'updated' if is_update else 'created'} successfully. ID: {doc_id}")
-        return Message(
-        "Saved Hackathon"
-    )
+        msg = Message("Saved Hackathon")
+        if skipped_fields:
+            msg.skipped_fields = skipped_fields
+        return msg
 
     except ValueError as ve:
         logger.error(f"Validation error: {str(ve)}")
