@@ -335,18 +335,71 @@ def get_profile_metadata_old(propel_id):
     }
 
 
+# Fields returned to the admin /admin/profiles consumers (page + UserSearchDialog).
+# Keep this in sync with frontend src/pages/admin/profile/index.js and
+# src/components/admin/UserSearchDialog.js. Drop anything heavy (history) or
+# unused (mailing address, propel_id, want_stickers) — those routes have their
+# own /profile/<id> fetch when a row is opened.
+_ADMIN_PROFILE_LEAN_FIELDS = (
+    "name",
+    "nickname",
+    "email_address",
+    "user_id",
+    "profile_image",
+    "last_login",
+    "github",
+    "linkedin_url",
+    "instagram_url",
+    "company",
+    "education",
+    "role",
+    "shirt_size",
+    "expertise",
+    "why",
+)
+
+
+def _lean_admin_profile(doc):
+    """Project a Firestore user doc into the lean shape the admin search uses.
+
+    Resolves DocumentReference lists (badges/teams/hackathons) to id strings
+    inline, since the frontend only reads `.length` on these arrays. Avoids
+    `doc_to_json`'s broader behavior and the heavy `history` field entirely.
+    """
+    d = doc.to_dict() or {}
+    out = {"id": doc.id}
+    for key in _ADMIN_PROFILE_LEAN_FIELDS:
+        v = d.get(key)
+        if v is not None:
+            out[key] = v
+
+    for ref_key in ("badges", "teams", "hackathons"):
+        value = d.get(ref_key)
+        if isinstance(value, list):
+            out[ref_key] = [
+                v.id if isinstance(v, firestore.DocumentReference) else v
+                for v in value
+            ]
+
+    vol = d.get("volunteering")
+    if isinstance(vol, list):
+        out["volunteering"] = [
+            {"hours": v.get("hours", 0)}
+            for v in vol if isinstance(v, dict)
+        ]
+
+    return out
+
+
+# 5-minute TTL is enough to absorb tab refreshes / multiple admins loading the
+# page in close succession while still picking up new signups within minutes.
+@cached(cache=TTLCache(maxsize=1, ttl=300), key=lambda: "all")
 def get_all_profiles():
     db = get_db()
-    docs = db.collection('users').stream()  # steam() gets all records
-    if docs is None:
-        return {[]}
-    else:
-        results = []
-        for doc in docs:
-            results.append(doc_to_json(docid=doc.id, doc=doc))
-
+    docs = db.collection('users').stream()
+    results = [_lean_admin_profile(doc) for doc in docs]
     logger.info(f"get_all_profiles returned {len(results)} profiles")
-    return { "profiles": results }
+    return {"profiles": results}
 
 
 # Caching is not needed because the parent method already is caching

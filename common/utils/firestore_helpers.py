@@ -67,7 +67,7 @@ def doc_to_json(docid=None, doc=None, depth=0):
         return doc
 
     if d_json is None:
-        logger.warn(f"doc.to_dict() is NoneType | docid={docid} doc={doc}")
+        logger.warning(f"doc.to_dict() is NoneType | docid={docid} doc={doc}")
         return
 
     # If any values in d_json is a list, add only the document id to the list for DocumentReference or DocumentSnapshot

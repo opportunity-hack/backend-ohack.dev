@@ -204,7 +204,10 @@ def update_hackathon():
     logger.info("PATCH /hackathon called")
     user_id = get_authenticated_user_id()
     if user_id:
-        return vars(save_hackathon(request.get_json(), user_id))
+        result = save_hackathon(request.get_json(), user_id)
+        if isinstance(result, tuple):
+            return result
+        return vars(result)
     return {"error": "Unauthorized"}, 401
 
 

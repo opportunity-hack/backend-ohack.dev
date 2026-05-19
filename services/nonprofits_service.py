@@ -13,12 +13,14 @@ from common.log import get_logger, info, debug, warning, error, exception
 from common.utils.slack import send_slack_audit, send_slack
 from common.utils.validators import validate_email, validate_url
 from common.exceptions import InvalidInputError
-from common.utils.firestore_helpers import doc_to_json, doc_to_json_recursive
+from common.utils.firestore_helpers import doc_to_json, register_cache
 from api.messages.message import Message
 
 logger = get_logger("nonprofits_service")
 
 ONE_MINUTE = 1*60
+
+_npo_list_cache: TTLCache = TTLCache(maxsize=1, ttl=300)  # 5-min TTL; cleared on save/update/delete
 
 
 def _get_db():
@@ -29,6 +31,7 @@ def _get_db():
 def _clear_cache():
     from services.hackathons_service import clear_cache
     clear_cache()
+    _npo_list_cache.clear()
 
 
 # ==================== Model-based functions (existing) ====================
@@ -186,20 +189,30 @@ def get_npo_by_hackathon_id(id):
 
 
 @limits(calls=20, period=ONE_MINUTE)
-def get_npo_list(word_length=30):
+@cached(cache=_npo_list_cache)
+def get_npo_list():
     logger.debug("NPO List Start")
     db = _get_db()
-    docs = db.collection('nonprofits').order_by( "rank" ).stream()
-    if docs is None:
-        return {[]}
-    else:
-        results = []
-        for doc in docs:
-            logger.debug(f"Processing doc {doc.id} {doc}")
-            results.append(doc_to_json_recursive(doc=doc))
+    # stream() without order_by so docs missing 'rank' are included; sort in Python.
+    docs = db.collection('nonprofits').stream()
 
-    logger.debug(f"Found {len(results)} results {results}")
-    return { "nonprofits": results }
+    results = []
+    for doc in docs:
+        results.append(doc_to_json(docid=doc.id, doc=doc))
+
+    def rank_key(x):
+        rank = x.get('rank')
+        if rank is None:
+            return (True, 0)
+        try:
+            return (False, int(rank))
+        except (ValueError, TypeError):
+            return (True, 0)
+
+    results.sort(key=rank_key)
+
+    logger.debug("NPO List end", extra={"count": len(results)})
+    return {"nonprofits": results}
 
 
 @limits(calls=100, period=ONE_MINUTE)
