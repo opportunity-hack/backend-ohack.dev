@@ -20,6 +20,31 @@ from common.utils.slack import add_bot_to_channel
 
 logger = logging.getLogger("myapp")
 
+# Slack user IDs for OHack admins who are auto-invited to every team channel
+# and CCed on completion broadcasts. Single source of truth for both call sites.
+TEAM_COMPLETION_SLACK_ADMINS = [
+    "UCQKX6LPR",
+    "U035023T81Z",
+    "UC31XTRT5",
+    "UC2JW3T3K",
+    "UPD90QV17",
+    "UEP2U69AA",
+]
+
+# Canonical 8-item Definition of Done. Must stay in lockstep with the frontend
+# COMPLETION_ITEMS array in src/components/Teams/TeamCompletionChecklist.js.
+COMPLETION_ITEMS = [
+    {"slug": "deployed", "label": "Deployed", "blurb": "Code is live in production (AWS, fly.io, GCP)."},
+    {"slug": "nonprofit_signoff", "label": "Nonprofit Signoff", "blurb": "Your nonprofit partner agrees the software meets their needs."},
+    {"slug": "login_details", "label": "Login Details for Testing", "blurb": "Test credentials shared securely (changeable later)."},
+    {"slug": "code_updated", "label": "Code Updated", "blurb": "All code, README, and docs in the designated GitHub repo."},
+    {"slug": "tasks_closed", "label": "Tasks Closed", "blurb": "GitHub issues/tasks closed or addressed."},
+    {"slug": "sensitive_info_security", "label": "Sensitive Info Secured", "blurb": "No secrets in the repo; shared securely elsewhere."},
+    {"slug": "documentation", "label": "Documentation", "blurb": "How to use, deploy, update, and configure."},
+    {"slug": "open_source", "label": "Open-Sourced (MIT)", "blurb": "Repo is public under MIT."},
+]
+COMPLETION_ITEM_SLUGS = {item["slug"]: item for item in COMPLETION_ITEMS}
+
 def add_team_member(team_id, user_id):
     """
     Admin function to add a member to a team
@@ -423,8 +448,7 @@ Let's make a difference! :muscle: :heart:
         
     
     # Add Slack admins
-    slack_admins = ["UCQKX6LPR", "U035023T81Z", "UC31XTRT5", "UC2JW3T3K", "UPD90QV17", "UEP2U69AA"]
-    for admin in slack_admins:
+    for admin in TEAM_COMPLETION_SLACK_ADMINS:
         logger.info("Inviting admin %s to slack channel %s", admin, slack_channel)
         invite_user_to_channel(admin, slack_channel)
 
@@ -989,3 +1013,193 @@ def send_team_message(admin_user, teamid, json):
         "success": True,
         "team_id": teamid
     }
+
+
+def user_is_on_team(propel_user_id, team_id):
+    """
+    Returns True if the caller (identified by their PropelAuth UUID) is one of
+    the team's users[]. Translates propel_id -> OAuth user_id via
+    get_propel_user_details_by_id (same pattern as get_my_teams_by_event_id),
+    then walks team.users[] DocumentReferences and compares each user doc's
+    `user_id` field (or its `propel_id` field as a fallback).
+    """
+    if not propel_user_id or not team_id:
+        return False
+    db = get_db()
+    team_doc = db.collection("teams").document(team_id).get()
+    if not team_doc.exists:
+        return False
+
+    try:
+        details = get_propel_user_details_by_id(propel_user_id) or ()
+        caller_oauth_user_id = details[1] if len(details) > 1 else None
+    except Exception as e:
+        logger.warning("user_is_on_team: get_propel_user_details_by_id failed: %s", e)
+        caller_oauth_user_id = None
+
+    team_data = team_doc.to_dict() or {}
+    for ref in team_data.get("users", []):
+        try:
+            snap = ref.get() if hasattr(ref, "get") else db.collection("users").document(ref).get()
+            if not snap.exists:
+                continue
+            user_data = snap.to_dict() or {}
+            stored_user_id = user_data.get("user_id")
+            stored_propel_id = user_data.get("propel_id")
+            if caller_oauth_user_id and stored_user_id and stored_user_id == caller_oauth_user_id:
+                return True
+            if stored_propel_id and stored_propel_id == propel_user_id:
+                return True
+        except Exception as e:
+            logger.warning("user_is_on_team: failed to resolve a user ref on team %s: %s", team_id, e)
+            continue
+    return False
+
+
+def _completion_done_count(checklist):
+    if not isinstance(checklist, dict):
+        return 0
+    return sum(1 for slug in COMPLETION_ITEM_SLUGS if checklist.get(slug, {}).get("done"))
+
+
+def _project_link(team_data, team_id):
+    event_id = team_data.get("hackathon_event_id") or ""
+    if event_id:
+        return f"https://ohack.dev/hack/{event_id}/team/{team_id}"
+    return f"https://ohack.dev/hack/team/{team_id}"
+
+
+def _completer_name(propel_user_id):
+    try:
+        details = get_propel_user_details_by_id(propel_user_id) or {}
+        return details.get("firstName") or details.get("email") or "A teammate"
+    except Exception:
+        return "A teammate"
+
+
+def toggle_completion_item(propel_user_id, team_id, item_slug):
+    """
+    Mark a single Definition-of-Done item complete for a team. Sends a Slack
+    message to the team's channel. Idempotent in the strict sense: once an item
+    is `done=True`, this returns 409 (no double-Slack, no unchecking).
+    """
+    if item_slug not in COMPLETION_ITEM_SLUGS:
+        return {"error": f"Unknown checklist item: {item_slug}"}, 400
+
+    if not user_is_on_team(propel_user_id, team_id):
+        return {"error": "You must be on this team to update its completion checklist."}, 403
+
+    db = get_db()
+    team_doc = db.collection("teams").document(team_id)
+    snap = team_doc.get()
+    if not snap.exists:
+        return {"error": "Team not found"}, 404
+    team_data = snap.to_dict() or {}
+    checklist = dict(team_data.get("completion_checklist") or {})
+    if checklist.get(item_slug, {}).get("done"):
+        return {"error": "Already complete"}, 409
+
+    name = _completer_name(propel_user_id)
+    now_iso = datetime.now().isoformat()
+    checklist[item_slug] = {
+        "done": True,
+        "completed_at": now_iso,
+        "completed_by_propel_id": propel_user_id,
+        "completed_by_name": name,
+    }
+    done_n = _completion_done_count(checklist)
+    total_n = len(COMPLETION_ITEMS)
+    new_status = "complete" if done_n == total_n else "in_progress"
+
+    update = {
+        "completion_checklist": checklist,
+        "completion_status": new_status,
+    }
+    team_doc.set(update, merge=True)
+
+    item = COMPLETION_ITEM_SLUGS[item_slug]
+    slack_channel = team_data.get("slack_channel")
+    if slack_channel:
+        msg = (
+            f":white_check_mark: *{name}* checked off *{item['label']}* "
+            f"({done_n}/{total_n} complete!)\n"
+            f"{item['blurb']}\n"
+            f"See the full Definition of Done → https://ohack.dev/about/completion"
+        )
+        try:
+            send_slack(message=msg, channel=slack_channel)
+        except Exception as e:
+            logger.error("toggle_completion_item: send_slack failed for team %s: %s", team_id, e)
+
+    send_slack_audit(
+        action="completion_toggle",
+        message=f"Team {team_id} item {item_slug} marked done by {name} ({done_n}/{total_n})",
+        payload={"team_id": team_id, "item": item_slug, "by": propel_user_id},
+    )
+    clear_cache()
+
+    fresh = team_doc.get().to_dict() or {}
+    fresh["id"] = team_id
+    return {"success": True, "team": fresh, "done": done_n, "total": total_n}, 200
+
+
+def mark_team_complete(propel_user_id, team_id):
+    """
+    Finalize a team's project. Requires all 8 checklist items to be done. Posts
+    a celebration message to the team's Slack channel CCing the OHack admins.
+    Idempotent: returns 409 if already complete.
+    """
+    if not user_is_on_team(propel_user_id, team_id):
+        return {"error": "You must be on this team to mark it complete."}, 403
+
+    db = get_db()
+    team_doc = db.collection("teams").document(team_id)
+    snap = team_doc.get()
+    if not snap.exists:
+        return {"error": "Team not found"}, 404
+    team_data = snap.to_dict() or {}
+
+    if team_data.get("completion_status") == "complete":
+        return {"error": "Project already marked complete"}, 409
+
+    checklist = team_data.get("completion_checklist") or {}
+    missing = [s for s in COMPLETION_ITEM_SLUGS if not checklist.get(s, {}).get("done")]
+    if missing:
+        return {"error": "Cannot mark complete: items remaining", "missing": missing}, 409
+
+    name = _completer_name(propel_user_id)
+    now_iso = datetime.now().isoformat()
+    team_doc.set({
+        "completion_status": "complete",
+        "completion_completed_at": now_iso,
+        "completion_completed_by_propel_id": propel_user_id,
+        "completion_completed_by_name": name,
+    }, merge=True)
+
+    slack_channel = team_data.get("slack_channel")
+    team_name = team_data.get("name", "Your team")
+    project_link = _project_link(team_data, team_id)
+    admin_mentions = " ".join(f"<@{uid}>" for uid in TEAM_COMPLETION_SLACK_ADMINS)
+    msg = (
+        f":tada: :rocket: :tada:  *{team_name} marked their project COMPLETE!*\n"
+        f"Congratulations team — you shipped it. 🏆\n\n"
+        f"cc {admin_mentions}\n\n"
+        f"Project link: {project_link}\n"
+        f"See examples of completed projects: https://ohack.dev/about/success-stories"
+    )
+    if slack_channel:
+        try:
+            send_slack(message=msg, channel=slack_channel)
+        except Exception as e:
+            logger.error("mark_team_complete: send_slack failed for team %s: %s", team_id, e)
+
+    send_slack_audit(
+        action="completion_complete",
+        message=f"Team {team_id} ({team_name}) marked PROJECT COMPLETE by {name}",
+        payload={"team_id": team_id, "by": propel_user_id},
+    )
+    clear_cache()
+
+    fresh = team_doc.get().to_dict() or {}
+    fresh["id"] = team_id
+    return {"success": True, "team": fresh}, 200
