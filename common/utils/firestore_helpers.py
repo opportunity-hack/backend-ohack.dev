@@ -20,11 +20,23 @@ def register_cache(cache_obj):
 
 
 def clear_all_caches():
-    """Clear all registered caches and the doc_to_json cache."""
+    """Clear all registered caches and the doc_to_json cache.
+
+    A registered entry may be either an @cached-decorated function (which
+    cachetools gives a `cache_clear()` method) or a raw cache object such
+    as a TTLCache (which uses `.clear()`). Try both.
+    """
     doc_to_json.cache_clear()
     for cache_obj in _cache_registry:
         try:
-            cache_obj.cache_clear()
+            if hasattr(cache_obj, "cache_clear"):
+                cache_obj.cache_clear()
+            elif hasattr(cache_obj, "clear"):
+                cache_obj.clear()
+            else:
+                logger.warning(
+                    f"Registered cache has neither cache_clear nor clear: {type(cache_obj).__name__}"
+                )
         except Exception as e:
             logger.warning(f"Failed to clear a registered cache: {e}")
 
