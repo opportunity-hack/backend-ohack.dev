@@ -14,7 +14,9 @@ from api.teams.teams_service import (
     remove_team,
     get_teams_by_hackathon_id,
     get_my_teams_by_event_id,
-    send_team_message
+    send_team_message,
+    toggle_completion_item,
+    mark_team_complete,
 )
 
 logger = logging.getLogger(__name__)
@@ -110,6 +112,39 @@ def add_demo_video_to_team_api(teamid):
 
     logger.error("Could not obtain user details for POST /team/<teamid>/demo-video")
     return {"error": "Unauthorized"}, 401
+
+@bp.route("/<teamid>/completion/toggle", methods=["POST"])
+@auth.require_user
+def toggle_completion_item_api(teamid):
+    """
+    Mark a single Definition-of-Done item complete on a team. Self-serve for
+    team members. Posts a Slack message into the team's channel. Re-toggling an
+    already-done item returns 409 (no unchecking, no double-Slack).
+    Body: { "item": "<slug>" }
+    """
+    logger.info(f"POST /team/{teamid}/completion/toggle called")
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    body = request.get_json() or {}
+    item_slug = body.get("item")
+    if not item_slug:
+        return {"error": "Missing 'item' in request body"}, 400
+    return toggle_completion_item(auth_user.user_id, teamid, item_slug)
+
+
+@bp.route("/<teamid>/completion/complete", methods=["POST"])
+@auth.require_user
+def mark_team_complete_api(teamid):
+    """
+    Mark a team's project COMPLETE. Self-serve for team members. Requires all
+    8 checklist items to be done first. Posts a celebration message to the
+    team's Slack channel CCing the OHack admins.
+    """
+    logger.info(f"POST /team/{teamid}/completion/complete called")
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    return mark_team_complete(auth_user.user_id, teamid)
+
 
 @bp.route("/<teamid>/member", methods=["POST"])
 @auth.require_user
