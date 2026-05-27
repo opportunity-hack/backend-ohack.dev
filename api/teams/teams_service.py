@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from db.db import get_db, get_user_doc_reference
 from api.messages.messages_service import get_problem_statement_from_id_old
-from services.teams_service import get_teams_list
+from services.teams_service import get_teams_list, get_team
 from services.nonprofits_service import get_single_npo
 from common.utils.firestore_helpers import clear_all_caches as clear_cache
 from services.users_service import (
@@ -1138,8 +1138,10 @@ def toggle_completion_item(propel_user_id, team_id, item_slug):
     )
     clear_cache()
 
-    fresh = team_doc.get().to_dict() or {}
-    fresh["id"] = team_id
+    # Route through get_team so DocumentReferences on users[] are flattened
+    # via doc_to_json + enriched into profile dicts (Flask can't JSON-serialize
+    # raw DocumentReference objects).
+    fresh = (get_team(team_id) or {}).get("team") or {}
     return {"success": True, "team": fresh, "done": done_n, "total": total_n}, 200
 
 
@@ -1200,6 +1202,5 @@ def mark_team_complete(propel_user_id, team_id):
     )
     clear_cache()
 
-    fresh = team_doc.get().to_dict() or {}
-    fresh["id"] = team_id
+    fresh = (get_team(team_id) or {}).get("team") or {}
     return {"success": True, "team": fresh}, 200
