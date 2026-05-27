@@ -21,6 +21,8 @@ logger = get_logger("problem_statements_service")
 ONE_MINUTE = 60
 CACHE_TTL = 600  # 10 minutes
 
+_ps_list_cache: TTLCache = TTLCache(maxsize=1, ttl=CACHE_TTL)
+
 @limits(calls=50, period=ONE_MINUTE)
 def save_problem_statement(d):
     """
@@ -40,7 +42,7 @@ def save_problem_statement(d):
 
         # Clear relevant caches
         get_problem_statement.cache_clear()
-        #get_problem_statements.cache_clear()
+        _ps_list_cache.clear()
 
         send_slack_audit(action="save_problem_statement",
                         message="Saving", payload=d)
@@ -83,14 +85,14 @@ def remove_problem_statement(id):
         
         # Clear caches
         get_problem_statement.cache_clear()
-        #get_problem_statements.cache_clear()
+        _ps_list_cache.clear()
         
         return result
     except Exception as e:
         exception(logger, "Error deleting problem statement", exc_info=e, id=id)
         raise
 
-# @cached(cache=TTLCache(maxsize=1, ttl=CACHE_TTL), key=lambda: hashkey('all_problem_statements'))
+@cached(cache=_ps_list_cache)
 def get_problem_statements():
     """Get all problem statements"""
     return fetch_problem_statements()

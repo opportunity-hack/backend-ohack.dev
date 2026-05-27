@@ -6,7 +6,7 @@ from ratelimit import limits
 from firebase_admin import firestore
 
 from common.log import get_logger
-from common.utils.firestore_helpers import doc_to_json, log_execution_time
+from common.utils.firestore_helpers import doc_to_json, log_execution_time, register_cache
 from common.utils.slack import send_slack_audit, send_slack, create_slack_channel, invite_user_to_channel
 from common.utils.github import create_github_repo, validate_github_username, get_all_repos
 from common.utils.firebase import get_hackathon_by_event_id
@@ -59,8 +59,57 @@ def get_teams_list(id=None):
             return { "teams": results }
 
 
+def _enrich_team_users(team_data, db):
+    """
+    Replace team_data["users"] (list of user doc-id strings, as flattened by
+    doc_to_json) with a list of slim profile dicts so the public team page can
+    render real names + avatars without N round-trips from the frontend.
+
+    Safe to call repeatedly; a missing user doc becomes a stub instead of 500ing
+    the whole team request.
+    """
+    user_ids = team_data.get("users")
+    if not user_ids or not isinstance(user_ids, list):
+        return team_data
+
+    user_refs = [db.collection("users").document(uid) for uid in user_ids if isinstance(uid, str)]
+    if not user_refs:
+        return team_data
+
+    try:
+        snapshots = db.get_all(user_refs)
+    except Exception as e:
+        logger.warning(f"_enrich_team_users get_all failed, leaving ids in place: {e}")
+        return team_data
+
+    enriched = []
+    for snap in snapshots:
+        try:
+            if not snap.exists:
+                enriched.append({"id": snap.id, "name": None, "nickname": None, "profile_image": None, "user_id": None})
+                continue
+            d = snap.to_dict() or {}
+            enriched.append({
+                "id": snap.id,
+                "user_id": d.get("user_id"),
+                "name": d.get("name"),
+                "nickname": d.get("nickname"),
+                "profile_image": d.get("profile_image"),
+            })
+        except Exception as e:
+            logger.warning(f"_enrich_team_users per-user failure ({snap.id}): {e}")
+            enriched.append({"id": snap.id, "name": None, "nickname": None, "profile_image": None, "user_id": None})
+
+    team_data["users"] = enriched
+    return team_data
+
+
+_GET_TEAM_CACHE = TTLCache(maxsize=100, ttl=600)
+register_cache(_GET_TEAM_CACHE)
+
+
 @limits(calls=2000, period=THIRTY_SECONDS)
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=lambda id: id)
+@cached(cache=_GET_TEAM_CACHE, key=lambda id: id)
 @log_execution_time
 def get_team(id):
     if id is None:
@@ -79,6 +128,7 @@ def get_team(id):
             return {}
 
         team_data = doc_to_json(docid=doc.id, doc=doc)
+        team_data = _enrich_team_users(team_data, db)
         logger.info(f"Successfully retrieved team with id={id}")
         return {
             "team" : team_data

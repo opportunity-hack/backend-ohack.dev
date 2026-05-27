@@ -24,4 +24,4 @@ ENV GUNICORN_CMD_ARGS="--bind=[::]:6060 --workers=2"
 # Copy project
 COPY . /app/
 # Run the application
-CMD ["venv/bin/gunicorn", "api.wsgi:app", "--log-file=-", "--log-level", "debug", "--preload", "--workers", "1"]
+CMD ["venv/bin/gunicorn", "api.wsgi:app", "--log-file=-", "--log-level", "debug", "--preload", "--workers", "1", "--timeout", "120"]

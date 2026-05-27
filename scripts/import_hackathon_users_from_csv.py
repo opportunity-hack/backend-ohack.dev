@@ -152,21 +152,33 @@ def parse_registrants(csv_path):
 def parse_projects(csv_path):
     """Devpost projects CSV -> list of teams with members.
 
-    The CSV header is:
-        Project Title, ..., Submitter First Name, Submitter Last Name,
-        Submitter Email, ..., How Many People Are On Your Team?,
-        Team Colleges/Universities, Additional Team Member Count,
-        Team Member 1 First Name, Team Member 1 Last Name,
-        Team Member 1 Email, ...
+    Devpost's projects CSV starts with a fixed set of project columns, then
+    "Submitter First/Last/Email" (cols 13/14/15 in every format we've seen),
+    then a variable run of summary columns ("Notes", optional "Team Number",
+    "Team Colleges/Universities", "Additional Team Member Count"), and finally
+    repeating triplets of (Team Member N First, Last, Email).
 
-    Devpost emits 21 fixed columns and then repeating triplets of
-    (First Name, Last Name, Email) for each additional team member.
-    We don't trust the header beyond column 21; we parse the tail as triplets.
+    The number of summary columns DIFFERS between exports (older 23-col CSVs
+    have no "Team Number"; newer 24-col CSVs do), so the team-member tail
+    starts at col 19 or 20 depending on the file. Anchor on the header column
+    "Team Member 1 First Name" to find the right offset for this file.
+
+    Each parsed "email" is validated with looks_like_email; rows where the
+    triplet shifted off-axis produce a name-as-email and are skipped with a
+    warning rather than written as bogus user docs.
     """
     teams = []
+    skipped_bogus = []
     with open(csv_path, newline="", encoding="utf-8") as f:
         reader = csv.reader(f)
-        next(reader, None)  # skip header
+        header = next(reader, None) or []
+        try:
+            i_tm1f = header.index("Team Member 1 First Name")
+        except ValueError:
+            raise SystemExit(
+                "projects CSV is missing 'Team Member 1 First Name' header; "
+                f"cannot locate team-member triplets. Header: {header}"
+            )
         for row in reader:
             if not row:
                 continue
@@ -184,8 +196,7 @@ def parse_projects(csv_path):
                     "last_name": submitter_last,
                     "is_submitter": True,
                 })
-            # repeating triplets starting at column 21 (0-indexed)
-            tail = row[21:]
+            tail = row[i_tm1f:]
             for i in range(0, len(tail), 3):
                 if i + 2 >= len(tail):
                     break
@@ -194,6 +205,9 @@ def parse_projects(csv_path):
                 email = norm_email(tail[i + 2])
                 if not email:
                     continue
+                if not looks_like_email(email):
+                    skipped_bogus.append((title, first, last, email))
+                    continue
                 members.append({
                     "email": email,
                     "first_name": first,
@@ -201,6 +215,12 @@ def parse_projects(csv_path):
                     "is_submitter": False,
                 })
             teams.append({"team_name": title, "members": members})
+    if skipped_bogus:
+        print(f"WARNING: skipped {len(skipped_bogus)} team-member triplet(s) where "
+              f"the 'email' value didn't look like an email "
+              f"(usually means the CSV triplet shifted off-axis):")
+        for team, first, last, email in skipped_bogus:
+            print(f"  - team={team!r}  first={first!r}  last={last!r}  email={email!r}")
     return teams
 
 

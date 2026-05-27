@@ -143,7 +143,8 @@ def generate_and_save_image_to_cdn(directory, text):
         model="gpt-image-1",
         prompt=prompt,
         n=1,
-        size="1024x1024"       
+        size="1024x1024",
+        timeout=90.0
     ) 
 
     # Create a short filename from input text
