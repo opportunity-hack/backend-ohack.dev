@@ -39,14 +39,17 @@ MENTOR_COVERAGE_ITEMS = [
     {"slug": "repo_health_checked", "label": "GitHub repo reviewed",
      "blurb": "Commits flowing, structure sensible, README starting to take shape."},
     {"slug": "criteria_walkthrough", "label": "Judging criteria walkthrough",
-     "blurb": "Team has been shown the 4-criterion rubric and knows what judges look for."},
+     "blurb": "Team has been shown the judging rubric (Scope, Documentation, Polish, Security, plus Accessibility) and knows what judges look for."},
     {"slug": "demo_devpost_reviewed", "label": "Demo video + DevPost reviewed",
      "blurb": "A mentor has reviewed at least a draft of the demo video and DevPost submission."},
 ]
 MENTOR_COVERAGE_SLUGS = {item["slug"]: item for item in MENTOR_COVERAGE_ITEMS}
 
 ALLOWED_FLAG_SEVERITIES = {"needs_attention", "blocked"}
-ALLOWED_CRITERIA = {"scope", "documentation", "polish", "security"}
+# Five judging criteria. The first four are the main 10-pt rubric on
+# /about/judges; "accessibility" is the special-category prize on the same
+# page but mentors still coach for it, so it lives in the same set.
+ALLOWED_CRITERIA = {"scope", "documentation", "polish", "security", "accessibility"}
 ALLOWED_SCORES = {"green", "yellow", "red"}
 
 MAX_NOTE_LEN = 1000
