@@ -214,6 +214,26 @@ def admin_list_mentors(user, org, event_id):
     """Admin endpoint to list mentor applications."""
     return handle_admin_list(user, event_id, 'mentor')
 
+
+@bp.route('/volunteer/<event_id>/me', methods=['GET'])
+@auth.require_user
+def get_my_volunteer_status_for_event(event_id):
+    """
+    Lightweight self-check for the calling user against a single event.
+    Default type is 'mentor' (used by the per-team mentor panel to decide
+    interactive vs. read-only).
+    Returns { is_mentor: bool, volunteer: {name, email, isSelected, checkInTime?} | null }.
+    """
+    user = auth_user
+    if not user or not user.user_id:
+        return _error_response("Authentication required", 401)
+    vtype = request.args.get('type', 'mentor')
+    if vtype != 'mentor':
+        # Keep the surface narrow for now; extend later if needed.
+        return _error_response("Only type=mentor is supported", 400)
+    from api.mentors.mentors_service import get_mentor_self_status
+    return get_mentor_self_status(user.user_id, event_id)
+
 # Sponsor routes
 @bp.route('/sponsor/application/<event_id>/submit', methods=['POST'])
 @auth.optional_user

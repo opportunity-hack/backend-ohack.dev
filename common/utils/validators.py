@@ -297,6 +297,15 @@ def validate_hackathon_data_partial(data):
             _skip("planning", str(e))
             cleaned.pop("planning")
 
+    # mentor_slack_channel — optional channel-name string for the per-event
+    # mentor coordination channel. The per-team MentorTeamPanel falls back to
+    # a name-derived guess ("<event_id>-mentors") when this is unset.
+    if "mentor_slack_channel" in cleaned and cleaned["mentor_slack_channel"] is not None:
+        msc = cleaned["mentor_slack_channel"]
+        if not isinstance(msc, str) or len(msc) > 80:
+            _skip("mentor_slack_channel", "must be a string <= 80 chars (Slack channel name)")
+            cleaned.pop("mentor_slack_channel")
+
     return cleaned, skipped
 
 

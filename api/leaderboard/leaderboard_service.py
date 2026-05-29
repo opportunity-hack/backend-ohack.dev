@@ -504,6 +504,105 @@ def categorize_mentor_opportunities(achievements: List[Dict]) -> List[Dict]:
 
     return opportunities
 
+
+def collect_mentor_panel_opportunities(event_id: str) -> List[Dict]:
+    """
+    Derive mentor-boost opportunities from the per-team mentor panel state:
+      - Any team with an open mentor flag (raised by a mentor)
+      - Any team that has had NO mentor touch in the last 4 hours during a
+        live event window (start_date <= now <= end_date + 1 day)
+
+    These are appended to the existing GitHub-derived opportunities so the
+    "Teams Ready for a Boost" widget on /hack/<event_id>#stats covers both
+    coding-activity AND mentor-coverage gaps.
+    """
+    from datetime import datetime, timedelta
+    from common.utils.firebase import get_hackathon_by_event_id
+    from db.db import get_db
+
+    opportunities: List[Dict] = []
+
+    try:
+        hackathon = get_hackathon_by_event_id(event_id) or {}
+    except Exception as e:
+        logger.warning("collect_mentor_panel_opportunities: hackathon lookup failed: %s", e)
+        hackathon = {}
+
+    now = datetime.now()
+    start_date = None
+    end_date = None
+    try:
+        if hackathon.get("start_date"):
+            start_date = datetime.fromisoformat(hackathon["start_date"].replace("Z", ""))
+        if hackathon.get("end_date"):
+            end_date = datetime.fromisoformat(hackathon["end_date"].replace("Z", ""))
+    except Exception:
+        pass
+    is_live = bool(
+        start_date and end_date and start_date <= now <= (end_date + timedelta(days=1))
+    )
+
+    try:
+        db = get_db()
+        team_docs = db.collection("teams").where("hackathon_event_id", "==", event_id).stream()
+    except Exception as e:
+        logger.warning("collect_mentor_panel_opportunities: team query failed: %s", e)
+        return opportunities
+
+    stale_threshold = now - timedelta(hours=4)
+
+    for snap in team_docs:
+        try:
+            t = snap.to_dict() or {}
+            team_name = t.get("name") or "Unnamed team"
+            team_id = snap.id
+
+            # Open flag → one opportunity per flag (cap at 2 per team to limit noise)
+            flags = t.get("mentor_flags") or []
+            open_flags = [f for f in flags if not f.get("resolved_at")][:2]
+            for f in open_flags:
+                severity = f.get("severity", "needs_attention")
+                body = (f.get("body") or "").strip()
+                preview = (body[:80] + "...") if len(body) > 80 else body
+                opportunities.append({
+                    "type": "mentor_opportunity",
+                    "team": team_name,
+                    "teamPage": f"https://www.ohack.dev/hack/{event_id}/team/{team_id}",
+                    "icon": "flag",
+                    "value": "Open flag" if severity == "needs_attention" else "Blocked",
+                    "description": f"{f.get('raised_by_name', 'Mentor')}: {preview}",
+                    "members": len(t.get("users") or []),
+                })
+
+            # No mentor touch in 4h during a live event
+            if is_live:
+                last_touched_iso = t.get("mentor_last_touched_at")
+                touched_recently = False
+                if last_touched_iso:
+                    try:
+                        last_touched = datetime.fromisoformat(last_touched_iso.replace("Z", ""))
+                        if last_touched >= stale_threshold:
+                            touched_recently = True
+                    except Exception:
+                        pass
+                if not touched_recently:
+                    opportunities.append({
+                        "type": "mentor_opportunity",
+                        "team": team_name,
+                        "teamPage": f"https://www.ohack.dev/hack/{event_id}/team/{team_id}",
+                        "icon": "schedule",
+                        "value": "No mentor touch in 4h",
+                        "description": (
+                            "No mentor has checked on this team in the last 4 hours — drop by!"
+                        ),
+                        "members": len(t.get("users") or []),
+                    })
+        except Exception as e:
+            logger.warning("collect_mentor_panel_opportunities: skipped a team: %s", e)
+            continue
+
+    return opportunities
+
 def get_leaderboard_analytics(event_id: str, contributors: List[Dict], achievements: List[Dict]) -> Dict[str, Any]:
     """
     Generate leaderboard analytics including statistics and achievements.
@@ -541,6 +640,13 @@ def get_leaderboard_analytics(event_id: str, contributors: List[Dict], achieveme
     individual_achievements = categorize_individual_achievements(achievements)
     team_achievements = categorize_team_achievements(achievements, contributors)
     mentor_opportunities = categorize_mentor_opportunities(achievements)
+
+    # Append mentor-panel-derived opportunities (open flags + stale touch).
+    # Best-effort: any failure here must not break the broader leaderboard.
+    try:
+        mentor_opportunities = mentor_opportunities + collect_mentor_panel_opportunities(event_id)
+    except Exception as e:
+        logger.warning("Failed to collect mentor panel opportunities for %s: %s", event_id, e)
 
     return {
         "eventName": event_name,

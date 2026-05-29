@@ -185,6 +185,7 @@ def create_app():
     from api.llm import llm_views
     from api.store import store_views
     from api.planning import planning_views
+    from api.mentors import mentors_views
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
@@ -205,5 +206,6 @@ def create_app():
     app.register_blueprint(judging_views.bp)
     app.register_blueprint(store_views.bp)
     app.register_blueprint(planning_views.bp)
+    app.register_blueprint(mentors_views.bp)
 
     return app
