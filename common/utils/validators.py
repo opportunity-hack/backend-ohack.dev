@@ -306,6 +306,15 @@ def validate_hackathon_data_partial(data):
             _skip("mentor_slack_channel", "must be a string <= 80 chars (Slack channel name)")
             cleaned.pop("mentor_slack_channel")
 
+    # github_org — optional GitHub organization slug used to link to the org's
+    # GitHub page and to scope team repo lookups. Loose validation: a string
+    # within GitHub's org-name length bounds.
+    if "github_org" in cleaned and cleaned["github_org"] is not None:
+        go = cleaned["github_org"]
+        if not isinstance(go, str) or len(go) > 100:
+            _skip("github_org", "must be a string <= 100 chars (GitHub org slug)")
+            cleaned.pop("github_org")
+
     return cleaned, skipped
 
 

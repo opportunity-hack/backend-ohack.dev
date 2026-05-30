@@ -2759,9 +2759,14 @@ def _fetch_and_cache_resend_emails() -> Optional[Dict[str, Any]]:
                 max_pages=max_pages, total_so_far=len(all_emails))
 
     if page_error_occurred:
-        # Release lock so the next request can retry
-        delete_cached(_RESEND_LOCK_KEY)
-        return None
+        if not all_emails:
+            # No data at all — release lock so the next request can retry
+            delete_cached(_RESEND_LOCK_KEY)
+            return None
+        # We have partial data from earlier pages — use it rather than discarding
+        warning(logger, "Returning partial Resend email data due to fetch error",
+                total_fetched=len(all_emails))
+        truncated = True
 
     # Build index by recipient email
     index: Dict[str, List[Dict]] = {}
