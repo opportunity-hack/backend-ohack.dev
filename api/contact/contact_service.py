@@ -200,6 +200,7 @@ def send_confirmation_email(contact_data) -> bool:
             'nonprofit': 'Nonprofit Partnership',
             'judge': 'Judging Opportunity',
             'volunteer': 'Volunteer Opportunity',
+            'volunteer_letter': 'Volunteer Letter Request',
             'media': 'Media Inquiry',
             'other': 'General Question'
         }.get(contact_data.get('inquiryType', ''), contact_data.get('inquiryType', 'General Inquiry'))
