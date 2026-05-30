@@ -7,6 +7,7 @@ from common.exceptions import InvalidUsageError
 from common.utils.slack import send_slack_audit
 from services.volunteers_service import (
     get_volunteer_by_user_id,
+    get_volunteer_by_email,
     get_volunteers_by_event,
     create_or_update_volunteer,
     update_volunteer_selection,
@@ -140,12 +141,35 @@ def handle_get(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, Any]
     logger.info(f"Getting {volunteer_type} application for event {event_id}")
 
     try:
-        volunteer = get_volunteer_by_user_id(user.user_id, event_id, volunteer_type)
-        
+        uid = getattr(user, "user_id", None)
+
+        # 1. Direct match on the id we were handed. For self-submitted apps this
+        #    is the PropelAuth UUID (handle_submit stores auth_user.user_id), and
+        #    for the ?userId= query-param path it's whatever the caller passed.
+        volunteer = get_volunteer_by_user_id(uid, event_id, volunteer_type) if uid else None
+
+        # 2. Fall back to email / OAuth user_id. Volunteer docs created through
+        #    flows that stored the OAuth identity (oauth2|slack|...) rather than
+        #    the PropelAuth UUID won't match step 1, so resolve the caller the
+        #    same way the mentor self-check does: email first, then OAuth user_id.
+        if volunteer is None and uid:
+            email = oauth_user_id = None
+            try:
+                from services.users_service import get_propel_user_details_by_id
+                details = get_propel_user_details_by_id(uid) or ()
+                email = details[0] if len(details) > 0 else None
+                oauth_user_id = details[1] if len(details) > 1 else None
+            except Exception as resolve_err:
+                logger.warning(f"handle_get: could not resolve caller {uid}: {resolve_err}")
+
+            if email:
+                volunteer = get_volunteer_by_email(email, event_id, volunteer_type)
+            if volunteer is None and oauth_user_id and oauth_user_id != uid:
+                volunteer = get_volunteer_by_user_id(oauth_user_id, event_id, volunteer_type)
+
         if volunteer:
-            result = _success_response(volunteer, "Application retrieved successfully")
-            logger.info(f"Retrieved {volunteer_type} application: {result}")            
-            return result
+            logger.info(f"Retrieved {volunteer_type} application for event {event_id}")
+            return _success_response(volunteer, "Application retrieved successfully")
         else:
             return _success_response(None, "No application found")
     except Exception as e:
