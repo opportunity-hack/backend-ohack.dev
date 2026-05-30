@@ -14,7 +14,7 @@ from services.users_service import (
 from common.utils.github import create_github_repo, validate_github_username
 from common.utils.slack import create_slack_channel, invite_user_to_channel, send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
-from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id
+from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id, normalize_slack_user_id
 
 from common.utils.slack import add_bot_to_channel    
 
@@ -421,11 +421,18 @@ Let's make a difference! :muscle: :heart:
     
     send_slack_audit(action="queue_team", message=f"Queueing {len(teamMembers)} team members", payload=json)
     for member in teamMembers:
-        if "id" in member and member["id"] != root_slack_user_id:
-            logger.info("Inviting user %s to slack channel %s", member["id"], slack_channel)
-            invite_user_to_channel(member["id"], slack_channel)
-            # Lookup the user in the database by user_id which is their slack user id            
-            full_user_id_with_slack_prefix = f"{SLACK_USER_ID_PREFIX}{member['id']}"
+        # teamMembers is a mixed list: Slack-user objects ({id, name, real_name})
+        # picked from the autocomplete, plus any free-text names the user typed
+        # (the picker is freeSolo). Only objects with a Slack id can be invited to
+        # the channel and linked to the team. Guard on dict explicitly — `"id" in
+        # member` against a raw string is a substring test (e.g. "Sidney" matches),
+        # and member["id"] would then raise TypeError on that string.
+        member_slack_id = member.get("id") if isinstance(member, dict) else None
+        if member_slack_id and member_slack_id != root_slack_user_id:
+            logger.info("Inviting user %s to slack channel %s", member_slack_id, slack_channel)
+            invite_user_to_channel(member_slack_id, slack_channel)
+            # Lookup the user in the database by user_id which is their slack user id
+            full_user_id_with_slack_prefix = normalize_slack_user_id(member_slack_id)
             user_db_check = get_user_from_slack_id(full_user_id_with_slack_prefix)
             if not user_db_check:
                 new_user = save_user(
@@ -433,18 +440,18 @@ Let's make a difference! :muscle: :heart:
                     email="",
                     last_login="",
                     profile_image="",
-                    name=member["real_name"],
-                    nickname=member["name"]
-                )                
+                    name=member.get("real_name", ""),
+                    nickname=member.get("name", "")
+                )
                 users_list.append(get_user_doc_reference(new_user.user_id))
             else:
                 in_db_user = get_user_doc_reference(user_db_check.user_id)
                 users_list.append(in_db_user)
                 logger.info("User %s already exists in the database", user_db_check)
-                    
+
 
         else:
-            logger.info("Skipping user: %s", member)
+            logger.info("Skipping non-Slack team member (free-text or self): %s", member)
         
     
     # Add Slack admins
