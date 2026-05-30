@@ -970,6 +970,14 @@ def save_hackathon(json_data, propel_id):
         if "visible_problem_statements" in data:
             hackathon_data["visible_problem_statements"] = data["visible_problem_statements"]
 
+        # Optional top-level fields that pass straight through when present.
+        # (Validated in validate_hackathon_data_partial; not part of the core
+        # required set, so they need an explicit copy here or merge=True drops
+        # them.)
+        for optional_key in ("github_org", "mentor_slack_channel"):
+            if optional_key in data:
+                hackathon_data[optional_key] = data[optional_key]
+
         @firestore.transactional
         def update_hackathon(transaction):
             hackathon_ref = db.collection('hackathons').document(doc_id)
