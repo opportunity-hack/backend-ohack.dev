@@ -23,9 +23,16 @@ def getOrgId(req):
 @auth.require_user
 def profile():            
     # user_id is a uuid from Propel Auth
-    if auth_user and auth_user.user_id:  
+    if auth_user and auth_user.user_id:
         u: User | None = users_service.get_profile_metadata(auth_user.user_id)
-        return vars(u) if u is not None else None
+        if u is None:
+            return None
+        # vars(u) exposes u.hackathons as raw Hackathon objects, which Flask
+        # can't JSON-encode (TypeError: Object of type Hackathon is not JSON
+        # serializable). Shallow-copy and replace it with serialized dicts.
+        result = dict(vars(u))
+        result["hackathons"] = u.serialize_hackathons()
+        return result
     else:
         return None
 
