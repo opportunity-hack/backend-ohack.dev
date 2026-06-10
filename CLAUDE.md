@@ -12,6 +12,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Architecture
 
+A note about this codebase: This was originally taken from Auth0 and messages_views.py and messages_service.py were the original files we built from.  Over time we have created a better structure for this backend service.  Please do not update these two files anymore, you should consider the other code that exists first, and then add a new _views.py and a new _service.py if you're unable to find a good place to update the code as it relates to the file.  If you find code in these two "messages" files that you plan to update, it's encouraged to migrate that code elsewhere to help iteratively move away from messages_views and messages_service.
+
 ### Flask app with Blueprint-based API modules
 The app is created via `api/__init__.py:create_app()`. Each API domain is a Blueprint registered there. The WSGI entrypoint is `api/wsgi.py`.
 
@@ -116,6 +118,13 @@ To send a Slack DM, pass the Slack user ID as `channel`: `send_slack(message=...
 - `User.user_id` = PropelAuth user ID (the `propel_id`, what's stored in `assignees[]`, `editors[]`, etc.).
 
 These are DIFFERENT VALUES. When bundling user data for the frontend, include both: `{user_id: propel_id, db_id: firestore_doc_id, name, profile_image}`. The frontend needs `db_id` to build profile links and `user_id` (propel) for matching against assignees/editors/mentions.
+
+## Admin Email Templates (`email_templates` collection)
+Powers the frontend `/admin/communication` template editor and the volunteer send-email dialogs. Blueprint: `api/email_templates/email_templates_views.py` (`/api/admin/templates*`, all `volunteer.admin`-gated); service: `services/email_templates_service.py`; seed data: `services/email_templates_seed.py`.
+- Layout: `email_templates/{slug}` main doc + `email_templates/{slug}/versions/{000N}` append-only content snapshots. `version` on the main doc = current version number; version doc ids are zero-padded for natural ordering.
+- Versioning rules: content-key edits (`title/category/category_key/applicable_roles/message/icon`) bump version + append a snapshot; status-only patches don't bump; **revert never rewrites history** — it copies the target version's content forward as a NEW version (`change_note: "Reverted to version N"`).
+- Seeding: `email_templates_seed.py` holds the original 22 hardcoded frontend templates (GENERATED from frontend `src/lib/messageTemplates.js` — regenerate, don't hand-edit; editing it does not change live emails). Auto-seeds on first list call when the collection is empty; `POST /api/admin/templates/seed` re-inserts missing seed docs only — never overwrites admin edits.
+- DELETE is a hard delete (doc + versions). Deleted seed templates can be restored via /seed (history restarts at v1).
 
 ## Hackathon roster import + audit scripts
 Two scripts live in `scripts/` for diagnosing and backfilling team rosters on `/hack/<event_id>`:
