@@ -376,11 +376,11 @@ def validate_meals(meals):
 
 MAX_EVENT_PHOTOS = 100
 MAX_SOCIAL_POSTS = 25
-ALLOWED_SOCIAL_PLATFORMS = {"linkedin", "instagram", "threads"}
+ALLOWED_SOCIAL_PLATFORMS = {"linkedin", "instagram", "threads", "article"}  # article = freeform URL with no platform-host restrictions,
 SOCIAL_PLATFORM_HOSTS = {
     "linkedin": ("linkedin.com",),
     "instagram": ("instagram.com",),
-    "threads": ("threads.net", "threads.com"),
+    "threads": ("threads.net", "threads.com"),    
 }
 
 
@@ -424,11 +424,13 @@ def validate_social_posts(posts):
             raise ValueError(f"social_posts[{i}].url must be a valid URL")
         host = (urlparse(url).netloc or "").lower()
         host = host[4:] if host.startswith("www.") else host
-        allowed_hosts = SOCIAL_PLATFORM_HOSTS[platform]
-        if not any(host == h or host.endswith("." + h) for h in allowed_hosts):
-            raise ValueError(
-                f"social_posts[{i}].url host must match platform '{platform}' ({allowed_hosts})"
-            )
+        # For non-article platforms, enforce that the URL's host matches the expected platform hosts.
+        if platform != "article":
+            allowed_hosts = SOCIAL_PLATFORM_HOSTS.get(platform, ())
+            if not any(host == h or host.endswith("." + h) for h in allowed_hosts):
+                raise ValueError(
+                    f"social_posts[{i}].url host must match platform '{platform}' ({allowed_hosts})"
+                )
         caption = post.get("caption")
         if caption is not None and not isinstance(caption, str):
             raise ValueError(f"social_posts[{i}].caption must be a string")
