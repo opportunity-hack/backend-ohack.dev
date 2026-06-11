@@ -1,34 +1,102 @@
 import os
-from typing import Any, Optional, Callable, TypeVar
 import json
 from functools import wraps
+from typing import Any, Callable, TypeVar
+from urllib.parse import urlparse, urlunparse
+
 from cachetools import TTLCache
 
+from common.log import get_logger, info, warning
+
 T = TypeVar('T')
+
+logger = get_logger("redis_cache")
+
+LOCAL_CACHE_MAXSIZE = 1000
+LOCAL_CACHE_TTL_SECONDS = 600
+
+
+def _redact_redis_url(redis_url: str) -> str:
+    """Remove credentials from Redis URLs before logging them."""
+    parsed = urlparse(redis_url)
+    if not parsed.netloc or "@" not in parsed.netloc:
+        return redis_url
+
+    user_info, host_info = parsed.netloc.rsplit("@", 1)
+    username = user_info.split(":", 1)[0] if ":" in user_info else user_info
+    redacted_user_info = f"{username}:***" if username else "***"
+    return urlunparse(parsed._replace(netloc=f"{redacted_user_info}@{host_info}"))
+
+
+def _disable_redis(operation: str, exc: Exception) -> None:
+    """Disable Redis after a runtime failure and fall back to local cache."""
+    global REDIS_ENABLED, REDIS_CLIENT
+
+    if REDIS_ENABLED:
+        warning(
+            logger,
+            "Redis cache operation failed; falling back to local TTL cache",
+            operation=operation,
+            error=str(exc),
+        )
+
+    REDIS_ENABLED = False
+    REDIS_CLIENT = None
 
 # Check if Redis is available and import if it is
 REDIS_ENABLED = False
 REDIS_CLIENT = None
+redis_url = os.environ.get('REDIS_URL')
 
-try:
-    import redis
-    from redis.exceptions import RedisError
-    
-    # Get Redis URL from environment (Fly.io provides this for Redis instances)
-    redis_url = os.environ.get('REDIS_URL')
-    
-    if redis_url:
+if redis_url:
+    try:
+        import redis
+        from redis.exceptions import RedisError
+
         REDIS_CLIENT = redis.from_url(redis_url)
         # Test the connection
         REDIS_CLIENT.ping()
         REDIS_ENABLED = True
-except (ImportError, RedisError, Exception):
-    # Either redis is not installed or connection failed
-    # We'll fall back to local caching
-    pass
+        info(
+            logger,
+            "Redis cache enabled",
+            cache_backend="redis",
+            redis_url=_redact_redis_url(redis_url),
+        )
+    except ImportError as exc:
+        warning(
+            logger,
+            "Redis client import failed; using local TTL cache",
+            cache_backend="local_ttl",
+            redis_url=_redact_redis_url(redis_url),
+            error=str(exc),
+        )
+    except RedisError as exc:
+        warning(
+            logger,
+            "Redis connection failed during startup; using local TTL cache",
+            cache_backend="local_ttl",
+            redis_url=_redact_redis_url(redis_url),
+            error=str(exc),
+        )
+    except Exception as exc:
+        warning(
+            logger,
+            "Unexpected Redis startup failure; using local TTL cache",
+            cache_backend="local_ttl",
+            redis_url=_redact_redis_url(redis_url),
+            error=str(exc),
+        )
+else:
+    info(
+        logger,
+        "Redis cache disabled; REDIS_URL not configured, using local TTL cache",
+        cache_backend="local_ttl",
+        local_ttl_seconds=LOCAL_CACHE_TTL_SECONDS,
+    )
 
 # Fallback local cache with 10 minute TTL
-local_cache = TTLCache(maxsize=1000, ttl=600)
+local_cache = TTLCache(maxsize=LOCAL_CACHE_MAXSIZE, ttl=LOCAL_CACHE_TTL_SECONDS)
 
 def cache_key(*args, **kwargs) -> str:
     """Generate a consistent cache key from arguments."""
@@ -54,9 +122,8 @@ def get_cached(key: str, default: Any = None) -> Any:
             if value:
                 return json.loads(value)
             return default
-        except Exception:
-            # Fall back to local cache if Redis fails
-            pass
+        except Exception as exc:
+            _disable_redis("get", exc)
     
     return local_cache.get(key, default)
 
@@ -80,9 +147,8 @@ def set_cached(key: str, value: Any, ttl: int = 600) -> bool:
             try:
                 REDIS_CLIENT.setex(key, ttl, json_value)
                 return True
-            except Exception:
-                # Fall back to local cache if Redis fails
-                pass
+            except Exception as exc:
+                _disable_redis("set", exc)
         
         # Use local cache
         local_cache[key] = value
@@ -104,8 +170,8 @@ def delete_cached(key: str) -> bool:
         if REDIS_ENABLED:
             try:
                 REDIS_CLIENT.delete(key)
-            except Exception:
-                pass
+            except Exception as exc:
+                _disable_redis("delete", exc)
         
         # Also remove from local cache
         if key in local_cache:
@@ -131,8 +197,8 @@ def clear_pattern(pattern: str) -> bool:
                 keys = REDIS_CLIENT.keys(pattern)
                 if keys:
                     REDIS_CLIENT.delete(*keys)
-            except Exception:
-                pass
+            except Exception as exc:
+                _disable_redis("clear_pattern", exc)
         
         # For local cache, scan and remove matching keys
         keys_to_delete = [k for k in local_cache if k.startswith(pattern)]
