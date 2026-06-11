@@ -817,9 +817,11 @@ def admin_list_resend_emails():
         else:
             filter_emails = None
 
-        logger.info("Listing Resend emails, filter_count=%d", len(filter_emails) if filter_emails else 0)
+        force = bool(body.get('force', False))
+        logger.info("Listing Resend emails, filter_count=%d, force=%s",
+                    len(filter_emails) if filter_emails else 0, force)
 
-        result = list_all_resend_emails(filter_emails=filter_emails)
+        result = list_all_resend_emails(filter_emails=filter_emails, force=force)
 
         if result['success']:
             return _success_response(result, "Resend email list fetched successfully")
