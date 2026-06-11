@@ -2,7 +2,7 @@ from typing import Dict, List, Optional, Union, Any, Tuple
 import uuid
 import time
 import threading
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
 from functools import lru_cache
 from ratelimiter import RateLimiter
@@ -179,9 +179,9 @@ def verify_recaptcha(token: str) -> bool:
         exception(logger, "Error verifying recaptcha", exc_info=e)
         return False
 
-def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str, 
-    calendar_attachments: Optional[List[Dict[str, Any]]] = None, event_id: Optional[str] = None                                   
-                                      ) -> bool:
+def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str,
+    calendar_attachments: Optional[List[Dict[str, Any]]] = None, event_id: Optional[str] = None,
+    volunteer_id: Optional[str] = None) -> Optional[str]:
     """
     Send a confirmation email to the volunteer who submitted the form.
     
@@ -301,12 +301,33 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         if calendar_attachments and len(calendar_attachments) > 0:
             params["attachments"] = calendar_attachments
         
-        resend.Emails.send(params)
-        info(logger, "Sent confirmation email to volunteer", email=email, attachment_count=len(calendar_attachments) if calendar_attachments else 0)
-        return True
+        email_result = resend.Emails.send(params)
+        resend_id = email_result.get('id') if isinstance(email_result, dict) else getattr(email_result, 'id', None)
+        info(logger, "Sent confirmation email to volunteer", email=email,
+             attachment_count=len(calendar_attachments) if calendar_attachments else 0,
+             resend_id=resend_id)
+        if resend_id and volunteer_id:
+            try:
+                subject = params.get('subject', '')
+                sent_record = {
+                    'resend_id': resend_id,
+                    'subject': subject,
+                    'timestamp': _get_current_timestamp(),
+                    'sent_by': 'system',
+                    'recipient_type': 'application_confirmation',
+                }
+                get_db().collection('volunteers').document(volunteer_id).update(
+                    {'sent_emails': firestore.ArrayUnion([sent_record])}
+                )
+                info(logger, "Tracked confirmation email in sent_emails",
+                     volunteer_id=volunteer_id, resend_id=resend_id)
+            except Exception as track_err:
+                warning(logger, "Failed to track confirmation email in sent_emails",
+                        exc_info=track_err, volunteer_id=volunteer_id)
+        return resend_id
     except Exception as e:
         exception(logger, "Error sending email via Resend", exc_info=e, email=email)
-        return False
+        return None
 
 def send_admin_notification_email(volunteer_data: Dict[str, Any], is_update: bool = False) -> bool:
     """
@@ -931,7 +952,7 @@ def create_or_update_volunteer(
             else:
                 warning(logger, "No calendar attachments generated despite availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
 
             info(logger, "Sent notifications about updated volunteer", email=email)
         except Exception as e:
@@ -1004,7 +1025,7 @@ def create_or_update_volunteer(
             else:
                 warning(logger, "No calendar attachments generated despite availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
             send_admin_notification_email(volunteer_doc)
             send_slack_volunteer_notification(volunteer_doc)
             info(logger, "Sent notifications for new volunteer", email=email)
@@ -2653,12 +2674,7 @@ def send_email_to_address(
 def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
     """
     Fetch delivery status for a list of Resend email IDs.
-
-    Args:
-        email_ids: List of Resend email IDs to look up
-
-    Returns:
-        Dict with 'statuses' mapping each email ID to its Resend status
+    Results are cached per-id: terminal events for 7 days, transient for 2 minutes.
     """
     try:
         resend.api_key = os.environ.get('RESEND_EMAIL_STATUS_KEY')
@@ -2666,24 +2682,47 @@ def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
             return {'success': False, 'error': 'Resend API key not configured'}
 
         statuses = {}
-        for eid in email_ids[:50]:  # Cap at 50 to avoid excessive API calls
-            try:
-                email_data = resend.Emails.get(eid)
-                statuses[eid] = {
-                    'id': eid,
-                    'to': getattr(email_data, 'to', []) if not isinstance(email_data, dict) else email_data.get('to', []),
-                    'subject': getattr(email_data, 'subject', '') if not isinstance(email_data, dict) else email_data.get('subject', ''),
-                    'created_at': getattr(email_data, 'created_at', '') if not isinstance(email_data, dict) else email_data.get('created_at', ''),
-                    'last_event': getattr(email_data, 'last_event', '') if not isinstance(email_data, dict) else email_data.get('last_event', ''),
-                }
-            except Exception as fetch_error:
-                warning(logger, "Failed to fetch Resend email status",
-                        resend_email_id=eid, exc_info=fetch_error)
-                statuses[eid] = {
-                    'id': eid,
-                    'last_event': 'unknown',
-                    'error': str(fetch_error)
-                }
+        ids_to_fetch = []
+
+        for eid in email_ids[:100]:
+            cached = get_cached(f"resend:status:{eid}")
+            if cached is not None:
+                statuses[eid] = cached
+            else:
+                ids_to_fetch.append(eid)
+
+        first_call = True
+        for eid in ids_to_fetch:
+            if not first_call:
+                time.sleep(0.3)
+            first_call = False
+
+            retries = 0
+            result = None
+            while retries < 2:
+                try:
+                    email_data = resend.Emails.get(eid)
+                    last_event = getattr(email_data, 'last_event', '') if not isinstance(email_data, dict) else email_data.get('last_event', '')
+                    result = {
+                        'id': eid,
+                        'to': getattr(email_data, 'to', []) if not isinstance(email_data, dict) else email_data.get('to', []),
+                        'subject': getattr(email_data, 'subject', '') if not isinstance(email_data, dict) else email_data.get('subject', ''),
+                        'created_at': getattr(email_data, 'created_at', '') if not isinstance(email_data, dict) else email_data.get('created_at', ''),
+                        'last_event': last_event,
+                    }
+                    ttl = _RESEND_STATUS_TERMINAL_TTL if last_event in _RESEND_STATUS_TERMINAL_EVENTS else _RESEND_STATUS_TRANSIENT_TTL
+                    set_cached(f"resend:status:{eid}", result, ttl=ttl)
+                    break
+                except Exception as fetch_error:
+                    retries += 1
+                    if retries < 2:
+                        time.sleep(0.6)
+                        continue
+                    warning(logger, "Failed to fetch Resend email status after retry",
+                            resend_email_id=eid, exc_info=fetch_error)
+                    result = {'id': eid, 'last_event': 'unknown', 'error': str(fetch_error)}
+
+            statuses[eid] = result
 
         return {'success': True, 'statuses': statuses}
 
@@ -2698,28 +2737,39 @@ _RESEND_FRESH_KEY = "resend:all_emails_fresh"       # freshness flag, short TTL
 _RESEND_LOCK_KEY  = "resend:all_emails_refreshing"  # background-refresh lock
 
 _RESEND_STALE_TTL = 3600   # keep data for 1 hour
-_RESEND_FRESH_TTL = 300    # re-fetch after 5 minutes
+_RESEND_FRESH_TTL = 900    # re-fetch after 15 minutes (on-demand sync, not per-page-load)
 _RESEND_LOCK_TTL  = 120    # lock expires after 2 minutes (prevents stampede)
 
+# Per-ID status cache TTLs
+_RESEND_STATUS_TERMINAL_TTL = 7 * 24 * 3600  # terminal events don't change — 7 days
+_RESEND_STATUS_TRANSIENT_TTL = 120           # transient events may update — 2 minutes
+_RESEND_STATUS_TERMINAL_EVENTS = frozenset({
+    'delivered', 'bounced', 'complained', 'clicked', 'opened', 'unsubscribed', 'failed', 'canceled',
+})
 
-def _fetch_and_cache_resend_emails() -> Optional[Dict[str, Any]]:
+
+def _fetch_and_cache_resend_emails(since_days: int = 90) -> Optional[Dict[str, Any]]:
     """
-    Fetch all pages from Resend and update both cache keys.
+    Fetch recent pages from Resend and update both cache keys.
     Returns the full payload dict on success, None on failure.
-    Called either inline (first load) or from a background thread.
+    Called only from a background thread — never inline.
     """
     resend.api_key = os.environ.get('RESEND_EMAIL_STATUS_KEY')
     if not resend.api_key:
         return None
 
+    cutoff_dt = datetime.now(pytz.utc) - timedelta(days=since_days)
     all_emails = []
-    max_pages = 100
+    max_pages = 30
     max_retries = 2
     params = {"limit": 100}
     page_error_occurred = False
     truncated = False
+    date_cutoff_reached = False
 
     for page in range(max_pages):
+        if page > 0:
+            time.sleep(0.5)
         retries = 0
         while True:
             try:
@@ -2733,7 +2783,21 @@ def _fetch_and_cache_resend_emails() -> Optional[Dict[str, Any]]:
                 if not has_more or len(email_list) == 0:
                     break
 
+                # Stop when the oldest item on this page predates cutoff (results are newest-first)
                 last_item = email_list[-1]
+                last_created = last_item.get('created_at', '') if isinstance(last_item, dict) else getattr(last_item, 'created_at', '')
+                if last_created:
+                    try:
+                        last_dt_str = last_created.rstrip('Z').split('.')[0]
+                        last_dt = datetime.fromisoformat(last_dt_str).replace(tzinfo=pytz.utc)
+                        if last_dt < cutoff_dt:
+                            date_cutoff_reached = True
+                    except (ValueError, AttributeError):
+                        pass
+
+                if date_cutoff_reached:
+                    break
+
                 last_id = last_item.get('id', '') if isinstance(last_item, dict) else getattr(last_item, 'id', '')
                 if not last_id:
                     break
@@ -2751,7 +2815,7 @@ def _fetch_and_cache_resend_emails() -> Optional[Dict[str, Any]]:
                       page=page, exc_info=page_error)
                 page_error_occurred = True
                 break
-        if page_error_occurred:
+        if page_error_occurred or date_cutoff_reached:
             break
     else:
         truncated = True
@@ -2823,21 +2887,22 @@ def _background_refresh_resend_emails() -> None:
         delete_cached(_RESEND_LOCK_KEY)
 
 
-def list_all_resend_emails(filter_emails=None):
+def list_all_resend_emails(filter_emails=None, force: bool = False):
     """
-    Fetch all sent emails from Resend's List Emails API, cached in Redis.
-    Returns an index of {recipient_email: [{id, subject, created_at, last_event}, ...]}.
+    Return the cached Resend email index. Never blocks on a full list crawl.
 
-    Uses a stale-while-revalidate strategy:
-    - Fresh cache hit  → return immediately (fast path)
-    - Stale cache hit  → return stale data immediately + refresh in background
-    - No cache at all  → block on first fetch then return
+    Strategies:
+    - force=True  → kick off a background refresh (ignoring freshness), return current data + syncing=True
+    - Stale cache  → kick off background refresh, return stale data immediately
+    - No cache     → kick off background refresh, return empty data + syncing=True
+    - Fresh cache  → return immediately
 
     Args:
         filter_emails: Optional list of email addresses to filter results for.
+        force: If True, always start a background refresh.
 
     Returns:
-        Dict with 'success', 'emails_by_recipient', and 'total_fetched'.
+        Dict with 'success', 'emails_by_recipient', 'total_fetched', 'syncing'.
     """
     try:
         resend.api_key = os.environ.get('RESEND_EMAIL_STATUS_KEY')
@@ -2847,62 +2912,62 @@ def list_all_resend_emails(filter_emails=None):
         is_fresh = get_cached(_RESEND_FRESH_KEY) is not None
         cached = get_cached(_RESEND_INDEX_KEY)
 
-        if cached is not None:
-            if not is_fresh:
-                # Stale — trigger a background refresh if one isn't already running
-                if get_cached(_RESEND_LOCK_KEY) is None:
-                    set_cached(_RESEND_LOCK_KEY, True, ttl=_RESEND_LOCK_TTL)
-                    t = threading.Thread(
-                        target=_background_refresh_resend_emails,
-                        daemon=True
-                    )
-                    t.start()
-                    info(logger, "Stale Resend email cache — background refresh triggered",
-                         total_fetched=cached.get('total_fetched', 0))
-                else:
-                    info(logger, "Stale Resend email cache — refresh already in progress",
-                         total_fetched=cached.get('total_fetched', 0))
-            else:
-                info(logger, "Using fresh cached Resend email index",
-                     total_emails=cached.get('total_fetched', 0))
+        def _maybe_start_background():
+            if get_cached(_RESEND_LOCK_KEY) is None:
+                set_cached(_RESEND_LOCK_KEY, True, ttl=_RESEND_LOCK_TTL)
+                threading.Thread(target=_background_refresh_resend_emails, daemon=True).start()
+                return True
+            return False
 
-            index = cached['emails_by_recipient']
-            if filter_emails:
-                filter_set = {e.lower() for e in filter_emails}
-                index = {k: v for k, v in index.items() if k in filter_set}
+        syncing = False
+
+        if force:
+            started = _maybe_start_background()
+            # Report syncing=True even if lock was already held (another admin's sync is running)
+            syncing = started or (get_cached(_RESEND_LOCK_KEY) is not None)
+            info(logger, "Force-sync requested for Resend email cache",
+                 started_new=started, syncing=syncing)
+        elif cached is None:
+            syncing = _maybe_start_background()
+            info(logger, "No Resend email cache — background sync started", syncing=syncing)
             return {
                 'success': True,
-                'emails_by_recipient': index,
-                'total_fetched': cached['total_fetched'],
-                'truncated': cached.get('truncated', False),
-                'from_cache': True,
-                'stale': not is_fresh
-            }
-
-        # No cached data at all — block on initial fetch
-        info(logger, "No Resend email cache found — fetching synchronously")
-        set_cached(_RESEND_LOCK_KEY, True, ttl=_RESEND_LOCK_TTL)
-        payload = _fetch_and_cache_resend_emails()
-        if payload is None:
-            return {
-                'success': False,
-                'error': 'Failed to fetch email pages from Resend',
                 'emails_by_recipient': {},
-                'total_fetched': 0
+                'total_fetched': 0,
+                'truncated': False,
+                'from_cache': False,
+                'syncing': True,
+            }
+        elif not is_fresh:
+            syncing = _maybe_start_background()
+            info(logger, "Stale Resend email cache — background refresh triggered",
+                 total_fetched=cached.get('total_fetched', 0), syncing=syncing)
+        else:
+            info(logger, "Using fresh cached Resend email index",
+                 total_emails=cached.get('total_fetched', 0))
+
+        if cached is None:
+            return {
+                'success': True,
+                'emails_by_recipient': {},
+                'total_fetched': 0,
+                'truncated': False,
+                'from_cache': False,
+                'syncing': syncing,
             }
 
-        index = payload['emails_by_recipient']
+        index = cached['emails_by_recipient']
         if filter_emails:
             filter_set = {e.lower() for e in filter_emails}
             index = {k: v for k, v in index.items() if k in filter_set}
-
         return {
             'success': True,
             'emails_by_recipient': index,
-            'total_fetched': payload['total_fetched'],
-            'truncated': payload['truncated'],
-            'from_cache': False,
-            'stale': False
+            'total_fetched': cached['total_fetched'],
+            'truncated': cached.get('truncated', False),
+            'from_cache': True,
+            'stale': not is_fresh,
+            'syncing': syncing,
         }
 
     except Exception as e:
