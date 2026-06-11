@@ -502,6 +502,50 @@ def get_hackathon_funnel_aggregate():
     return result
 
 
+def _enrich_teams_users_batch(teams, db):
+    """
+    Replace users[] on every team dict with slim profile dicts in a single
+    batched Firestore get_all call (one round-trip for all teams combined).
+    Mirrors services/teams_service.py::_enrich_team_users but operates on a
+    list so the caller doesn't pay N round-trips.
+    """
+    uid_to_refs = {}  # user_id -> DocumentReference (deduped)
+    team_user_ids = []  # parallel to teams: list of user_id lists per team
+    for team in teams:
+        uids = [u for u in (team.get("users") or []) if isinstance(u, str)]
+        team_user_ids.append(uids)
+        for uid in uids:
+            if uid not in uid_to_refs:
+                uid_to_refs[uid] = db.collection("users").document(uid)
+
+    if not uid_to_refs:
+        return teams
+
+    try:
+        snapshots = db.get_all(list(uid_to_refs.values()))
+        snap_by_id = {}
+        for snap in snapshots:
+            if snap.exists:
+                d = snap.to_dict() or {}
+                snap_by_id[snap.id] = {
+                    "id": snap.id,
+                    "user_id": d.get("user_id"),
+                    "name": d.get("name"),
+                    "nickname": d.get("nickname"),
+                    "profile_image": d.get("profile_image"),
+                }
+            else:
+                snap_by_id[snap.id] = {"id": snap.id, "user_id": None, "name": None, "nickname": None, "profile_image": None}
+    except Exception as e:
+        logger.warning(f"_enrich_teams_users_batch get_all failed, leaving user ids in place: {e}")
+        return teams
+
+    for team, uids in zip(teams, team_user_ids):
+        team["users"] = [snap_by_id.get(uid, {"id": uid, "user_id": None, "name": None, "nickname": None, "profile_image": None}) for uid in uids]
+
+    return teams
+
+
 @cached(cache=TTLCache(maxsize=100, ttl=600))
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
@@ -517,7 +561,8 @@ def get_single_hackathon_event(hackathon_id):
         else:
             result["nonprofits"] = []
         if "teams" in result and result["teams"]:
-            result["teams"] = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]
+            teams = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]
+            result["teams"] = _enrich_teams_users_batch(teams, _get_db())
         else:
             result["teams"] = []
 
