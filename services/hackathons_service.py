@@ -512,6 +512,9 @@ def _enrich_teams_users_batch(teams, db):
     uid_to_refs = {}  # user_id -> DocumentReference (deduped)
     team_user_ids = []  # parallel to teams: list of user_id lists per team
     for team in teams:
+        if team is None:
+            team_user_ids.append([])
+            continue
         uids = [u for u in (team.get("users") or []) if isinstance(u, str)]
         team_user_ids.append(uids)
         for uid in uids:
@@ -561,7 +564,7 @@ def get_single_hackathon_event(hackathon_id):
         else:
             result["nonprofits"] = []
         if "teams" in result and result["teams"]:
-            teams = [doc_to_json(doc=team, docid=team.id) for team in result["teams"]]
+            teams = [t for t in (doc_to_json(doc=team, docid=team.id) for team in result["teams"]) if t is not None]
             result["teams"] = _enrich_teams_users_batch(teams, _get_db())
         else:
             result["teams"] = []
