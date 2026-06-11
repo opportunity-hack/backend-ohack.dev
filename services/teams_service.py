@@ -450,8 +450,10 @@ def join_team(propel_user_id, json):
         if success:
             send_slack_audit(action="join_team", message="Added", payload=json)
             message = "Joined Team"
-            if team_slack_channel:
+            if team_slack_channel and userid:
                 invite_user_to_channel(userid, team_slack_channel)
+                # Send a simple message that pings the user in the channel to let them know they were added
+                send_slack(f"<@{userid}> has joined the team!", team_slack_channel)
         else:
             message = "User was already in the team"
     except Exception as e:
@@ -472,6 +474,7 @@ def unjoin_team(propel_user_id, json):
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     userid = get_user_from_slack_id(slack_user["sub"]).id
+    slack_user_id = slack_user["sub"]
 
     team_ref = db.collection('teams').document(team_id)
     user_ref = db.collection('users').document(userid)
@@ -492,6 +495,8 @@ def unjoin_team(propel_user_id, json):
         user_list = team_data.get("users", [])
         user_teams = user_data.get("teams", [])
 
+        team_slack_channel = team_data.get("slack_channel")
+
         if user_ref not in user_list:
             logger.warning(f"User {userid} not found in team {team_id}")
             return False
@@ -502,6 +507,9 @@ def unjoin_team(propel_user_id, json):
         transaction.update(team_ref, {"users": new_user_list})
         transaction.update(user_ref, {"teams": new_user_teams})
 
+        if team_slack_channel and slack_user_id:
+            send_slack(f"<@{slack_user_id}> has left the team.", team_slack_channel)
+
         logger.debug(f"User {userid} removed from team {team_id}")
         return True
 
@@ -510,7 +518,7 @@ def unjoin_team(propel_user_id, json):
         success = update_team_and_user(transaction)
         if success:
             send_slack_audit(action="unjoin_team", message="Removed", payload=json)
-            message = "Removed from Team"
+            message = "Removed from Team"            
         else:
             message = "User was not in the team"
     except Exception as e:
