@@ -668,6 +668,7 @@ def upload_image_to_cdn(request):
             
             logger.debug(f"Saving file to temporary location: {temp_filepath}")
             file.save(temp_filepath)
+            _optimize_image_for_web(temp_filepath)
 
             # Get just the file name without the path as the destination
             destination_filename = os.path.basename(temp_filepath)
@@ -724,6 +725,7 @@ def upload_image_to_cdn(request):
                 logger.debug(f"Saving base64 image to temporary file: {temp_filepath}")
                 with open(temp_filepath, 'wb') as temp_file:
                     temp_file.write(image_data)
+                _optimize_image_for_web(temp_filepath)
                 
                 # Get just the file name without the path as the destination
                 destination_filename = os.path.basename(temp_filepath)
@@ -769,6 +771,7 @@ def upload_image_to_cdn(request):
                 logger.debug(f"Saving binary image to temporary file: {temp_filepath}")
                 with open(temp_filepath, 'wb') as temp_file:
                     temp_file.write(binary_data)
+                _optimize_image_for_web(temp_filepath)
 
                 # Get just the file name without the path as the destination
                 destination_filename = os.path.basename(temp_filepath)
@@ -807,6 +810,7 @@ def upload_image_to_cdn(request):
             logger.debug(f"Saving raw image to temporary file: {temp_filepath}")
             with open(temp_filepath, 'wb') as temp_file:
                 temp_file.write(image_data)
+            _optimize_image_for_web(temp_filepath)
 
             # Get just the file name without the path as the destination
             destination_filename = os.path.basename(temp_filepath)
@@ -844,4 +848,42 @@ def _is_image_file(filename):
     is_image = any(filename.lower().endswith(ext) for ext in allowed_extensions)
     logger.debug(f"File extension check for {filename}: {'valid' if is_image else 'invalid'} image file")
     return is_image
+
+
+def _optimize_image_for_web(filepath: str, max_dimension: int = 2048, jpeg_quality: int = 85) -> None:
+    """Resize and compress an image in-place when it exceeds web-friendly limits.
+
+    Uses Pillow (already in requirements.txt). Skips files that are already
+    small (< 500 KB) and within max_dimension on both axes. On failure the
+    original file is left untouched so the upload can still proceed.
+    """
+    from PIL import Image, ImageOps
+    try:
+        original_size = os.path.getsize(filepath)
+        with Image.open(filepath) as _raw:
+            # Apply EXIF orientation before anything else so portrait photos
+            # from phones (which store pixels sideways + an EXIF rotation tag)
+            # are not saved rotated after the tag is stripped on re-save.
+            img = ImageOps.exif_transpose(_raw)
+            needs_resize = img.width > max_dimension or img.height > max_dimension
+            if not needs_resize and original_size < 500_000:
+                return  # already web-friendly
+
+            if needs_resize:
+                img.thumbnail((max_dimension, max_dimension), Image.LANCZOS)
+
+            ext = os.path.splitext(filepath)[1].lower()
+            if ext in ('.jpg', '.jpeg'):
+                if img.mode in ('RGBA', 'P', 'LA'):
+                    img = img.convert('RGB')
+                img.save(filepath, format='JPEG', quality=jpeg_quality, optimize=True)
+            else:
+                img.save(filepath, optimize=True)
+
+        new_size = os.path.getsize(filepath)
+        logger.info(
+            f"_optimize_image_for_web: {original_size // 1024}KB → {new_size // 1024}KB"
+        )
+    except Exception as exc:
+        logger.warning(f"_optimize_image_for_web failed for {filepath}, uploading original: {exc}")
 
