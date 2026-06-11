@@ -204,11 +204,10 @@ def get_teams_batch(json):
 def save_team(propel_user_id, json):
     send_slack_audit(action="save_team", message="Saving", payload=json)
 
-    email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_user_id)
-    slack_user_id = user_id
+    email, slack_user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_user_id)
 
-    root_slack_user_id = extract_slack_user_id(slack_user_id)
-    user = get_user_doc_reference(root_slack_user_id)
+    slack_member_id = extract_slack_user_id(slack_user_id)
+    user = get_user_doc_reference(slack_user_id)
 
     db = get_db()
     logger.debug("Team Save")
@@ -304,7 +303,7 @@ def save_team(propel_user_id, json):
 *Channel:* #{team_slack_channel}
 *Nonprofit:* <{nonprofit_url}|{nonprofit_name}>
 *Project:* <{project_url}|{raw_problem_statement_title}>
-*Created by:* <@{root_slack_user_id}> (add your other team members here)
+*Created by:* <@{slack_member_id}> (add your other team members here)
 
 :github_parrot: *GitHub Repository:* {repo['full_url']}
 All code goes here! Remember, we're building for the public good (MIT license).
@@ -410,7 +409,18 @@ def join_team(propel_user_id, json):
     db = get_db()
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    userid = get_user_from_slack_id(slack_user["sub"]).id
+    if not slack_user or "sub" not in slack_user:
+        logger.error(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        return Message("Error: User not found")
+
+    slack_user_id = slack_user["sub"]
+    slack_member_id = extract_slack_user_id(slack_user_id)
+    user = get_user_from_slack_id(slack_user_id)
+    if user is None:
+        logger.error(f"Could not resolve database user for slack_user_id={slack_user_id}")
+        return Message("Error: User not found")
+
+    userid = user.id
 
     team_ref = db.collection('teams').document(team_id)
     user_ref = db.collection('users').document(userid)
@@ -450,8 +460,10 @@ def join_team(propel_user_id, json):
         if success:
             send_slack_audit(action="join_team", message="Added", payload=json)
             message = "Joined Team"
-            if team_slack_channel:
-                invite_user_to_channel(userid, team_slack_channel)
+            if team_slack_channel and slack_user_id:
+                invite_user_to_channel(slack_user_id, team_slack_channel)
+                # Send a simple message that pings the user in the channel to let them know they were added
+                send_slack(f"<@{slack_member_id}> has joined the team!", team_slack_channel)
         else:
             message = "User was already in the team"
     except Exception as e:
@@ -471,7 +483,18 @@ def unjoin_team(propel_user_id, json):
     db = get_db()
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    userid = get_user_from_slack_id(slack_user["sub"]).id
+    if not slack_user or "sub" not in slack_user:
+        logger.error(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        return Message("Error: User not found")
+
+    slack_user_id = slack_user["sub"]
+    slack_member_id = extract_slack_user_id(slack_user_id)
+    user = get_user_from_slack_id(slack_user_id)
+    if user is None:
+        logger.error(f"Could not resolve database user for slack_user_id={slack_user_id}")
+        return Message("Error: User not found")
+
+    userid = user.id
 
     team_ref = db.collection('teams').document(team_id)
     user_ref = db.collection('users').document(userid)
@@ -492,6 +515,8 @@ def unjoin_team(propel_user_id, json):
         user_list = team_data.get("users", [])
         user_teams = user_data.get("teams", [])
 
+        team_slack_channel = team_data.get("slack_channel")
+
         if user_ref not in user_list:
             logger.warning(f"User {userid} not found in team {team_id}")
             return False
@@ -502,6 +527,9 @@ def unjoin_team(propel_user_id, json):
         transaction.update(team_ref, {"users": new_user_list})
         transaction.update(user_ref, {"teams": new_user_teams})
 
+        if team_slack_channel and slack_member_id:
+            send_slack(f"<@{slack_member_id}> has left the team.", team_slack_channel)
+
         logger.debug(f"User {userid} removed from team {team_id}")
         return True
 
@@ -510,7 +538,7 @@ def unjoin_team(propel_user_id, json):
         success = update_team_and_user(transaction)
         if success:
             send_slack_audit(action="unjoin_team", message="Removed", payload=json)
-            message = "Removed from Team"
+            message = "Removed from Team"            
         else:
             message = "User was not in the team"
     except Exception as e:
