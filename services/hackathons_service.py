@@ -715,9 +715,12 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
 
     doc_ref.update(json)
 
-    slack_user_id = doc.get('slack_user_id')
+    slack_user_id = doc.to_dict().get('slack_user_id') if doc_dict else None
 
-    hackathon_welcome_message = f"🎉 Welcome <@{slack_user_id}> [{doc_volunteer_type}]."
+    if not slack_user_id:
+        logger.warning(f"Volunteer {volunteer_id} has no slack_user_id; skipping Slack welcome message")
+
+    hackathon_welcome_message = f"🎉 Welcome <@{slack_user_id}> [{doc_volunteer_type}]." if slack_user_id else None
 
     base_message = f"🎉 Welcome to Opportunity Hack {event_id}! You're checked in as a {doc_volunteer_type}.\n\n"
 
@@ -760,20 +763,23 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
 """
 
     if json.get("checkedIn") is True and "checkedIn" not in doc_dict.keys() and doc_dict.get("checkedIn") != True:
-        logger.info(f"Volunteer {volunteer_id} just checked in, sending welcome message to {slack_user_id}")
-        invite_user_to_channel(slack_user_id, "hackathon-welcome")
+        if slack_user_id:
+            logger.info(f"Volunteer {volunteer_id} just checked in, sending welcome message to {slack_user_id}")
+            invite_user_to_channel(slack_user_id, "hackathon-welcome")
 
-        logger.info(f"Sending Slack message to volunteer {volunteer_id} in channel #{slack_user_id} and #hackathon-welcome")
-        async_send_slack(
-            channel="#hackathon-welcome",
-            message=hackathon_welcome_message
-        )
+            logger.info(f"Sending Slack message to volunteer {volunteer_id} in channel #{slack_user_id} and #hackathon-welcome")
+            async_send_slack(
+                channel="#hackathon-welcome",
+                message=hackathon_welcome_message
+            )
 
-        logger.info(f"Sending Slack DM to volunteer {volunteer_id} in channel #{slack_user_id}")
-        async_send_slack(
-            channel=slack_user_id,
-            message=slack_message_content
-        )
+            logger.info(f"Sending Slack DM to volunteer {volunteer_id} in channel #{slack_user_id}")
+            async_send_slack(
+                channel=slack_user_id,
+                message=slack_message_content
+            )
+        else:
+            logger.warning(f"Volunteer {volunteer_id} checked in but no slack_user_id — skipping Slack welcome")
     else:
         logger.info(f"Volunteer {volunteer_id} checked in again, no welcome message sent.")
 

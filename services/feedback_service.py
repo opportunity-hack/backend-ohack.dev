@@ -30,6 +30,9 @@ def save_feedback(propel_user_id, json):
     send_slack_audit(action="save_feedback", message="Saving", payload=json)
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    if slack_user is None:
+        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        return None
     user_db_id = get_user_from_slack_id(slack_user["sub"]).id
     feedback_giver_id = slack_user["sub"]
 

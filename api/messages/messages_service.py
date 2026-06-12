@@ -82,6 +82,9 @@ if not firebase_admin._apps:
 def save_helping_status_old(propel_user_id, json):
     logger.info(f"save_helping_status {propel_user_id} // {json}")
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    if slack_user is None:
+        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        return None
     user_id = slack_user["sub"]
 
     helping_status = json["status"] # helping or not_helping
@@ -258,10 +261,13 @@ def get_single_problem_statement_old(project_id):
     if doc is None:
         logger.warning("get_single_problem_statement end (no results)")
         return {}
-    else:                                
+    else:
         result = doc_to_json(docid=doc.id, doc=doc)
+        if result is None:
+            logger.warning(f"get_single_problem_statement doc_to_json returned None for project_id={project_id}")
+            return {}
         result["id"] = doc.id
-        
+
         logger.info(f"get_single_problem_statement end (with result):{result}")
         return result
     return {}
