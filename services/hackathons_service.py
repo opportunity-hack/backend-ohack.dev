@@ -2,6 +2,7 @@ import uuid
 import os
 import random
 import threading
+from collections import Counter
 from datetime import datetime, timedelta
 
 from cachetools import cached, TTLCache
@@ -17,6 +18,7 @@ from common.utils.firebase import (
     get_volunteer_from_db_by_event,
     get_volunteer_checked_in_from_db_by_event,
 )
+from common.utils.redis_cache import get_cached, set_cached
 from common.utils.validators import validate_hackathon_data_partial
 from common.utils.firestore_helpers import (
     doc_to_json,
@@ -41,13 +43,14 @@ def _get_db():
 
 
 def clear_cache():
-    """Clear all hackathon-related caches."""
+    """Clear all hackathon-related caches (in-process + Redis)."""
+    from common.utils.redis_cache import delete_cached
     clear_all_caches()
     get_single_hackathon_event.cache_clear()
     get_single_hackathon_id.cache_clear()
     get_hackathon_list.cache_clear()
     get_hackathon_funnel.cache_clear()
-    get_hackathon_funnel_aggregate.cache_clear()
+    delete_cached(_FUNNEL_AGG_CACHE_KEY)
 
 
 def add_nonprofit_to_hackathon(json):
@@ -335,7 +338,10 @@ def get_hackathon_funnel(event_id):
     return result
 
 
-@cached(cache=TTLCache(maxsize=1, ttl=600), lock=threading.Lock())
+_FUNNEL_AGG_CACHE_KEY = "funnel_aggregate:v1"
+_FUNNEL_AGG_REDIS_TTL = 6 * 3600  # 6 hours — historical data rarely changes
+
+
 @limits(calls=200, period=ONE_MINUTE)
 def get_hackathon_funnel_aggregate():
     """
@@ -347,9 +353,20 @@ def get_hackathon_funnel_aggregate():
       - events_total: int           total hackathons iterated
       - events_with_summary: int    how many have a funnel/summary doc
       - events_with_winners: int    how many have at least one winning team
+
+    Performance: caches in Redis (6h TTL) with in-process TTLCache fallback.
+    On a cache miss, batches all funnel/summary sub-doc reads in one
+    db.get_all() call and replaces per-event volunteers queries with a single
+    global query + Counter.
     """
-    logger.debug("get_hackathon_funnel_aggregate start")
-    from collections import Counter as _Counter
+    cached_result = get_cached(_FUNNEL_AGG_CACHE_KEY)
+    if cached_result is not None:
+        logger.debug("get_hackathon_funnel_aggregate: Redis/local cache hit")
+        return cached_result
+
+    import time as _time
+    _t0 = _time.time()
+    logger.info("get_hackathon_funnel_aggregate: cache miss — recomputing")
 
     db = _get_db()
 
@@ -363,7 +380,7 @@ def get_hackathon_funnel_aggregate():
     )
 
     summed = {k: 0 for k in agg_summary_keys}
-    breakdowns = {k: _Counter() for k in agg_breakdown_keys}
+    breakdowns = {k: Counter() for k in agg_breakdown_keys}
 
     applied_as_hacker_total = 0
     formed_team_total = 0
@@ -381,20 +398,43 @@ def get_hackathon_funnel_aggregate():
     events_with_summary = 0
     events_with_winners = 0
 
-    for hackathon_doc in db.collection("hackathons").stream():
-        events_total += 1
+    # Step 1: Fetch all hackathon docs in one scan.
+    hackathon_docs = list(db.collection("hackathons").stream())
+    events_total = len(hackathon_docs)
+
+    # Step 2: Batch-fetch all funnel/summary sub-docs in ONE round-trip.
+    summary_refs = [
+        db.collection("hackathons").document(h.id).collection("funnel").document("summary")
+        for h in hackathon_docs
+    ]
+    summary_snaps = list(db.get_all(summary_refs)) if summary_refs else []
+    summary_by_hackathon_id = {
+        snap.reference.parent.parent.id: snap
+        for snap in summary_snaps
+        if snap is not None
+    }
+
+    # Step 3: One global hacker query → Counter by event_id (replaces N per-event queries).
+    try:
+        hacker_counts = Counter(
+            doc.to_dict().get("event_id")
+            for doc in db.collection("volunteers")
+            .where(filter=firestore.FieldFilter("volunteer_type", "==", "hacker"))
+            .select(["event_id"])
+            .stream()
+            if doc.to_dict().get("event_id")
+        )
+    except Exception as e:
+        logger.warning(f"get_hackathon_funnel_aggregate: global hacker count failed: {e}")
+        hacker_counts = Counter()
+
+    # Step 4: Process each hackathon with pre-fetched data.
+    for hackathon_doc in hackathon_docs:
         h_data = hackathon_doc.to_dict() or {}
         event_id = h_data.get("event_id")
 
-        # Pull the devpost summary doc, if present.
-        summary_snap = (
-            db.collection("hackathons")
-            .document(hackathon_doc.id)
-            .collection("funnel")
-            .document("summary")
-            .get()
-        )
-        if summary_snap.exists:
+        summary_snap = summary_by_hackathon_id.get(hackathon_doc.id)
+        if summary_snap and summary_snap.exists:
             events_with_summary += 1
             s = summary_snap.to_dict() or {}
             for k in agg_summary_keys:
@@ -424,8 +464,6 @@ def get_hackathon_funnel_aggregate():
                     if hasattr(u, "id") and u.id
                 ]
                 unique_member_ids.update(user_ids)
-                # Per-event dedupe (same person on two winning teams in one
-                # event won't double-count). Across events: no dedup.
                 if status == "FOUNDING_ENGINEERS":
                     founding_engineers_teams_total += 1
                     won_prize_teams_total += 1
@@ -449,20 +487,8 @@ def get_hackathon_funnel_aggregate():
             if event_winners:
                 events_with_winners += 1
 
-        # Hacker applicants for this event (volunteers/{event_id}+hacker).
         if event_id:
-            try:
-                applied_as_hacker_total += sum(
-                    1
-                    for _ in db.collection("volunteers")
-                    .where(filter=firestore.FieldFilter("event_id", "==", event_id))
-                    .where(filter=firestore.FieldFilter("volunteer_type", "==", "hacker"))
-                    .stream()
-                )
-            except Exception as e:
-                logger.warning(
-                    f"get_hackathon_funnel_aggregate: hacker count failed for {event_id}: {e}"
-                )
+            applied_as_hacker_total += hacker_counts.get(event_id, 0)
 
     aggregated_summary = {
         **summed,
@@ -495,11 +521,16 @@ def get_hackathon_funnel_aggregate():
         "events_with_summary": events_with_summary,
         "events_with_winners": events_with_winners,
     }
+
+    elapsed = _time.time() - _t0
     logger.info(
-        f"get_hackathon_funnel_aggregate end events={events_total} "
-        f"with_summary={events_with_summary} with_winners={events_with_winners} "
-        f"won={won_prize_total}p founding={founding_engineers_total}p teams={teams_total}"
+        f"get_hackathon_funnel_aggregate computed in {elapsed:.2f}s: "
+        f"events={events_total} with_summary={events_with_summary} "
+        f"with_winners={events_with_winners} won={won_prize_total}p "
+        f"founding={founding_engineers_total}p teams={teams_total}"
     )
+
+    set_cached(_FUNNEL_AGG_CACHE_KEY, result, ttl=_FUNNEL_AGG_REDIS_TTL)
     return result
 
 
