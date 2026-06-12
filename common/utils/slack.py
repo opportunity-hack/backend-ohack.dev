@@ -127,19 +127,37 @@ def get_client():
     client = WebClient(token=token)
     return client
 
+_EMAIL_USER_CACHE = TTLCache(maxsize=500, ttl=86400)  # 24h — email→user rarely changes
+_EMAIL_USER_MISS_CACHE = TTLCache(maxsize=500, ttl=3600)  # 1h negative cache
+_EMAIL_USER_LOCK = threading.Lock()
+
+
+@sleep_and_retry
+@limits(calls=20, period=60)
 def get_slack_user_by_email(email):
     """
-    Get Slack user by email address.
-    
-    :param email: Email address of the user
-    :return: User information if found, None otherwise
+    Get Slack user by email address. Cached 24h (hits) / 1h (misses).
+    users.lookupByEmail is tightly rate-limited — cache aggressively.
     """
+    if not email:
+        return None
+    with _EMAIL_USER_LOCK:
+        if email in _EMAIL_USER_MISS_CACHE:
+            return None
+        if email in _EMAIL_USER_CACHE:
+            return _EMAIL_USER_CACHE[email]
+
     client = get_client()
     try:
         result = client.users_lookupByEmail(email=email)
-        return result["user"]
+        user = result["user"]
+        with _EMAIL_USER_LOCK:
+            _EMAIL_USER_CACHE[email] = user
+        return user
     except SlackApiError as e:
-        logger.error(f"Error fetching user by email {email}: {e}")
+        logger.warning(f"Could not look up Slack user by email {email}: {e}")
+        with _EMAIL_USER_LOCK:
+            _EMAIL_USER_MISS_CACHE[email] = True
         return None
 
 
@@ -196,8 +214,8 @@ def is_channel_id(channel_id):
         result = client.conversations_info(channel=channel_id)
         return True
     except SlackApiError as e:
-        logger.error(f"Error checking channel ID {channel_id}: {e}")
-        return False    
+        logger.debug(f"is_channel_id: conversations.info failed for {channel_id}: {e}")
+        return False
 
 
 def add_bot_to_channel(channel_id):
@@ -336,8 +354,7 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
         
         response = client.chat_postMessage(**kwargs)
     except SlackApiError as e:
-        logger.error(e.response["error"])
-        assert e.response["error"]
+        logger.warning(f"send_slack failed for channel={channel_id}: {e.response.get('error', e)}")
 
 
 def async_send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None):

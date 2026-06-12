@@ -466,18 +466,40 @@ def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update:
 
     available_days = volunteer_data.get('availableDays', '')
     if available_days:
-        detail_lines.append(f"*Available Days:* {available_days}")
+        days_str = str(available_days)
+        if len(days_str) > 500:
+            days_str = days_str[:497] + "…"
+        detail_lines.append(f"*Available Days:* {days_str}")
 
     skills = volunteer_data.get('skills', '')
     if skills:
-        detail_lines.append(f"*Skills:* {skills}")
+        skills_str = str(skills)[:500] if len(str(skills)) > 500 else str(skills)
+        detail_lines.append(f"*Skills:* {skills_str}")
 
     experience = volunteer_data.get('experience', '')
     if experience:
-        detail_lines.append(f"*Experience:* {experience}")
+        exp_str = str(experience)[:500] if len(str(experience)) > 500 else str(experience)
+        detail_lines.append(f"*Experience:* {exp_str}")
 
     if detail_lines:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(detail_lines)}})
+        # Slack section text cap is 3000 chars; split if needed (max 50 blocks total).
+        section_text = "\n".join(detail_lines)
+        if len(section_text) <= 2900:
+            blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": section_text}})
+        else:
+            # Split into ≤2900-char chunks
+            chunk, chunks = [], []
+            for line in detail_lines:
+                candidate = "\n".join(chunk + [line])
+                if len(candidate) > 2900 and chunk:
+                    chunks.append("\n".join(chunk))
+                    chunk = [line]
+                else:
+                    chunk.append(line)
+            if chunk:
+                chunks.append("\n".join(chunk))
+            for c in chunks[:48]:  # leave room for header + footer blocks
+                blocks.append({"type": "section", "text": {"type": "mrkdwn", "text": c}})
 
     # Context footer — timestamp + Slack workspace lookup result
     context_elements = [

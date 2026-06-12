@@ -170,19 +170,27 @@ def get_user_from_propel_user_id(propel_id):
     return get_user_from_slack_id(user_id)
 
 
+# Two-tier PropelAuth cache: positive results (10 min) + negative sentinel (5 min).
+# Intentionally in-process only — the payload contains OAuth access tokens.
+_PROPEL_CACHE = TTLCache(maxsize=512, ttl=600)
+_PROPEL_MISS_CACHE = TTLCache(maxsize=512, ttl=300)
+_PROPEL_LOCK = threading.Lock()
+_PROPEL_MISS = object()  # sentinel so we can cache None explicitly
+
+
 def get_oauth_user_from_propel_user_id(propel_id):
     """
     Get user details from any OAuth provider via PropelAuth.
 
-    This function detects which OAuth provider (Slack, Google, etc.) was used
-    and fetches user details from the appropriate provider's API.
-
-    Args:
-        propel_id: The PropelAuth user ID
-
-    Returns:
-        dict: User details with normalized fields including 'sub' (user ID)
+    Cached in-process (10 min hit / 5 min miss) — do NOT put in Redis since
+    the response contains OAuth access tokens.
     """
+    with _PROPEL_LOCK:
+        if propel_id in _PROPEL_MISS_CACHE:
+            return None
+        if propel_id in _PROPEL_CACHE:
+            return _PROPEL_CACHE[propel_id]
+
     url = f"{os.getenv('PROPEL_AUTH_URL')}/api/backend/v1/user/{propel_id}/oauth_token"
 
     debug(logger, "Propel API URL", url=url)
@@ -195,6 +203,8 @@ def get_oauth_user_from_propel_user_id(propel_id):
     if resp.status_code != 200:
         warning(logger, "PropelAuth API returned non-200",
                 status=resp.status_code, propel_id=propel_id)
+        with _PROPEL_LOCK:
+            _PROPEL_MISS_CACHE[propel_id] = _PROPEL_MISS
         return None
     json_resp = resp.json()
     logger.debug(f"Propel RESP JSON: {json_resp}")
@@ -204,23 +214,34 @@ def get_oauth_user_from_propel_user_id(propel_id):
 
     if provider is None or token_data is None:
         warning(logger, "Could not detect OAuth provider from PropelAuth response", response=json_resp)
+        with _PROPEL_LOCK:
+            _PROPEL_MISS_CACHE[propel_id] = _PROPEL_MISS
         return None
 
     access_token = token_data.get('access_token')
     if not access_token:
         warning(logger, "No access token found in PropelAuth response", provider=provider, response=json_resp)
+        with _PROPEL_LOCK:
+            _PROPEL_MISS_CACHE[propel_id] = _PROPEL_MISS
         return None
 
     debug(logger, "Detected OAuth provider", provider=provider)
 
     # Fetch user details from the appropriate provider
     if provider == 'slack':
-        return get_slack_user_from_token(access_token)
+        result = get_slack_user_from_token(access_token)
     elif provider == 'google':
-        return get_google_user_from_token(access_token)
+        result = get_google_user_from_token(access_token)
     else:
         warning(logger, "Unsupported OAuth provider", provider=provider)
-        return None
+        result = None
+
+    with _PROPEL_LOCK:
+        if result is not None:
+            _PROPEL_CACHE[propel_id] = result
+        else:
+            _PROPEL_MISS_CACHE[propel_id] = _PROPEL_MISS
+    return result
 
 
 def get_slack_user_from_propel_user_id(propel_id):
@@ -339,7 +360,7 @@ def save_profile_metadata(propel_id, json):
 
     oauth_user = get_oauth_user_from_propel_user_id(propel_id)
     if oauth_user is None:
-        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
         return None
 
     user_id = oauth_user["sub"]
@@ -382,7 +403,7 @@ def save_volunteering_time(propel_id, json):
     logger.info(f"Save Volunteering Time for {propel_id} {json}")
     oauth_user = get_oauth_user_from_propel_user_id(propel_id)
     if oauth_user is None:
-        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
         return None
 
     user_id = oauth_user["sub"]
@@ -392,7 +413,7 @@ def save_volunteering_time(propel_id, json):
     # Get the user
     user = fetch_user_by_user_id(user_id)
     if user is None:
-        error(logger, "User not found", user_id=user_id)
+        warning(logger, "User not found", user_id=user_id)
         return
 
     timestamp = datetime.now().isoformat() + "Z"
@@ -545,7 +566,7 @@ def get_privacy_settings(propel_id):
     logger.info(f"Get Privacy Settings for {propel_id}")
     oauth_user = get_oauth_user_from_propel_user_id(propel_id)
     if oauth_user is None:
-        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
         return None
 
     user_id = oauth_user["sub"]
@@ -553,7 +574,7 @@ def get_privacy_settings(propel_id):
     # Get the user
     user = fetch_user_by_user_id(user_id)
     if user is None:
-        error(logger, "User not found", user_id=user_id)
+        warning(logger, "User not found", user_id=user_id)
         return None
 
     return user.get_privacy_settings()
@@ -564,7 +585,7 @@ def update_privacy_settings(propel_id, data):
     logger.info(f"Update Privacy Settings for {propel_id} {data}")
     oauth_user = get_oauth_user_from_propel_user_id(propel_id)
     if oauth_user is None:
-        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
         return None
 
     user_id = oauth_user["sub"]
@@ -572,7 +593,7 @@ def update_privacy_settings(propel_id, data):
     # Get the user
     user = fetch_user_by_user_id(user_id)
     if user is None:
-        error(logger, "User not found", user_id=user_id)
+        warning(logger, "User not found", user_id=user_id)
         return None
 
     # Update the privacy settings
