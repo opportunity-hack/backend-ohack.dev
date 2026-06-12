@@ -721,7 +721,10 @@ def all_profiles():
 def submit_feedback():
     logger.info("POST /feedback called")
     if auth_user and auth_user.user_id:
-        return vars(save_feedback(auth_user.user_id, request.get_json()))
+        result = save_feedback(auth_user.user_id, request.get_json())
+        if result is None:
+            return {"error": "User not found"}, 404
+        return vars(result)
     else:
         return {"error": "Unauthorized"}, 401
     

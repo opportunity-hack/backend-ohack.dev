@@ -410,14 +410,14 @@ def join_team(propel_user_id, json):
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     if not slack_user or "sub" not in slack_user:
-        logger.error(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
         return Message("Error: User not found")
 
     slack_user_id = slack_user["sub"]
     slack_member_id = extract_slack_user_id(slack_user_id)
     user = get_user_from_slack_id(slack_user_id)
     if user is None:
-        logger.error(f"Could not resolve database user for slack_user_id={slack_user_id}")
+        logger.warning(f"Could not resolve database user for slack_user_id={slack_user_id}")
         return Message("Error: User not found")
 
     userid = user.id
@@ -484,14 +484,14 @@ def unjoin_team(propel_user_id, json):
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
     if not slack_user or "sub" not in slack_user:
-        logger.error(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
         return Message("Error: User not found")
 
     slack_user_id = slack_user["sub"]
     slack_member_id = extract_slack_user_id(slack_user_id)
     user = get_user_from_slack_id(slack_user_id)
     if user is None:
-        logger.error(f"Could not resolve database user for slack_user_id={slack_user_id}")
+        logger.warning(f"Could not resolve database user for slack_user_id={slack_user_id}")
         return Message("Error: User not found")
 
     userid = user.id
