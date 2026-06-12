@@ -58,30 +58,35 @@ def get_profile_by_db_id(id):
 
 @bp.route("/volunteering", methods=["POST"])
 @auth.require_user
-def save_volunteering_time():        
-    if auth_user and auth_user.user_id: 
+def save_volunteering_time():
+    if auth_user and auth_user.user_id:
         u: User | None = users_service.save_volunteering_time(auth_user.user_id, request.get_json())
-        return vars(u) if u is not None else None
+        if u is None:
+            return {"error": "User not found or unable to save volunteering time"}, 404
+        return vars(u)
     else:
-        return None
-    
+        return {"error": "Unauthorized"}, 401
+
 
 @bp.route("/volunteering", methods=["GET"])
 @auth.require_user
-def get_volunteering_time():        
+def get_volunteering_time():
     # Get url params
     start_date = request.args.get('startDate')
     end_date = request.args.get('endDate')
-    
+
     if auth_user and auth_user.user_id:
-        allVolunteering, totalActiveHours, totalCommitmentHours = users_service.get_volunteering_time(auth_user.user_id, start_date, end_date)
+        result = users_service.get_volunteering_time(auth_user.user_id, start_date, end_date)
+        if result is None:
+            return {"error": "User not found"}, 404
+        allVolunteering, totalActiveHours, totalCommitmentHours = result
         return {
             "totalActiveHours": totalActiveHours,
             "totalCommitmentHours": totalCommitmentHours,
-            "allVolunteering": allVolunteering            
+            "allVolunteering": allVolunteering
         }
     else:
-        return None
+        return {"error": "Unauthorized"}, 401
     
     
 @bp.route("/admin/volunteering", methods=["GET"])

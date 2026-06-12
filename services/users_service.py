@@ -313,6 +313,10 @@ def get_profile_metadata(propel_id):
             propel_id=propel_id
             )
 
+    if db_id is None:
+        warning(logger, "save_user returned None — PropelAuth provided empty values", propel_id=propel_id)
+        return None
+
     # Get all of the user history and profile data from the DB
     response = get_history(db_id.id)
     logger.debug(f"get_profile_metadata {response}")
@@ -433,7 +437,7 @@ def get_volunteering_time(propel_id, start_date, end_date):
     logger.info(f"Get Volunteering Time for {propel_id} {start_date} {end_date}")
     oauth_user = get_oauth_user_from_propel_user_id(propel_id)
     if oauth_user is None:
-        error(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
         return None
 
     user_id = oauth_user["sub"]
@@ -443,7 +447,8 @@ def get_volunteering_time(propel_id, start_date, end_date):
     # Get the user
     user = fetch_user_by_user_id(user_id)
     if user is None:
-        return
+        warning(logger, "User not found", user_id=user_id)
+        return None
 
     # Filter the volunteering data
     volunteeringActiveTime = []
