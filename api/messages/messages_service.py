@@ -619,7 +619,7 @@ def get_user_by_id_old(id):
         return res
 
     except NotFound:
-        logger.error(f"Document with ID {id} not found in 'users' collection")
+        logger.info(f"Document with ID {id} not found in 'users' collection")
         return {}
     except Exception as e:
         logger.error(f"Error retrieving user data for ID {id}: {str(e)}")

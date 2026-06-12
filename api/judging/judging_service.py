@@ -717,7 +717,7 @@ def get_judge_event_details(judge_id: str, event_id: str) -> Dict:
         user_id=judge_id, volunteer_type="judge", event_id=event_id
     )
     if not volunteer:
-        logger.error(f"Judge not found for user_id {judge_id} and event_id {event_id}")
+        logger.info(f"Judge not found for user_id {judge_id} and event_id {event_id}")
         return {"error": "Judge not found"}, 404
 
     logger.debug(f"Fetched judge details: {volunteer}")

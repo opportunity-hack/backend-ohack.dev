@@ -151,15 +151,22 @@ def get_npos_by_hackathon_id(id):
             npo_refs = doc_dict["nonprofits"]
             logger.info(f"get_npos_by_hackathon_id found {len(npo_refs)} nonprofit references")
 
-            for npo_ref in npo_refs:
-                try:
-                    npo_doc = npo_ref.get()
+            try:
+                npo_snaps = list(db.get_all(npo_refs))
+                for npo_doc in npo_snaps:
                     if npo_doc.exists:
                         npo = doc_to_json(docid=npo_doc.id, doc=npo_doc)
                         npos.append(npo)
-                except Exception as e:
-                    logger.error(f"Error processing nonprofit reference: {e}")
-                    continue
+            except Exception as e:
+                logger.warning(f"get_npos_by_hackathon_id batch read failed, falling back: {e}")
+                for npo_ref in npo_refs:
+                    try:
+                        npo_doc = npo_ref.get()
+                        if npo_doc.exists:
+                            npos.append(doc_to_json(docid=npo_doc.id, doc=npo_doc))
+                    except Exception as inner_e:
+                        logger.warning(f"Error processing nonprofit reference: {inner_e}")
+                        continue
 
         return {
             "nonprofits": npos
