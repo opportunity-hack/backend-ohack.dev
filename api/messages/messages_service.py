@@ -13,6 +13,7 @@ from datetime import datetime
 
 from common.log import get_logger, debug, error
 import firebase_admin
+import threading
 from firebase_admin import credentials, firestore
 
 from cachetools import cached, TTLCache
@@ -81,6 +82,9 @@ if not firebase_admin._apps:
 def save_helping_status_old(propel_user_id, json):
     logger.info(f"save_helping_status {propel_user_id} // {json}")
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    if slack_user is None:
+        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        return None
     user_id = slack_user["sub"]
 
     helping_status = json["status"] # helping or not_helping
@@ -248,7 +252,7 @@ def get_problem_statement_from_id_old(problem_id):
     doc = db.collection('problem_statements').document(problem_id)
     return doc
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 def get_single_problem_statement_old(project_id):
     logger.debug(f"get_single_problem_statement start project_id={project_id}")    
     db = get_db()      
@@ -257,10 +261,13 @@ def get_single_problem_statement_old(project_id):
     if doc is None:
         logger.warning("get_single_problem_statement end (no results)")
         return {}
-    else:                                
+    else:
         result = doc_to_json(docid=doc.id, doc=doc)
+        if result is None:
+            logger.warning(f"get_single_problem_statement doc_to_json returned None for project_id={project_id}")
+            return {}
         result["id"] = doc.id
-        
+
         logger.info(f"get_single_problem_statement end (with result):{result}")
         return result
     return {}
@@ -281,7 +288,7 @@ def get_problem_statement_list_old():
     logger.debug(results)        
     return { "problem_statements": results }
 
-@cached(cache=TTLCache(maxsize=100, ttl=10))
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_github_profile(github_username):
     logger.debug(f"Getting Github Profile for {github_username}")
@@ -294,7 +301,7 @@ def get_github_profile(github_username):
 # -------------------- User functions to be deleted ---------------------------------------- #
 
 # 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata_old(propel_id):
     logger.debug("Profile Metadata")
@@ -393,7 +400,7 @@ def _lean_admin_profile(doc):
 
 # 5-minute TTL is enough to absorb tab refreshes / multiple admins loading the
 # page in close succession while still picking up new signups within minutes.
-@cached(cache=TTLCache(maxsize=1, ttl=300), key=lambda: "all")
+@cached(cache=TTLCache(maxsize=1, ttl=300), lock=threading.Lock(), key=lambda: "all")
 def get_all_profiles():
     db = get_db()
     docs = db.collection('users').stream()
@@ -591,7 +598,7 @@ def save_profile_metadata_old(propel_id, json):
         "Saved Profile Metadata"
     )
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=lambda id: id)
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock(), key=lambda id: id)
 def get_user_by_id_old(id):
     logger.debug(f"Attempting to get user by ID: {id}")
     db = get_db()
@@ -618,7 +625,7 @@ def get_user_by_id_old(id):
         return res
 
     except NotFound:
-        logger.error(f"Document with ID {id} not found in 'users' collection")
+        logger.info(f"Document with ID {id} not found in 'users' collection")
         return {}
     except Exception as e:
         logger.error(f"Error retrieving user data for ID {id}: {str(e)}")

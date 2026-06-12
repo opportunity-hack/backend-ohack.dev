@@ -1,4 +1,1 @@
-#web: gunicorn api.wsgi:app --python api --log-file=-
-
-## For debug, use below
-web: gunicorn api.wsgi:app --python api --log-file=- --log-level debug --preload --workers 1 --timeout 120
+web: gunicorn api.wsgi:app --log-file=- --log-level info --preload --worker-class gthread --workers 2 --threads 8 --timeout 120

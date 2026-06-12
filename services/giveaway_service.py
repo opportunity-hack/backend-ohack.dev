@@ -18,6 +18,9 @@ def save_giveaway(propel_user_id, json):
     send_slack_audit(action="submit_giveaway", message="Submitting", payload=json)
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    if slack_user is None:
+        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        return None
     user_db_id = get_user_from_slack_id(slack_user["sub"]).id
     giveaway_id = json.get("giveaway_id")
     giveaway_data = json.get("giveaway_data", {})
@@ -44,6 +47,9 @@ def get_user_giveaway(propel_user_id):
     db = get_db()
 
     slack_user = get_slack_user_from_propel_user_id(propel_user_id)
+    if slack_user is None:
+        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+        return {"giveaways": []}
     db_user_id = get_user_from_slack_id(slack_user["sub"]).id
 
     giveaway_docs = db.collection('giveaways').where("user_id", "==", db_user_id).stream()
@@ -64,11 +70,13 @@ def get_all_giveaways():
     giveaways = {}
     for doc in docs:
         giveaway = doc.to_dict()
-        user_id = giveaway["user_id"]
+        user_id = giveaway.get("user_id")
+        if not user_id:
+            continue
         if user_id not in giveaways:
             from api.messages.messages_service import get_user_by_id_old
             user = get_user_by_id_old(user_id)
-            giveaway["user"] = user
+            giveaway["user"] = user if user is not None else {}
             giveaways[user_id] = giveaway
 
     return {"giveaways": list(giveaways.values())}

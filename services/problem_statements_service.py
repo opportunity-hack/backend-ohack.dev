@@ -1,4 +1,5 @@
 from datetime import datetime
+import threading
 from ratelimit import limits
 from common.utils.slack import invite_user_to_channel, send_slack, send_slack_audit
 from common.utils.oauth_providers import extract_slack_user_id, is_slack_user_id
@@ -64,7 +65,7 @@ def validate_problem_statement(data):
     # Add any additional validation logic here
     return True
 
-@cached(cache=TTLCache(maxsize=100, ttl=CACHE_TTL))
+@cached(cache=TTLCache(maxsize=100, ttl=CACHE_TTL), lock=threading.Lock())
 def get_problem_statement(id):
     """Get a single problem statement by ID"""
     debug(logger, "get_problem_statement start", id=id)    

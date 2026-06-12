@@ -142,7 +142,7 @@ def remove_nonprofit_from_hackathon(json):
     }
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=20))
+@cached(cache=TTLCache(maxsize=100, ttl=20), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
     logger.debug(f"get_single_hackathon_id start id={id}")
@@ -161,7 +161,7 @@ def get_single_hackathon_id(id):
     return {}
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=10))
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_volunteer_by_event(event_id, volunteer_type, admin=False):
     logger.debug(f"get {volunteer_type} start event_id={event_id}")
@@ -181,7 +181,7 @@ def get_volunteer_by_event(event_id, volunteer_type, admin=False):
         return results
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=5))
+@cached(cache=TTLCache(maxsize=100, ttl=5), lock=threading.Lock())
 def get_volunteer_checked_in_by_event(event_id, volunteer_type):
     logger.debug(f"get {volunteer_type} start event_id={event_id}")
 
@@ -200,7 +200,7 @@ def get_volunteer_checked_in_by_event(event_id, volunteer_type):
         return results
 
 
-@cached(cache=TTLCache(maxsize=200, ttl=300))
+@cached(cache=TTLCache(maxsize=200, ttl=300), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_hackathon_funnel(event_id):
     """
@@ -340,6 +340,7 @@ def get_hackathon_funnel(event_id):
 
 _FUNNEL_AGG_CACHE_KEY = "funnel_aggregate:v1"
 _FUNNEL_AGG_REDIS_TTL = 6 * 3600  # 6 hours — historical data rarely changes
+
 
 @limits(calls=200, period=ONE_MINUTE)
 def get_hackathon_funnel_aggregate():
@@ -580,7 +581,7 @@ def _enrich_teams_users_batch(teams, db):
     return teams
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
     logger.debug(f"get_single_hackathon_event start hackathon_id={hackathon_id}")
@@ -605,7 +606,7 @@ def get_single_hackathon_event(hackathon_id):
     return {}
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=3600), key=lambda is_current_only: str(is_current_only))
+@cached(cache=TTLCache(maxsize=100, ttl=3600), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
 @limits(calls=200, period=ONE_MINUTE)
 @log_execution_time
 def get_hackathon_list(is_current_only=None):
@@ -745,9 +746,12 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
 
     doc_ref.update(json)
 
-    slack_user_id = doc.get('slack_user_id')
+    slack_user_id = doc.to_dict().get('slack_user_id') if doc_dict else None
 
-    hackathon_welcome_message = f"🎉 Welcome <@{slack_user_id}> [{doc_volunteer_type}]."
+    if not slack_user_id:
+        logger.warning(f"Volunteer {volunteer_id} has no slack_user_id; skipping Slack welcome message")
+
+    hackathon_welcome_message = f"🎉 Welcome <@{slack_user_id}> [{doc_volunteer_type}]." if slack_user_id else None
 
     base_message = f"🎉 Welcome to Opportunity Hack {event_id}! You're checked in as a {doc_volunteer_type}.\n\n"
 
@@ -790,20 +794,23 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
 """
 
     if json.get("checkedIn") is True and "checkedIn" not in doc_dict.keys() and doc_dict.get("checkedIn") != True:
-        logger.info(f"Volunteer {volunteer_id} just checked in, sending welcome message to {slack_user_id}")
-        invite_user_to_channel(slack_user_id, "hackathon-welcome")
+        if slack_user_id:
+            logger.info(f"Volunteer {volunteer_id} just checked in, sending welcome message to {slack_user_id}")
+            invite_user_to_channel(slack_user_id, "hackathon-welcome")
 
-        logger.info(f"Sending Slack message to volunteer {volunteer_id} in channel #{slack_user_id} and #hackathon-welcome")
-        async_send_slack(
-            channel="#hackathon-welcome",
-            message=hackathon_welcome_message
-        )
+            logger.info(f"Sending Slack message to volunteer {volunteer_id} in channel #{slack_user_id} and #hackathon-welcome")
+            async_send_slack(
+                channel="#hackathon-welcome",
+                message=hackathon_welcome_message
+            )
 
-        logger.info(f"Sending Slack DM to volunteer {volunteer_id} in channel #{slack_user_id}")
-        async_send_slack(
-            channel=slack_user_id,
-            message=slack_message_content
-        )
+            logger.info(f"Sending Slack DM to volunteer {volunteer_id} in channel #{slack_user_id}")
+            async_send_slack(
+                channel=slack_user_id,
+                message=slack_message_content
+            )
+        else:
+            logger.warning(f"Volunteer {volunteer_id} checked in but no slack_user_id — skipping Slack welcome")
     else:
         logger.info(f"Volunteer {volunteer_id} checked in again, no welcome message sent.")
 
