@@ -1,6 +1,7 @@
 import uuid
 import os
 import random
+import threading
 from datetime import datetime, timedelta
 
 from cachetools import cached, TTLCache
@@ -138,7 +139,7 @@ def remove_nonprofit_from_hackathon(json):
     }
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=20))
+@cached(cache=TTLCache(maxsize=100, ttl=20), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
     logger.debug(f"get_single_hackathon_id start id={id}")
@@ -157,7 +158,7 @@ def get_single_hackathon_id(id):
     return {}
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=10))
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_volunteer_by_event(event_id, volunteer_type, admin=False):
     logger.debug(f"get {volunteer_type} start event_id={event_id}")
@@ -177,7 +178,7 @@ def get_volunteer_by_event(event_id, volunteer_type, admin=False):
         return results
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=5))
+@cached(cache=TTLCache(maxsize=100, ttl=5), lock=threading.Lock())
 def get_volunteer_checked_in_by_event(event_id, volunteer_type):
     logger.debug(f"get {volunteer_type} start event_id={event_id}")
 
@@ -196,7 +197,7 @@ def get_volunteer_checked_in_by_event(event_id, volunteer_type):
         return results
 
 
-@cached(cache=TTLCache(maxsize=200, ttl=300))
+@cached(cache=TTLCache(maxsize=200, ttl=300), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_hackathon_funnel(event_id):
     """
@@ -334,7 +335,7 @@ def get_hackathon_funnel(event_id):
     return result
 
 
-@cached(cache=TTLCache(maxsize=1, ttl=600))
+@cached(cache=TTLCache(maxsize=1, ttl=600), lock=threading.Lock())
 @limits(calls=200, period=ONE_MINUTE)
 def get_hackathon_funnel_aggregate():
     """
@@ -549,7 +550,7 @@ def _enrich_teams_users_batch(teams, db):
     return teams
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
     logger.debug(f"get_single_hackathon_event start hackathon_id={hackathon_id}")
@@ -574,7 +575,7 @@ def get_single_hackathon_event(hackathon_id):
     return {}
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=3600), key=lambda is_current_only: str(is_current_only))
+@cached(cache=TTLCache(maxsize=100, ttl=3600), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
 @limits(calls=200, period=ONE_MINUTE)
 @log_execution_time
 def get_hackathon_list(is_current_only=None):

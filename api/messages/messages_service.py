@@ -13,6 +13,7 @@ from datetime import datetime
 
 from common.log import get_logger, debug, error
 import firebase_admin
+import threading
 from firebase_admin import credentials, firestore
 
 from cachetools import cached, TTLCache
@@ -248,7 +249,7 @@ def get_problem_statement_from_id_old(problem_id):
     doc = db.collection('problem_statements').document(problem_id)
     return doc
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 def get_single_problem_statement_old(project_id):
     logger.debug(f"get_single_problem_statement start project_id={project_id}")    
     db = get_db()      
@@ -281,7 +282,7 @@ def get_problem_statement_list_old():
     logger.debug(results)        
     return { "problem_statements": results }
 
-@cached(cache=TTLCache(maxsize=100, ttl=10))
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_github_profile(github_username):
     logger.debug(f"Getting Github Profile for {github_username}")
@@ -294,7 +295,7 @@ def get_github_profile(github_username):
 # -------------------- User functions to be deleted ---------------------------------------- #
 
 # 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata_old(propel_id):
     logger.debug("Profile Metadata")
@@ -393,7 +394,7 @@ def _lean_admin_profile(doc):
 
 # 5-minute TTL is enough to absorb tab refreshes / multiple admins loading the
 # page in close succession while still picking up new signups within minutes.
-@cached(cache=TTLCache(maxsize=1, ttl=300), key=lambda: "all")
+@cached(cache=TTLCache(maxsize=1, ttl=300), lock=threading.Lock(), key=lambda: "all")
 def get_all_profiles():
     db = get_db()
     docs = db.collection('users').stream()
@@ -591,7 +592,7 @@ def save_profile_metadata_old(propel_id, json):
         "Saved Profile Metadata"
     )
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), key=lambda id: id)
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock(), key=lambda id: id)
 def get_user_by_id_old(id):
     logger.debug(f"Attempting to get user by ID: {id}")
     db = get_db()

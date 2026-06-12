@@ -1,3 +1,4 @@
+import threading
 import time
 from functools import wraps
 
@@ -57,7 +58,7 @@ def log_execution_time(func):
     return wrapper
 
 
-@cached(cache=TTLCache(maxsize=2000, ttl=3600), key=hash_key)
+@cached(cache=TTLCache(maxsize=2000, ttl=3600), lock=threading.Lock(), key=hash_key)
 def doc_to_json(docid=None, doc=None, depth=0):
     if not docid:
         logger.debug("docid is NoneType")

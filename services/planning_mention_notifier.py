@@ -20,6 +20,7 @@ provider can't break the comment write path.
 import logging
 import os
 import re
+import threading
 from cachetools import TTLCache, cached
 
 logger = logging.getLogger("planning_mention_notifier")
@@ -40,7 +41,7 @@ def parse_mention_ids(text: str):
 
 # Cache PropelAuth OAuth lookups for 5 minutes — heavy network call, and
 # Slack ID / email don't change in that window.
-@cached(cache=TTLCache(maxsize=500, ttl=300))
+@cached(cache=TTLCache(maxsize=500, ttl=300), lock=threading.Lock())
 def _get_oauth_user_cached(propel_id):
     try:
         from services.users_service import get_oauth_user_from_propel_user_id

@@ -54,6 +54,7 @@ PropelAuth via `common/auth.py`. Routes get the authenticated user from `@auth.r
 
 ## Deployment
 Deployed to Fly.io (`fly.toml`, app: `backend-ohack`, region: `sjc`). Uses gunicorn (`Procfile`). Port 6060.
+⚠️ As of June 2026 prod runs ONE sync gunicorn worker (`Dockerfile` CMD `--workers 1`, default sync class) — a single slow request blocks the entire API. Fix plan (workers/threads, caching, Sentry error sweep, traffic evidence): `docs/perf-reliability-plan-2026-06.md`.
 
 ## Testing notes
 - Tests live in `api/<domain>/tests/` or `test/` at the repo root.
