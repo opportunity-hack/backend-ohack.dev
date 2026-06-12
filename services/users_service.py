@@ -1,5 +1,6 @@
 from datetime import datetime
 import os
+import threading
 from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit
@@ -286,7 +287,7 @@ def get_profile_by_db_id(id):
     return res    
     
 # 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata(propel_id):
     logger.debug("Profile Metadata")

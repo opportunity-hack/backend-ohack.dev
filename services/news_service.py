@@ -1,4 +1,5 @@
 import os
+import threading
 import time
 from datetime import datetime
 
@@ -211,7 +212,7 @@ def save_praise(json):
     return Message("Saved praise")
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 def get_all_praises():
     results = get_recent_praises()
 
@@ -232,7 +233,7 @@ def get_all_praises():
     return Message(results)
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 def get_praises_about_user(user_id):
     results = get_praises_by_user_id(user_id)
 
@@ -257,7 +258,7 @@ def _is_publicly_visible(doc_dict):
     return status not in ("draft", "archived")
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=32600), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
+@cached(cache=TTLCache(maxsize=100, ttl=32600), lock=threading.Lock(), key=lambda news_limit, news_id: f"{news_limit}-{news_id}")
 def get_news(news_limit=3, news_id=None):
     logger.debug("Get News")
     db = get_db()

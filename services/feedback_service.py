@@ -1,4 +1,5 @@
 import os
+import threading
 import uuid
 from datetime import datetime
 
@@ -114,7 +115,7 @@ def notify_feedback_receiver(feedback_receiver_id):
         logger.warning(f"User with ID {feedback_receiver_id} not found")
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600))
+@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_user_feedback(propel_user_id):
     logger.info(f"Getting feedback for propel_user_id: {propel_user_id}")
