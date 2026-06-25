@@ -1354,6 +1354,9 @@ def get_volunteer_from_db_by_event(event_id: str, volunteer_type: str, admin: bo
                     user = user_map[email]
                     if "history" in user and "certificates" in user["history"]:
                         volunteer["certificates"] = user["history"]["certificates"]
+                    volunteer["user_db_id"] = user["id"]
+                    if user.get("profile_image"):
+                        volunteer["profile_image"] = user["profile_image"]
 
         return {"data": volunteers}
 

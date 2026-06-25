@@ -10,6 +10,7 @@ from db.db import get_db
 from google.cloud import firestore
 from google.cloud.firestore_v1.base_query import FieldFilter
 from common.utils.slack import get_slack_user_by_email, send_slack
+from common.utils.firebase import get_user_by_user_id, get_user_by_email
 from common.log import get_logger, info, debug, warning, error, exception
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern, get_cached, set_cached
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
@@ -1859,58 +1860,91 @@ def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
 def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optional[str] = None) -> bool:
     """
     Send a Slack notification when a mentor checks in.
-    
-    Args:
-        volunteer: The volunteer record
-        time_slot: Optional time slot for the check-in
-        
-    Returns:
-        True if notification was sent successfully, False otherwise
+
+    Returns True if notification was sent, False if skipped (no Slack account)
+    or on error.
     """
+    email = volunteer.get('email', '')
     areas_of_expertise = volunteer.get('expertise', [])
     specialties = volunteer.get('softwareEngineeringSpecifics', [])
-    slack_user_id = volunteer.get('slack_user_id', '')
     linked_in = volunteer.get('linkedinProfile', None)
     in_person = volunteer.get('inPerson', None)
-    
-    # Format the mention if we have a slack user ID
-    name_mention = f"<@{slack_user_id}>" if slack_user_id else None
-    
-    # Format areas of expertise if available
+
+    # Resolve Slack user id — use stored value first, then fall back to email lookup
+    # (catches mentors who applied/logged in with Google but have Slack under the same email)
+    slack_user_id = volunteer.get('slack_user_id', '')
+    if not slack_user_id and email:
+        try:
+            slack_info = get_slack_user_by_email(email)
+            if slack_info:
+                slack_user_id = slack_info.get('id', '')
+                # Persist back so future check-ins skip the lookup
+                if slack_user_id and volunteer.get('id'):
+                    try:
+                        db = get_db()
+                        db.collection('volunteers').document(volunteer['id']).update(
+                            {'slack_user_id': slack_user_id}
+                        )
+                    except Exception:
+                        pass  # best-effort; don't block the notification
+        except Exception as e:
+            logger.warning(f"Slack email lookup failed for {email}: {e}")
+
+    # Gate: no Slack identity means the mentor can't be mentioned or reached in Slack
+    if not slack_user_id:
+        logger.info(f"Mentor {email} has no Slack account; skipping #ask-a-mentor announcement")
+        return False
+
+    name_mention = f"<@{slack_user_id}>"
+
+    # Resolve OHack profile URL via users collection
+    profile_line = ""
+    try:
+        user_doc = None
+        if volunteer.get('user_id'):
+            user_doc = get_user_by_user_id(volunteer['user_id'])
+        if not user_doc and email:
+            user_doc = get_user_by_email(email)
+        if user_doc and user_doc.get('id'):
+            first = volunteer.get('firstName', '')
+            last = volunteer.get('lastName', '')
+            display_name = volunteer.get('name') or f"{first} {last}".strip() or 'their profile'
+            profile_url = f"https://www.ohack.dev/profile/{user_doc['id']}"
+            profile_line = f"*Profile:* <{profile_url}|View {display_name}'s profile>"
+    except Exception as e:
+        logger.warning(f"Could not resolve OHack profile for {email}: {e}")
+
+    # Format expertise / specialties / time slot
     expertise_text = ""
     if areas_of_expertise:
-        if isinstance(areas_of_expertise, list):
-            expertise_text = f"*Expertise:* {', '.join(areas_of_expertise)}"
-        else:
-            expertise_text = f"*Expertise:* {areas_of_expertise}"
-    
-    # Format specialties if available
+        expertise_text = f"*Expertise:* {', '.join(areas_of_expertise) if isinstance(areas_of_expertise, list) else areas_of_expertise}"
+
     specialties_text = ""
     if specialties:
-        if isinstance(specialties, list):
-            specialties_text = f"*Specialties:* {', '.join(specialties)}"
-        else:
-            specialties_text = f"*Specialties:* {specialties}"
-    
-    # Format time slot if available
-    time_text = ""
-    if time_slot:
-        time_text = f"*Time Slot:* {time_slot}"
-    
-    slack_message = f"""
-:reversecongaparrot:  *Mentor Available!*
+        specialties_text = f"*Specialties:* {', '.join(specialties) if isinstance(specialties, list) else specialties}"
 
-{name_mention} has checked in and is available to help teams!
+    time_text = f"*Time Slot:* {time_slot}" if time_slot else ""
 
-{expertise_text}
-{specialties_text}
-{time_text}
-{f"*LinkedIn:* {linked_in}" if linked_in else ""}
-{f"*In-Person:* {in_person}" if in_person else ""}
+    lines = [
+        ":reversecongaparrot:  *Mentor Available!*",
+        "",
+        f"{name_mention} has checked in and is available to help teams!",
+        "",
+    ]
+    for part in [expertise_text, specialties_text, time_text,
+                 f"*LinkedIn:* {linked_in}" if linked_in else "",
+                 f"*In-Person:* {in_person}" if in_person else "",
+                 profile_line]:
+        if part:
+            lines.append(part)
 
-If you're a hacker and need help, reach out to {name_mention} directly or #ask-a-mentor so everyone can benefit from their expertise and answers.
-"""
-    
+    lines += [
+        "",
+        f"If you're a hacker and need help, reach out to {name_mention} directly or post in #ask-a-mentor so everyone can benefit.",
+    ]
+
+    slack_message = "\n".join(lines)
+
     try:
         send_slack(
             message=slack_message,
@@ -1918,7 +1952,7 @@ If you're a hacker and need help, reach out to {name_mention} directly or #ask-a
             icon_emoji=":raising_hand:",
             username="Mentor Check-in"
         )
-        logger.info(f"Sent Slack notification about mentor check-in for {volunteer.get('email')}")
+        logger.info(f"Sent Slack notification about mentor check-in for {email}")
         return True
     except Exception as e:
         logger.error(f"Error sending Slack notification: {str(e)}")
