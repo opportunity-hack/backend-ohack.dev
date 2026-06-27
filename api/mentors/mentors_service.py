@@ -75,36 +75,64 @@ def _resolve_caller(propel_user_id):
         return None, None, None
 
 
-def user_is_mentor_for_event(propel_user_id, event_id) -> bool:
+def _find_mentor_volunteer(propel_user_id, event_id):
     """
-    True iff the caller has an approved (isSelected=True) mentor volunteer
-    record for THIS event. Matches by email first, then by OAuth user_id —
-    either is enough.
+    Resolve the caller's mentor volunteer doc for THIS event, trying every
+    identity shape a doc may have been stored under. Mirrors handle_get
+    (volunteers_views.py) so the panel gate matches the same docs the
+    GET-application path already matches:
+
+      1. raw PropelAuth UUID  — self-submitted apps store auth_user.user_id
+         (the propel UUID) in the doc's `user_id` field. THIS is the common
+         case and was the missing lookup that caused approved mentors with a
+         form-email != login-email to 403.
+      2. PropelAuth email     — form-entered email == login email.
+      3. OAuth user_id        — legacy docs that stored oauth2|slack|... .
+
+    Returns the first volunteer doc found (regardless of isSelected) or None.
     """
     if not propel_user_id or not event_id:
-        return False
+        return None
+
+    # 1. Direct match on the raw propel UUID (how handle_submit stores user_id).
+    try:
+        v = get_volunteer_by_user_id(propel_user_id, event_id, "mentor")
+        if v:
+            return v
+    except Exception as e:
+        logger.warning("_find_mentor_volunteer: propel_id lookup failed: %s", e)
+
     email, oauth_user_id, _ = _resolve_caller(propel_user_id)
 
-    candidates = []
+    # 2. Email match.
     if email:
         try:
             v = get_volunteer_by_email(email, event_id, "mentor")
             if v:
-                candidates.append(v)
+                return v
         except Exception as e:
-            logger.warning("user_is_mentor_for_event: email lookup failed: %s", e)
-    if oauth_user_id:
+            logger.warning("_find_mentor_volunteer: email lookup failed: %s", e)
+
+    # 3. OAuth user_id match (legacy docs), only if it differs from the propel UUID.
+    if oauth_user_id and oauth_user_id != propel_user_id:
         try:
             v = get_volunteer_by_user_id(oauth_user_id, event_id, "mentor")
             if v:
-                candidates.append(v)
+                return v
         except Exception as e:
-            logger.warning("user_is_mentor_for_event: user_id lookup failed: %s", e)
+            logger.warning("_find_mentor_volunteer: user_id lookup failed: %s", e)
 
-    for v in candidates:
-        if v.get("isSelected"):
-            return True
-    return False
+    return None
+
+
+def user_is_mentor_for_event(propel_user_id, event_id) -> bool:
+    """
+    True iff the caller has an approved (isSelected=True) mentor volunteer
+    record for THIS event. Matches by raw propel UUID, then email, then OAuth
+    user_id — any one is enough (see _find_mentor_volunteer).
+    """
+    v = _find_mentor_volunteer(propel_user_id, event_id)
+    return bool(v and v.get("isSelected"))
 
 
 def get_mentor_self_status(propel_user_id, event_id):
@@ -113,25 +141,8 @@ def get_mentor_self_status(propel_user_id, event_id):
     endpoint. The volunteer subset is intentionally lean (no PII beyond what
     the caller already knows about themselves).
     """
-    if not propel_user_id or not event_id:
-        return {"is_mentor": False, "volunteer": None}
-    email, oauth_user_id, _ = _resolve_caller(propel_user_id)
-    chosen = None
-    if email:
-        try:
-            v = get_volunteer_by_email(email, event_id, "mentor")
-            if v and v.get("isSelected"):
-                chosen = v
-        except Exception:
-            pass
-    if chosen is None and oauth_user_id:
-        try:
-            v = get_volunteer_by_user_id(oauth_user_id, event_id, "mentor")
-            if v and v.get("isSelected"):
-                chosen = v
-        except Exception:
-            pass
-    if chosen is None:
+    chosen = _find_mentor_volunteer(propel_user_id, event_id)
+    if chosen is None or not chosen.get("isSelected"):
         return {"is_mentor": False, "volunteer": None}
     return {
         "is_mentor": True,
