@@ -10,7 +10,7 @@ from common.utils.firestore_helpers import doc_to_json, log_execution_time, regi
 from common.utils.slack import send_slack_audit, send_slack, create_slack_channel, invite_user_to_channel
 from common.utils.github import create_github_repo, validate_github_username, get_all_repos
 from common.utils.firebase import get_hackathon_by_event_id
-from common.utils.oauth_providers import extract_slack_user_id
+from common.utils.oauth_providers import extract_slack_user_id, is_slack_user_id
 from db.db import get_db, get_user_doc_reference
 from services.users_service import (
     get_propel_user_details_by_id,
@@ -461,9 +461,15 @@ def join_team(propel_user_id, json):
             send_slack_audit(action="join_team", message="Added", payload=json)
             message = "Joined Team"
             if team_slack_channel and slack_user_id:
-                invite_user_to_channel(slack_user_id, team_slack_channel)
-                # Send a simple message that pings the user in the channel to let them know they were added
-                send_slack(f"<@{slack_member_id}> has joined the team!", team_slack_channel)
+                if is_slack_user_id(slack_user_id):
+                    invite_user_to_channel(slack_user_id, team_slack_channel)
+                    # Send a simple message that pings the user in the channel to let them know they were added
+                    send_slack(f"<@{slack_member_id}> has joined the team!", team_slack_channel)
+                else:
+                    # Non-Slack login (e.g. Google) has no Slack ID to @-mention or invite —
+                    # use the display name so we don't post a mangled "@oauth2" mention.
+                    display_name = (user.name or slack_user.get("name") or "A member")
+                    send_slack(f"{display_name} has joined the team!", team_slack_channel)
         else:
             message = "User was already in the team"
     except Exception as e:
