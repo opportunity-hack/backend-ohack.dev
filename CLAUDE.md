@@ -100,6 +100,9 @@ Two options:
 1. **Sort in Python after a single-field where** (preferred when the result set is small): `sorted([... for d in coll.where(...).stream()], key=lambda x: x["pos"])`. No index needed because single-field equality is auto-indexed.
 2. **Add the composite index to `firestore.indexes.json`** AND deploy. Don't forget the deploy step — committing to the repo doesn't apply it.
 
+### `set(..., merge=True)` DEEP-merges map fields — removing a nested key needs DELETE_FIELD
+`ref.set({"some_map": {...}}, merge=True)` does NOT replace `some_map` — it recursively merges, so a key you dropped from the Python dict stays in Firestore. To delete a nested key you must write `firestore.DELETE_FIELD` at that exact path: `ref.set({"some_map": {key: firestore.DELETE_FIELD}}, merge=True)`. MockFirestore (test/`ENVIRONMENT=test`) REPLACES maps instead of deep-merging, so this passes locally and only breaks in prod. This caused the "mentor coverage cleared but stays checked" bug — `toggle_mentor_coverage` (`api/mentors/mentors_service.py`) popped the slug then wrote the dict, which never removed it. Pattern to copy is there now: write only the changed nested keys, DELETE_FIELD to remove. Mixing DELETE_FIELD sentinels and real values in the same nested map is allowed; DELETE_FIELD on a non-existent path is a no-op.
+
 ### Lazy user profile creation in the `users` collection
 A user authenticated via PropelAuth may NOT exist in the Firestore `users` collection. The collection is populated lazily — only when someone hits `GET /api/users/profile` or saves profile metadata. Never assume `fetch_users()` includes everyone with a `propel_user_id` referenced elsewhere (assignees, editors, mentions, etc.).
 
