@@ -17,8 +17,10 @@ import logging
 from datetime import datetime
 from typing import Optional, Tuple
 
+from firebase_admin import firestore
+
 from db.db import get_db
-from common.utils.firestore_helpers import clear_all_caches as clear_cache
+from common.utils.firestore_helpers import clear_all_caches
 from common.utils.slack import send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
 from services.users_service import get_propel_user_details_by_id
@@ -26,6 +28,25 @@ from services.volunteers_service import get_volunteer_by_email, get_volunteer_by
 from services.teams_service import get_team
 
 logger = logging.getLogger("myapp")
+
+
+def clear_cache():
+    """Bust the team/doc caches (so get_team — and this endpoint's own
+    _build_response — is fresh) AND the hackathon event/list caches.
+
+    Mentor writes change fields the CACHED event page (#teams) renders via
+    get_single_hackathon_event: coverage X/6, mentor_open_flag_count, the judging
+    consensus dots, last-touched. clear_all_caches() only clears the *registered*
+    caches (e.g. teams' _GET_TEAM_CACHE), NOT get_single_hackathon_event's cache,
+    so without this the event page lagged up to 10 min behind the always-fresh
+    team page. Mirrors teams_service._clear_cache(). Lazy import avoids a circular
+    import at module load."""
+    clear_all_caches()
+    try:
+        from services.hackathons_service import clear_cache as clear_hackathon_caches
+        clear_hackathon_caches()
+    except Exception as e:  # pragma: no cover - best-effort cache bust
+        logger.warning("mentors clear_cache: hackathon cache clear failed: %s", e)
 
 # Canonical 6-item team-coverage list. Slugs MUST stay in lockstep with the
 # frontend MENTOR_COVERAGE_ITEMS in src/components/Teams/mentorCoverage.js.
@@ -44,6 +65,13 @@ MENTOR_COVERAGE_ITEMS = [
      "blurb": "A mentor has reviewed at least a draft of the demo video and DevPost submission."},
 ]
 MENTOR_COVERAGE_SLUGS = {item["slug"]: item for item in MENTOR_COVERAGE_ITEMS}
+
+# Each coverage item wants independent sign-off from this many distinct mentors
+# (capped here too — we don't want to pester a team with more than this). An item
+# only counts toward the X/6 coverage total + the "fully covered" milestone once
+# it reaches this many checks. Keep in lockstep with the frontend
+# COVERAGE_TARGET_MENTORS in src/components/Teams/mentorCoverage.js.
+COVERAGE_TARGET_MENTORS = 3
 
 ALLOWED_FLAG_SEVERITIES = {"needs_attention", "blocked"}
 # Five judging criteria. The first four are the main 10-pt rubric on
@@ -183,10 +211,32 @@ def _open_flag_count(flags):
     return sum(1 for f in flags if not f.get("resolved_at"))
 
 
+def _coverage_checks(entry):
+    """Per-mentor checks map for one coverage item: {propel_id: {name, checked_at}}.
+
+    Tolerates the legacy single-mentor shape ({done, checked_by_propel_id,
+    checked_by_name, checked_at}) by surfacing it as one check, so existing data
+    keeps counting until a mentor next touches the item (which migrates it)."""
+    if not isinstance(entry, dict):
+        return {}
+    checks = entry.get("checks")
+    if isinstance(checks, dict):
+        return checks
+    if entry.get("done"):
+        pid = entry.get("checked_by_propel_id") or "_legacy"
+        return {pid: {"name": entry.get("checked_by_name"),
+                      "checked_at": entry.get("checked_at")}}
+    return {}
+
+
 def _coverage_done_count(checklist):
+    """Count items that have reached COVERAGE_TARGET_MENTORS distinct checks."""
     if not isinstance(checklist, dict):
         return 0
-    return sum(1 for slug in MENTOR_COVERAGE_SLUGS if checklist.get(slug, {}).get("done"))
+    return sum(
+        1 for slug in MENTOR_COVERAGE_SLUGS
+        if len(_coverage_checks(checklist.get(slug))) >= COVERAGE_TARGET_MENTORS
+    )
 
 
 def _mentor_channel_for_event(event_id):
@@ -224,16 +274,18 @@ def _build_response(team_id, **extra):
 
 def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
     """
-    Mark/unmark a coverage item. Mentor coverage is reversible (situations
-    evolve mid-event), unlike the team-completion checklist. Quiet by
-    default — only the first time a team hits 6/6 does a Slack message fire.
+    Record (done=True) or clear (done=False) the CALLING mentor's own check on a
+    coverage item. Each item collects independent sign-off from up to
+    COVERAGE_TARGET_MENTORS distinct mentors — a mentor can only add or clear their
+    own check, never another mentor's. An item counts toward the X/6 total (and the
+    one-time "fully covered" Slack milestone) once it reaches the target. Quiet by
+    default — only the first time every item is fully covered does Slack fire.
     """
     if item_slug not in MENTOR_COVERAGE_SLUGS:
         return {"error": f"Unknown coverage item: {item_slug}"}, 400
     if not isinstance(done, bool):
         return {"error": "Field 'done' must be a boolean"}, 400
 
-    event_id_guess = None
     ref, team_data, _ = _team_doc_or_404(team_id)
     if ref is None:
         return {"error": "Team not found"}, 404
@@ -244,24 +296,42 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
     name = _caller_attribution(propel_user_id)
     now_iso = datetime.now().isoformat()
     checklist = dict(team_data.get("mentor_checklist") or {})
-    if done:
-        new_entry = {
-            "done": True,
-            "checked_at": now_iso,
-            "checked_by_propel_id": propel_user_id,
-            "checked_by_name": name,
-        }
-        if note:
-            new_entry["note"] = str(note)[:MAX_RATING_NOTE_LEN]
-        checklist[item_slug] = new_entry
-    else:
-        # Unchecking: drop the entry entirely (the absence is the "not done" state).
-        checklist.pop(item_slug, None)
+    existing_entry = checklist.get(item_slug)
+    checks = dict(_coverage_checks(existing_entry))  # propel_id -> {name, checked_at}
+    is_legacy = isinstance(existing_entry, dict) and "checks" not in existing_entry
 
-    new_count = sum(1 for s in MENTOR_COVERAGE_SLUGS if checklist.get(s, {}).get("done"))
+    # set(merge=True) deep-merges map fields, so we write ONLY the nested keys that
+    # change. Removing my check means a DELETE_FIELD sentinel at my propel_id path
+    # (popping the key wouldn't persist). Legacy single-mentor entries are migrated
+    # into the `checks` map — and their top-level keys deleted — on first touch.
+    entry_write = {"checks": {}}
+    if is_legacy and isinstance(existing_entry, dict):
+        for k in ("done", "checked_at", "checked_by_propel_id", "checked_by_name", "note"):
+            if k in existing_entry:
+                entry_write[k] = firestore.DELETE_FIELD
+        for pid, val in checks.items():  # preserve any OTHER legacy checker
+            if pid != propel_user_id:
+                entry_write["checks"][pid] = val
+
+    if done:
+        if propel_user_id not in checks and len(checks) >= COVERAGE_TARGET_MENTORS:
+            return ({"error": f"This item already has {COVERAGE_TARGET_MENTORS} mentor "
+                              "checks — that's plenty, no need to add another."}, 409)
+        my_check = {"name": name, "checked_at": now_iso}
+        if note:
+            my_check["note"] = str(note)[:MAX_RATING_NOTE_LEN]
+        checks[propel_user_id] = my_check
+        entry_write["checks"][propel_user_id] = my_check
+    else:
+        checks.pop(propel_user_id, None)
+        entry_write["checks"][propel_user_id] = firestore.DELETE_FIELD
+
+    # Reflect the change in our in-memory copy for counting + milestone.
+    checklist[item_slug] = {"checks": checks}
+    new_count = _coverage_done_count(checklist)
     total = len(MENTOR_COVERAGE_ITEMS)
 
-    update = {"mentor_checklist": checklist}
+    update = {"mentor_checklist": {item_slug: entry_write}}
     _touch(update, name, now_iso)
 
     # First-time-complete milestone: stamp it once so we never re-broadcast.
@@ -280,8 +350,8 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
                 send_slack(
                     message=(
                         f":sparkles: *{team_data.get('name', 'This team')}* has full mentor coverage "
-                        f"({total}/{total} items)! Nice work team & mentors. "
-                        f"Final coverage marker: *{name}*."
+                        f"— all {total} items signed off by {COVERAGE_TARGET_MENTORS} mentors each! "
+                        f"Nice work team & mentors. Final coverage marker: *{name}*."
                     ),
                     channel=slack_channel,
                 )
