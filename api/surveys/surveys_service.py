@@ -146,6 +146,17 @@ def get_user_event_roles(propel_user_id: Optional[str], event_id: str) -> List[s
     return sorted(roles)
 
 
+def allowed_roles_for(trusted: bool, eligible_roles: List[str]) -> List[str]:
+    """Roles a submitter may claim.
+
+    - A trusted (logged-in, isSelected) volunteer may only submit for the role(s)
+      they were selected for — not every role.
+    - Everyone else (nonprofit partners, who have no flag, and anonymous visitors)
+      may only submit as a nonprofit, behind the CAPTCHA.
+    """
+    return list(eligible_roles) if trusted else ["nonprofit"]
+
+
 def get_survey_context(event_id: str, propel_user_id: Optional[str]) -> Tuple[Dict[str, Any], int]:
     """What the frontend needs to render the right form: mode, the caller's
     eligible roles, whether a CAPTCHA is required, and a basic event summary."""
@@ -160,6 +171,7 @@ def get_survey_context(event_id: str, propel_user_id: Optional[str]) -> Tuple[Di
     roles = get_user_event_roles(propel_user_id, event_id) if logged_in else []
     eligible = bool(roles)
     trusted = logged_in and eligible
+    allowed = allowed_roles_for(trusted, roles)
 
     already_submitted = False
     if trusted and mode in ("live", "post"):
@@ -175,7 +187,8 @@ def get_survey_context(event_id: str, propel_user_id: Optional[str]) -> Tuple[Di
         "logged_in": logged_in,
         "eligible": eligible if logged_in else None,
         "roles": roles,
-        "primary_role": roles[0] if roles else None,
+        "allowed_roles": allowed,
+        "primary_role": allowed[0] if allowed else None,
         "requires_captcha": not trusted,
         "already_submitted": already_submitted,
         "event": {
@@ -216,6 +229,14 @@ def submit_survey_response(
     logged_in = bool(propel_user_id)
     roles = get_user_event_roles(propel_user_id, event_id) if logged_in else []
     trusted = logged_in and bool(roles)
+
+    # Enforce role scope: selected volunteers may only submit for a role they
+    # were selected for; everyone else may only submit as a nonprofit.
+    if role not in set(allowed_roles_for(trusted, roles)):
+        return {
+            "success": False,
+            "error": "You can only submit feedback for the role you're selected for.",
+        }, 403
 
     # CAPTCHA gate for everyone who isn't a known, selected volunteer.
     if not trusted:

@@ -6,6 +6,7 @@ from api.surveys.surveys_service import (
     compute_event_mode,
     _parse_event_date,
     _user_doc_id,
+    allowed_roles_for,
     ALLOWED_ROLES,
 )
 
@@ -65,3 +66,14 @@ class TestHelpers:
     def test_allowed_roles_cover_spec(self):
         for role in ("hacker", "mentor", "judge", "nonprofit", "volunteer", "organizer"):
             assert role in ALLOWED_ROLES
+
+
+class TestAllowedRolesFor:
+    def test_trusted_volunteer_limited_to_selected_roles(self):
+        assert allowed_roles_for(True, ["mentor"]) == ["mentor"]
+        assert allowed_roles_for(True, ["hacker", "mentor"]) == ["hacker", "mentor"]
+
+    def test_untrusted_can_only_be_nonprofit(self):
+        # anonymous / logged-in-but-not-selected
+        assert allowed_roles_for(False, []) == ["nonprofit"]
+        assert allowed_roles_for(False, ["hacker"]) == ["nonprofit"]
