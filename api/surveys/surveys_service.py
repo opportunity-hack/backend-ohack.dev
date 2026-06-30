@@ -392,3 +392,111 @@ def get_event_survey_summary(event_id: str) -> Dict[str, Any]:
     if summary["would_return"]["count"]:
         summary["would_return"]["average"] = round(return_sum / summary["would_return"]["count"], 2)
     return {"success": True, "summary": summary}
+
+
+def get_cross_event_survey_overview() -> Dict[str, Any]:
+    """Admin: cross-event aggregate for the 'Compare events' view.
+
+    One scan of the surveys collection grouped by `event_id`, with per-event
+    averages of the two universal scales (overall_rating, would_return) plus
+    mode/role counts and the first/last response timestamps. Joined with
+    hackathon metadata (title / dates / timezone). Aggregates only — no
+    per-response data and no PII.
+    """
+    db = get_db()
+    by_event: Dict[str, Dict[str, Any]] = {}
+    totals: Dict[str, Any] = {"responses": 0, "by_mode": {}, "by_role": {}}
+
+    for doc in db.collection(SURVEY_COLLECTION).stream():
+        data = doc.to_dict() or {}
+        event_id = data.get("event_id")
+        if not event_id:
+            continue
+        ev = by_event.get(event_id)
+        if ev is None:
+            ev = by_event[event_id] = {
+                "count": 0,
+                "by_mode": {},
+                "by_role": {},
+                "_rating_sum": 0.0, "_rating_n": 0,
+                "_return_sum": 0.0, "_return_n": 0,
+                "first_response": None,
+                "last_response": None,
+            }
+        ev["count"] += 1
+        totals["responses"] += 1
+
+        mode = data.get("mode")
+        if mode:
+            ev["by_mode"][mode] = ev["by_mode"].get(mode, 0) + 1
+            totals["by_mode"][mode] = totals["by_mode"].get(mode, 0) + 1
+        role = data.get("role")
+        if role:
+            ev["by_role"][role] = ev["by_role"].get(role, 0) + 1
+            totals["by_role"][role] = totals["by_role"].get(role, 0) + 1
+
+        answers = data.get("answers") or {}
+        overall = answers.get("overall_rating")
+        if isinstance(overall, (int, float)):
+            ev["_rating_sum"] += overall
+            ev["_rating_n"] += 1
+        would_return = answers.get("would_return")
+        if isinstance(would_return, (int, float)):
+            ev["_return_sum"] += would_return
+            ev["_return_n"] += 1
+
+        created = data.get("created_at")
+        if isinstance(created, str) and created:
+            # Surveys are born-digital ISO; strip the CSV-export sentinel defensively.
+            if created.startswith("__Timestamp__"):
+                created = created[len("__Timestamp__"):]
+            if ev["first_response"] is None or created < ev["first_response"]:
+                ev["first_response"] = created
+            if ev["last_response"] is None or created > ev["last_response"]:
+                ev["last_response"] = created
+
+    # Join event metadata (title / dates / tz). Lazy import avoids a heavy module
+    # load at import time and any circular import (mirrors _resolve_user_identity).
+    event_meta: Dict[str, Dict[str, Any]] = {}
+    try:
+        from services.hackathons_service import get_hackathon_list
+        for h in (get_hackathon_list().get("hackathons") or []):
+            hid = h.get("event_id") or h.get("id")
+            if hid:
+                event_meta[hid] = h
+    except Exception as e:  # pragma: no cover - defensive
+        warning(logger, "survey-overview: hackathon metadata join failed", exc_info=e)
+
+    events: List[Dict[str, Any]] = []
+    for event_id, ev in by_event.items():
+        meta = event_meta.get(event_id) or {}
+        rating_avg = round(ev["_rating_sum"] / ev["_rating_n"], 2) if ev["_rating_n"] else None
+        return_avg = round(ev["_return_sum"] / ev["_return_n"], 2) if ev["_return_n"] else None
+        events.append({
+            "event_id": event_id,
+            "title": meta.get("title") or event_id,
+            "start_date": meta.get("start_date"),
+            "end_date": meta.get("end_date"),
+            "timezone": meta.get("timezone") or DEFAULT_TIMEZONE,
+            "count": ev["count"],
+            "by_mode": ev["by_mode"],
+            "by_role": ev["by_role"],
+            "overall_rating": {"count": ev["_rating_n"], "average": rating_avg},
+            "would_return": {"count": ev["_return_n"], "average": return_avg},
+            "first_response": ev["first_response"],
+            "last_response": ev["last_response"],
+        })
+
+    # Chronological; events with no known start_date fall to the end.
+    events.sort(key=lambda e: (e.get("start_date") or "9999", e.get("first_response") or ""))
+
+    return {
+        "success": True,
+        "totals": {
+            "responses": totals["responses"],
+            "events": len(events),
+            "by_mode": totals["by_mode"],
+            "by_role": totals["by_role"],
+        },
+        "events": events,
+    }

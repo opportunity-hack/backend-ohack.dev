@@ -6,6 +6,7 @@ from api.surveys.surveys_service import (
     submit_survey_response,
     get_event_survey_responses,
     get_event_survey_summary,
+    get_cross_event_survey_overview,
 )
 
 logger = get_logger(__name__)
@@ -68,3 +69,15 @@ def survey_summary(event_id):
     except Exception as e:
         logger.exception("Error building survey summary: %s", str(e))
         return jsonify({"success": False, "error": str(e)}), 500
+
+
+@bp.route("/surveys/overview", methods=["GET"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def surveys_overview():
+    """Admin: cross-event aggregate for the 'Compare events' view (one scan,
+    grouped by event_id; aggregates only, no PII)."""
+    try:
+        return jsonify(get_cross_event_survey_overview()), 200
+    except Exception as e:
+        logger.exception("Error building cross-event survey overview: %s", str(e))
+        return jsonify({"success": False, "error": str(e), "events": []}), 500
