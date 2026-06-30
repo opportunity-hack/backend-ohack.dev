@@ -135,6 +135,23 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             return None
         return convert_to_entity(raw, User) if raw is not None else None
 
+    def fetch_user_by_email(self, email):
+        """Look up a user by `email_address`. Single-field equality query
+        (auto-indexed). Used as an identity fallback when neither propel_id nor
+        the OAuth round-trip resolves the user — email is stable across providers.
+        """
+        debug(logger, "Fetching user by email")
+        if not email:
+            return None
+        db = self.get_db()
+        raw = None
+        try:
+            raw, *rest = db.collection('users').where("email_address", "==", email).stream()
+        except ValueError:
+            debug(logger, "No user found by email")
+            return None
+        return convert_to_entity(raw, User) if raw is not None else None
+
     def fetch_user_by_db_id_raw(self, db, db_id):
         u = db.collection('users').document(db_id).get()
         return u
