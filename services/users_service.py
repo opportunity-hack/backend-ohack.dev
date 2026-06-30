@@ -399,56 +399,83 @@ def remove_user_by_slack_id(user_id):
 def get_users():
     return fetch_users()
 
-def save_volunteering_time(propel_id, json):
-    logger.info(f"Save Volunteering Time for {propel_id} {json}")
+def _resolve_and_ensure_user(propel_id):
+    """Resolve a propel_id to a Firestore User, lazily creating the user doc
+    when the person has authenticated but never opened their profile page (the
+    documented lazy-creation gotcha). Returns (user, user_id); (None, None) only
+    when PropelAuth identity can't be resolved at all (transient OAuth failure).
+
+    Before this, the volunteering endpoints returned None -> 404 for any user
+    without a pre-existing doc, which surfaced as "Failed to load your volunteer
+    data" and also blocked them from starting a session. New users now just work.
+    """
     oauth_user = get_oauth_user_from_propel_user_id(propel_id)
     if oauth_user is None:
         warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
-        return None
+        return None, None
 
     user_id = oauth_user["sub"]
-
-    logger.info(f"Save Volunteering Time for {user_id} {json}")
-
-    # Get the user
     user = fetch_user_by_user_id(user_id)
     if user is None:
-        warning(logger, "User not found", user_id=user_id)
-        return
+        info(logger, "Lazily creating user doc on first volunteering action", user_id=user_id)
+        save_user(
+            user_id=user_id,
+            email=oauth_user.get("email", ""),
+            last_login=datetime.now().isoformat() + "Z",
+            profile_image=(
+                oauth_user.get("https://slack.com/user_image_192")
+                or oauth_user.get("picture")
+                or ""
+            ),
+            name=oauth_user.get("name", ""),
+            nickname=oauth_user.get("given_name", ""),
+            propel_id=propel_id,
+        )
+        user = fetch_user_by_user_id(user_id)
+    return user, user_id
 
-    timestamp = datetime.now().isoformat() + "Z"
-    reason = json["reason"] # The kind of volunteering being done
 
-    if "finalHours" in json:
-        finalHours = json["finalHours"] # This is sent at when volunteering is done
-        if finalHours is None:
-            error(logger, "finalHours is None", user_id=user_id)
-            return
+def save_volunteering_time(propel_id, json):
+    logger.info(f"Save Volunteering Time for {propel_id} {json}")
+    user, user_id = _resolve_and_ensure_user(propel_id)
+    if user is None:
+        warning(logger, "Could not resolve/create user for volunteering save", propel_id=propel_id)
+        return None
 
-        user.volunteering.append({
-            "timestamp": timestamp,
-            "finalHours": round(finalHours,2),
-            "reason": reason
-            })
+    # Allow backdating a manually-logged entry; default to now (UTC).
+    timestamp = json.get("timestamp") or (datetime.now().isoformat() + "Z")
+    reason = json.get("reason", "")  # The kind of volunteering being done
 
-        # Add to the total
-        upsert_profile_metadata(user)
+    # A single entry can carry committed hours (set when a live session starts),
+    # actively-tracked hours (set when a session ends), or BOTH (manual log of
+    # actual time done away from the keyboard). Counting both on one entry is fine
+    # because get_volunteering_time no longer concatenates two filtered lists.
+    def _clean_hours(value):
+        try:
+            hours = round(float(value), 2)
+        except (TypeError, ValueError):
+            return None
+        if hours < 0:
+            return None
+        return min(hours, 1000)  # defensive cap against garbage input
 
-    # We keep track of what the user is committing to do but we don't show this
-    # The right way to do this is likely to get a session id when they start volunteering and the frontend uses that to close out the volunteering session when it is done
-    # But this way is simpler for now
-    elif "commitmentHours" in json:
-        commitmentHours = json["commitmentHours"] # This is sent at the start of volunteering
-        if commitmentHours is None:
-            error(logger, "commitmentHours is None", user_id=user_id)
-            return
-        
-        user.volunteering.append({
-            "timestamp": timestamp,
-            "commitmentHours": round(commitmentHours,2),
-            "reason": reason
-            })
-        upsert_profile_metadata(user)
+    commitment_hours = _clean_hours(json["commitmentHours"]) if "commitmentHours" in json else None
+    final_hours = _clean_hours(json["finalHours"]) if "finalHours" in json else None
+
+    if commitment_hours is None and final_hours is None:
+        error(logger, "No valid hours provided for volunteering entry", user_id=user_id)
+        return None
+
+    entry = {"timestamp": timestamp, "reason": reason}
+    if commitment_hours is not None:
+        entry["commitmentHours"] = commitment_hours
+    if final_hours is not None:
+        entry["finalHours"] = final_hours
+    if json.get("manual"):
+        entry["manual"] = True
+
+    user.volunteering.append(entry)
+    upsert_profile_metadata(user)
 
     # Clear cache for get_profile_metadata
     get_profile_metadata.cache_clear()
@@ -457,50 +484,32 @@ def save_volunteering_time(propel_id, json):
 
 def get_volunteering_time(propel_id, start_date, end_date):
     logger.info(f"Get Volunteering Time for {propel_id} {start_date} {end_date}")
-    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
-    if oauth_user is None:
-        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
-        return None
-
-    user_id = oauth_user["sub"]
-
-    logger.info(f"Get Volunteering Time for {user_id} start: {start_date} end: {end_date}")
-
-    # Get the user
-    user = fetch_user_by_user_id(user_id)
+    user, user_id = _resolve_and_ensure_user(propel_id)
     if user is None:
-        warning(logger, "User not found", user_id=user_id)
-        return None
+        # Identity couldn't be resolved (transient OAuth issue). Return an empty
+        # dataset rather than 404 so the page shows a clean zero-state.
+        warning(logger, "Could not resolve user for volunteering read; returning empty", propel_id=propel_id)
+        return [], 0, 0
 
-    # Filter the volunteering data
-    volunteeringActiveTime = []
-    for v in user.volunteering:
-        if "finalHours" in v:
-            if start_date is not None and end_date is not None:
-                if v["timestamp"] >= start_date and v["timestamp"] <= end_date:
-                    volunteeringActiveTime.append(v)
-            else:
-                volunteeringActiveTime.append(v)
+    def _in_range(v):
+        if start_date is None or end_date is None:
+            return True
+        ts = v.get("timestamp", "")
+        return start_date <= ts <= end_date
 
-    volunteeringCommittmentTime = []
-    for v in user.volunteering:
-        if "commitmentHours" in v:
-            if start_date is not None and end_date is not None:
-                if v["timestamp"] >= start_date and v["timestamp"] <= end_date:
-                    volunteeringCommittmentTime.append(v)
-            else:
-                volunteeringCommittmentTime.append(v)
-    
-    totalActiveHours = sum([v["finalHours"] for v in volunteeringActiveTime])    
-    totalCommitmentHours = sum([v["commitmentHours"] for v in volunteeringCommittmentTime]) 
+    # Single pass, no duplication. Each entry appears once and contributes to
+    # whichever totals its fields cover.
+    filtered = [v for v in (user.volunteering or []) if _in_range(v)]
+    total_active_hours = round(sum((v.get("finalHours") or 0) for v in filtered), 2)
+    total_commitment_hours = round(sum((v.get("commitmentHours") or 0) for v in filtered), 2)
 
-    # Merge volunteeringActiveTime and volunteeringCommittmentTime
-    # This is a bit of a hack but it is easier to do it this way than to try to do it in the frontend
-    allVolunteering = volunteeringActiveTime + volunteeringCommittmentTime
+    logger.debug(
+        f"volunteering entries: {len(filtered)} "
+        f"Total Active Hours: {total_active_hours} "
+        f"Total Commitment Hours: {total_commitment_hours}"
+    )
 
-    logger.debug(f"allVolunteering: {allVolunteering}  || volunteeringActiveTime: {volunteeringActiveTime} volunteeringCommittmentTime: {volunteeringCommittmentTime} Total Active Hours: {totalActiveHours} Total Commitment Hours: {totalCommitmentHours}")   
-    
-    return allVolunteering, totalActiveHours, totalCommitmentHours
+    return filtered, total_active_hours, total_commitment_hours
 
 def get_all_volunteering_time(start_date=None, end_date=None):
     logger.info(f"Get All Volunteering Time for start: {start_date} end: {end_date}")
