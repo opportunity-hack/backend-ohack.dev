@@ -123,6 +123,9 @@ To send a Slack DM, pass the Slack user ID as `channel`: `send_slack(message=...
 
 These are DIFFERENT VALUES. When bundling user data for the frontend, include both: `{user_id: propel_id, db_id: firestore_doc_id, name, profile_image}`. The frontend needs `db_id` to build profile links and `user_id` (propel) for matching against assignees/editors/mentions.
 
+## Volunteer time tracking (`/api/users/volunteering`)
+GET/POST in `api/users/users_views.py` → `services/users_service.py`. Both resolve identity through `_resolve_and_ensure_user(propel_id)`, which **lazily creates the `users` doc when missing** (the lazy-creation gotcha). Before this, a user who'd authenticated but never opened their profile had no doc, so `fetch_user_by_user_id` → None → 404 on BOTH read and write — surfaced on the frontend as "Failed to load your volunteer data" and blocked them from starting a session ("not working for some people"). `get_volunteering_time` now returns `([], 0, 0)` (never None/404) so the page shows a clean zero-state, and filters in a SINGLE pass — an entry may carry `commitmentHours`, `finalHours`, or BOTH (manual logs send both), no concat/duplicate. `save_volunteering_time` accepts an optional `timestamp` (backdated manual logs) + `manual:true` flag; hours are float-cleaned, non-negative, capped at 1000.
+
 ## Admin Email Templates (`email_templates` collection)
 Powers the frontend `/admin/communication` template editor and the volunteer send-email dialogs. Blueprint: `api/email_templates/email_templates_views.py` (`/api/admin/templates*`, all `volunteer.admin`-gated); service: `services/email_templates_service.py`; seed data: `services/email_templates_seed.py`.
 - Layout: `email_templates/{slug}` main doc + `email_templates/{slug}/versions/{000N}` append-only content snapshots. `version` on the main doc = current version number; version doc ids are zero-padded for natural ordering.
