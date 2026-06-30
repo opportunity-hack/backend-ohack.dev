@@ -5,7 +5,7 @@ from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit
 from model.user import User
-from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
+from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_user_by_propel_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
@@ -400,18 +400,37 @@ def get_users():
     return fetch_users()
 
 def _resolve_and_ensure_user(propel_id):
-    """Resolve a propel_id to a Firestore User, lazily creating the user doc
-    when the person has authenticated but never opened their profile page (the
-    documented lazy-creation gotcha). Returns (user, user_id); (None, None) only
-    when PropelAuth identity can't be resolved at all (transient OAuth failure).
+    """Resolve a propel_id to a Firestore User, lazily creating the doc for
+    brand-new users. Returns (user, user_id); (None, None) only when no identity
+    can be resolved at all.
 
-    Before this, the volunteering endpoints returned None -> 404 for any user
-    without a pre-existing doc, which surfaced as "Failed to load your volunteer
-    data" and also blocked them from starting a session. New users now just work.
+    Resolution order — cheapest/most-reliable first:
+      1. **Direct lookup by the stored `propel_id` field** (no external call).
+         Covers everyone who has saved a profile (propel_id is set then) — i.e.
+         essentially all active users.
+      2. The PropelAuth **OAuth provider round-trip** (-> provider `sub` ->
+         user_id lookup), which also yields the profile fields needed to lazily
+         create a doc for a brand-new user.
+
+    Why #1 exists (the bug it fixes): the volunteering WRITE used to depend
+    solely on get_oauth_user_from_propel_user_id(), a LIVE Slack/Google API
+    call. When that returns None (expired/unavailable provider token, PropelAuth
+    hiccup, or its 5-min negative cache), the write 404'd ("Couldn't log that
+    time") even though the user clearly exists — and the read masked it by
+    returning empty data. propel_id is stable and already on the doc, so we
+    resolve by it first and never touch the OAuth round-trip for existing users.
     """
+    # 1) Fast, reliable path: the user doc carries propel_id once a profile is
+    #    saved. No external dependency.
+    user = fetch_user_by_propel_id(propel_id)
+    if user is not None:
+        return user, (user.user_id or propel_id)
+
+    # 2) Fall back to the OAuth round-trip (also the only way to get the profile
+    #    fields for a brand-new user's doc).
     oauth_user = get_oauth_user_from_propel_user_id(propel_id)
     if oauth_user is None:
-        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+        warning(logger, "Could not resolve user by propel_id or OAuth", propel_id=propel_id)
         return None, None
 
     user_id = oauth_user["sub"]

@@ -92,6 +92,18 @@ class InMemoryDatabaseInterface(DatabaseInterface):
             logger.debug(f'fetch_user_by_user_id error: {e}')
         return res
     
+    def fetch_user_by_propel_id(self, propel_id):
+        if not propel_id:
+            return None
+        res = None
+        try:
+            matches = list(self.users.where(lambda u: getattr(u, "propel_id", None) == propel_id))
+            temp = matches[0] if matches else None
+            res = User.deserialize(vars(temp)) if temp is not None else None
+        except KeyError as e:
+            logger.debug(f'fetch_user_by_propel_id error: {e}')
+        return res
+
     def fetch_user_by_db_id_raw(self, id):
         res = None
         try:

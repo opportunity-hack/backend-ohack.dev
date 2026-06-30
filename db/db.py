@@ -35,6 +35,9 @@ def fetch_user_by_db_id(id):
     u = db.fetch_user_by_db_id(id)
     return u
 
+def fetch_user_by_propel_id(propel_id):
+    return db.fetch_user_by_propel_id(propel_id)
+
 def upsert_profile_metadata(user: User):
     return db.upsert_profile_metadata(user)
 
