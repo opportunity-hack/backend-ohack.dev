@@ -5,7 +5,7 @@ from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit, get_slack_user_by_email
 from model.user import User
-from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata, fetch_user_by_github
+from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_user_by_propel_id, fetch_user_by_email, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata, fetch_user_by_github
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
@@ -187,6 +187,10 @@ def get_oauth_user_from_propel_user_id(propel_id):
     """
     with _PROPEL_LOCK:
         if propel_id in _PROPEL_MISS_CACHE:
+            # Don't fail silently: a tight retry window otherwise shows only the
+            # caller's "could not resolve" warnings with no root cause, because
+            # the original failure reason was logged >5 min ago (or evicted).
+            debug(logger, "Serving cached OAuth miss (root cause logged earlier this TTL window)", propel_id=propel_id)
             return None
         if propel_id in _PROPEL_CACHE:
             return _PROPEL_CACHE[propel_id]
@@ -201,8 +205,16 @@ def get_oauth_user_from_propel_user_id(propel_id):
     )
     logger.debug(f"Propel RESP: {resp}")
     if resp.status_code != 200:
-        warning(logger, "PropelAuth API returned non-200",
-                status=resp.status_code, propel_id=propel_id)
+        # Log the response body (truncated) — the status alone doesn't tell us
+        # WHY (e.g. user has no linked OAuth connection, token revoked, wrong
+        # PROPEL_AUTH_URL/KEY env). This is the gap that hid the root cause.
+        body = ""
+        try:
+            body = resp.text[:300]
+        except Exception:
+            pass
+        warning(logger, "PropelAuth oauth_token API returned non-200",
+                status=resp.status_code, propel_id=propel_id, body=body)
         with _PROPEL_LOCK:
             _PROPEL_MISS_CACHE[propel_id] = _PROPEL_MISS
         return None
@@ -416,56 +428,168 @@ def remove_user_by_slack_id(user_id):
 def get_users():
     return fetch_users()
 
+def _fetch_propel_metadata(propel_id):
+    """Fetch PropelAuth user metadata (email/name/avatar) for a propel_id.
+
+    This hits PropelAuth's user-metadata API, which is RELIABLE and does NOT
+    depend on the OAuth provider (Slack/Google) token — unlike
+    get_oauth_user_from_propel_user_id, which calls the provider's userinfo
+    endpoint and fails when the provider token is missing/expired. Returns a
+    plain dict {email, name, nickname, profile_image} or None.
+    """
+    try:
+        from common.auth import auth  # lazy import: keeps this module cheap to import/test
+        meta = auth.fetch_user_metadata_by_user_id(propel_id)
+    except Exception as e:  # network / SDK / not-found
+        warning(logger, "PropelAuth fetch_user_metadata_by_user_id failed", propel_id=propel_id, error=str(e))
+        return None
+    if meta is None:
+        warning(logger, "PropelAuth returned no metadata for user", propel_id=propel_id)
+        return None
+    email = getattr(meta, "email", None) or ""
+    first = getattr(meta, "first_name", None) or ""
+    last = getattr(meta, "last_name", None) or ""
+    name = (f"{first} {last}".strip()) or getattr(meta, "username", None) or email
+    return {
+        "email": email,
+        "name": name,
+        "nickname": first,
+        "profile_image": getattr(meta, "picture_url", None) or "",
+    }
+
+
+def _resolve_and_ensure_user(propel_id):
+    """Resolve a propel_id to a Firestore User, lazily creating the doc for
+    brand-new users. Returns (user, user_id); (None, None) only when NO identity
+    source can resolve the user.
+
+    Resolution order — most-reliable first, so a broken OAuth provider token can
+    never block volunteering:
+      1. **Direct lookup by the stored `propel_id` field** — no external call.
+         Covers everyone who has saved a profile (propel_id is set then).
+      2. **OAuth provider round-trip** (`get_oauth_user_from_propel_user_id` ->
+         provider `sub` -> user_id lookup) — yields the OAuth-format user_id +
+         provider avatar; lazily creates a doc for a brand-new user.
+      3. **PropelAuth user-metadata fallback** (`fetch_user_metadata_by_user_id`)
+         — reliable, does NOT depend on the provider token. Resolves an existing
+         doc by email (backfilling propel_id), else lazily creates one from the
+         metadata. This is what saves the user when #1 misses AND the OAuth
+         round-trip is down.
+
+    The bug history: the WRITE used to depend SOLELY on #2. When the provider
+    round-trip returned None (expired/unavailable token, PropelAuth hiccup, or
+    its 5-min negative cache), the write 404'd ("Couldn't log that time") while
+    the read masked it by returning empty data. #1 + #3 remove that dependency.
+    Once a doc is created/backfilled with propel_id, every later request hits #1.
+    """
+    # 1) Fast, reliable path: existing doc carries propel_id.
+    user = fetch_user_by_propel_id(propel_id)
+    if user is not None:
+        return user, (user.user_id or propel_id)
+
+    # 2) OAuth provider round-trip — best source (OAuth-format user_id + avatar).
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
+    if oauth_user is not None:
+        user_id = oauth_user["sub"]
+        user = fetch_user_by_user_id(user_id)
+        if user is None:
+            info(logger, "Lazily creating user doc on first volunteering action", user_id=user_id)
+            save_user(
+                user_id=user_id,
+                email=oauth_user.get("email", ""),
+                last_login=datetime.now().isoformat() + "Z",
+                profile_image=(
+                    oauth_user.get("https://slack.com/user_image_192")
+                    or oauth_user.get("picture")
+                    or ""
+                ),
+                name=oauth_user.get("name", ""),
+                nickname=oauth_user.get("given_name", ""),
+                propel_id=propel_id,
+            )
+            user = fetch_user_by_user_id(user_id)
+        return user, user_id
+
+    # 3) OAuth is down — fall back to PropelAuth metadata (no provider token).
+    info(logger, "OAuth round-trip unavailable; resolving via PropelAuth metadata", propel_id=propel_id)
+    meta = _fetch_propel_metadata(propel_id)
+    if meta is None or not meta.get("email"):
+        warning(logger, "Could not resolve user by propel_id, OAuth, or metadata", propel_id=propel_id)
+        return None, None
+
+    email = meta["email"]
+    user = fetch_user_by_email(email)
+    if user is not None:
+        # Backfill propel_id so every future request hits the fast path (#1).
+        if getattr(user, "propel_id", None) != propel_id:
+            user.propel_id = propel_id
+            try:
+                upsert_profile_metadata(user)
+            except Exception as e:
+                warning(logger, "Failed to backfill propel_id on user", propel_id=propel_id, error=str(e))
+        return user, (user.user_id or propel_id)
+
+    # Brand-new user, OAuth down: create a doc from metadata. user_id is set to
+    # the propel UUID (we lack the oauth-format id without the provider call);
+    # propel_id is the canonical match, so #1 resolves this user from now on.
+    info(logger, "Lazily creating user doc from PropelAuth metadata (OAuth unavailable)", propel_id=propel_id)
+    save_user(
+        user_id=propel_id,
+        email=email,
+        last_login=datetime.now().isoformat() + "Z",
+        profile_image=meta.get("profile_image", ""),
+        name=meta.get("name", ""),
+        nickname=meta.get("nickname", ""),
+        propel_id=propel_id,
+    )
+    user = fetch_user_by_propel_id(propel_id) or fetch_user_by_email(email)
+    if user is None:
+        warning(logger, "Metadata-based user creation did not yield a doc", propel_id=propel_id)
+        return None, None
+    return user, (user.user_id or propel_id)
+
+
 def save_volunteering_time(propel_id, json):
     logger.info(f"Save Volunteering Time for {propel_id} {json}")
-    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
-    if oauth_user is None:
-        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+    user, user_id = _resolve_and_ensure_user(propel_id)
+    if user is None:
+        warning(logger, "Could not resolve/create user for volunteering save", propel_id=propel_id)
         return None
 
-    user_id = oauth_user["sub"]
+    # Allow backdating a manually-logged entry; default to now (UTC).
+    timestamp = json.get("timestamp") or (datetime.now().isoformat() + "Z")
+    reason = json.get("reason", "")  # The kind of volunteering being done
 
-    logger.info(f"Save Volunteering Time for {user_id} {json}")
+    # A single entry can carry committed hours (set when a live session starts),
+    # actively-tracked hours (set when a session ends), or BOTH (manual log of
+    # actual time done away from the keyboard). Counting both on one entry is fine
+    # because get_volunteering_time no longer concatenates two filtered lists.
+    def _clean_hours(value):
+        try:
+            hours = round(float(value), 2)
+        except (TypeError, ValueError):
+            return None
+        if hours < 0:
+            return None
+        return min(hours, 1000)  # defensive cap against garbage input
 
-    # Get the user
-    user = fetch_user_by_user_id(user_id)
-    if user is None:
-        warning(logger, "User not found", user_id=user_id)
-        return
+    commitment_hours = _clean_hours(json["commitmentHours"]) if "commitmentHours" in json else None
+    final_hours = _clean_hours(json["finalHours"]) if "finalHours" in json else None
 
-    timestamp = datetime.now().isoformat() + "Z"
-    reason = json["reason"] # The kind of volunteering being done
+    if commitment_hours is None and final_hours is None:
+        error(logger, "No valid hours provided for volunteering entry", user_id=user_id)
+        return None
 
-    if "finalHours" in json:
-        finalHours = json["finalHours"] # This is sent at when volunteering is done
-        if finalHours is None:
-            error(logger, "finalHours is None", user_id=user_id)
-            return
+    entry = {"timestamp": timestamp, "reason": reason}
+    if commitment_hours is not None:
+        entry["commitmentHours"] = commitment_hours
+    if final_hours is not None:
+        entry["finalHours"] = final_hours
+    if json.get("manual"):
+        entry["manual"] = True
 
-        user.volunteering.append({
-            "timestamp": timestamp,
-            "finalHours": round(finalHours,2),
-            "reason": reason
-            })
-
-        # Add to the total
-        upsert_profile_metadata(user)
-
-    # We keep track of what the user is committing to do but we don't show this
-    # The right way to do this is likely to get a session id when they start volunteering and the frontend uses that to close out the volunteering session when it is done
-    # But this way is simpler for now
-    elif "commitmentHours" in json:
-        commitmentHours = json["commitmentHours"] # This is sent at the start of volunteering
-        if commitmentHours is None:
-            error(logger, "commitmentHours is None", user_id=user_id)
-            return
-        
-        user.volunteering.append({
-            "timestamp": timestamp,
-            "commitmentHours": round(commitmentHours,2),
-            "reason": reason
-            })
-        upsert_profile_metadata(user)
+    user.volunteering.append(entry)
+    upsert_profile_metadata(user)
 
     # Clear cache for get_profile_metadata
     get_profile_metadata.cache_clear()
@@ -474,50 +598,32 @@ def save_volunteering_time(propel_id, json):
 
 def get_volunteering_time(propel_id, start_date, end_date):
     logger.info(f"Get Volunteering Time for {propel_id} {start_date} {end_date}")
-    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
-    if oauth_user is None:
-        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
-        return None
-
-    user_id = oauth_user["sub"]
-
-    logger.info(f"Get Volunteering Time for {user_id} start: {start_date} end: {end_date}")
-
-    # Get the user
-    user = fetch_user_by_user_id(user_id)
+    user, user_id = _resolve_and_ensure_user(propel_id)
     if user is None:
-        warning(logger, "User not found", user_id=user_id)
-        return None
+        # Identity couldn't be resolved (transient OAuth issue). Return an empty
+        # dataset rather than 404 so the page shows a clean zero-state.
+        warning(logger, "Could not resolve user for volunteering read; returning empty", propel_id=propel_id)
+        return [], 0, 0
 
-    # Filter the volunteering data
-    volunteeringActiveTime = []
-    for v in user.volunteering:
-        if "finalHours" in v:
-            if start_date is not None and end_date is not None:
-                if v["timestamp"] >= start_date and v["timestamp"] <= end_date:
-                    volunteeringActiveTime.append(v)
-            else:
-                volunteeringActiveTime.append(v)
+    def _in_range(v):
+        if start_date is None or end_date is None:
+            return True
+        ts = v.get("timestamp", "")
+        return start_date <= ts <= end_date
 
-    volunteeringCommittmentTime = []
-    for v in user.volunteering:
-        if "commitmentHours" in v:
-            if start_date is not None and end_date is not None:
-                if v["timestamp"] >= start_date and v["timestamp"] <= end_date:
-                    volunteeringCommittmentTime.append(v)
-            else:
-                volunteeringCommittmentTime.append(v)
-    
-    totalActiveHours = sum([v["finalHours"] for v in volunteeringActiveTime])    
-    totalCommitmentHours = sum([v["commitmentHours"] for v in volunteeringCommittmentTime]) 
+    # Single pass, no duplication. Each entry appears once and contributes to
+    # whichever totals its fields cover.
+    filtered = [v for v in (user.volunteering or []) if _in_range(v)]
+    total_active_hours = round(sum((v.get("finalHours") or 0) for v in filtered), 2)
+    total_commitment_hours = round(sum((v.get("commitmentHours") or 0) for v in filtered), 2)
 
-    # Merge volunteeringActiveTime and volunteeringCommittmentTime
-    # This is a bit of a hack but it is easier to do it this way than to try to do it in the frontend
-    allVolunteering = volunteeringActiveTime + volunteeringCommittmentTime
+    logger.debug(
+        f"volunteering entries: {len(filtered)} "
+        f"Total Active Hours: {total_active_hours} "
+        f"Total Commitment Hours: {total_commitment_hours}"
+    )
 
-    logger.debug(f"allVolunteering: {allVolunteering}  || volunteeringActiveTime: {volunteeringActiveTime} volunteeringCommittmentTime: {volunteeringCommittmentTime} Total Active Hours: {totalActiveHours} Total Commitment Hours: {totalCommitmentHours}")   
-    
-    return allVolunteering, totalActiveHours, totalCommitmentHours
+    return filtered, total_active_hours, total_commitment_hours
 
 def get_all_volunteering_time(start_date=None, end_date=None):
     logger.info(f"Get All Volunteering Time for start: {start_date} end: {end_date}")

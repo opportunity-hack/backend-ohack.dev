@@ -113,6 +113,45 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             pass
         return u
     
+    def fetch_user_by_propel_id(self, propel_id):
+        """Look up a user directly by the stored PropelAuth `propel_id` field.
+
+        Single-field equality query (auto-indexed — no composite index needed).
+        Used to resolve identity WITHOUT the live OAuth provider round-trip,
+        which can fail (expired/unavailable token) and 404 a write even though
+        the user clearly exists.
+        """
+        debug(logger, "Fetching user by propel_id", propel_id=propel_id)
+        if not propel_id:
+            return None
+        db = self.get_db()
+        raw = None
+        try:
+            raw, *rest = db.collection('users').where("propel_id", "==", propel_id).stream()
+        except ValueError:
+            # stream() yielded zero rows -> unpacking fails (same pattern as
+            # fetch_user_by_user_id_raw). Not found.
+            debug(logger, "No user found by propel_id", propel_id=propel_id)
+            return None
+        return convert_to_entity(raw, User) if raw is not None else None
+
+    def fetch_user_by_email(self, email):
+        """Look up a user by `email_address`. Single-field equality query
+        (auto-indexed). Used as an identity fallback when neither propel_id nor
+        the OAuth round-trip resolves the user — email is stable across providers.
+        """
+        debug(logger, "Fetching user by email")
+        if not email:
+            return None
+        db = self.get_db()
+        raw = None
+        try:
+            raw, *rest = db.collection('users').where("email_address", "==", email).stream()
+        except ValueError:
+            debug(logger, "No user found by email")
+            return None
+        return convert_to_entity(raw, User) if raw is not None else None
+
     def fetch_user_by_db_id_raw(self, db, db_id):
         u = db.collection('users').document(db_id).get()
         return u
