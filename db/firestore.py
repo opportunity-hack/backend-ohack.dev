@@ -354,10 +354,24 @@ class FirestoreDatabaseInterface(DatabaseInterface):
                     continue
 
                 results.append(User.deserialize(temp))
-     
+
         return results
 
-        
+    def fetch_user_by_github(self, github_username):
+        debug(logger, "Fetching user by github", github_username=github_username)
+        db = self.get_db()
+        for candidate in [github_username, github_username.lower()]:
+            try:
+                docs = list(db.collection('users').where('github', '==', candidate).limit(1).stream())
+                if docs:
+                    temp = docs[0].to_dict()
+                    temp['id'] = docs[0].reference.id
+                    return User.deserialize(temp)
+            except Exception as e:
+                warning(logger, "Error querying github field", github_username=candidate, error=str(e))
+        return None
+
+
     # ----------------------- Problem Statements --------------------------------------------
     
     def fetch_problem_statements(self):
