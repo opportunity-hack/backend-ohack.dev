@@ -3,9 +3,9 @@ import os
 import threading
 from ratelimit import limits
 import requests
-from common.utils.slack import send_slack_audit
+from common.utils.slack import send_slack_audit, get_slack_user_by_email
 from model.user import User
-from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata
+from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata, fetch_user_by_github
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
@@ -385,6 +385,23 @@ def save_profile_metadata(propel_id, json):
 
 def get_user_by_db_id(id):
     return fetch_user_by_db_id(id)
+
+def get_slack_user_id_by_github(github_username):
+    """Look up a Slack user ID given a GitHub username."""
+    if not github_username:
+        return None
+    user = fetch_user_by_github(github_username)
+    if user is None:
+        return None
+    raw_id = extract_slack_user_id(user.user_id)
+    import re
+    if re.match(r'^[UW][A-Z0-9]{5,}$', raw_id):
+        return raw_id
+    if user.email_address:
+        slack_user = get_slack_user_by_email(user.email_address)
+        if slack_user:
+            return slack_user.get('id')
+    return None
 
 def get_user_from_slack_id(user_id):
     return fetch_user_by_user_id(user_id)

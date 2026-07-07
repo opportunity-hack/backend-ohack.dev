@@ -182,3 +182,13 @@ def get_received_praises_by_db_id(user_id):
     if result is None:
         return {"error": "Praises are private for this user"}, 403
     return result
+
+
+@bp.route("/github/<github_username>", methods=["GET"])
+def get_slack_id_by_github(github_username):
+    """Map a GitHub username to a Slack user ID."""
+    from services.users_service import get_slack_user_id_by_github
+    slack_id = get_slack_user_id_by_github(github_username)
+    if slack_id:
+        return {"slack_user_id": slack_id}
+    return {"error": "not found"}, 404

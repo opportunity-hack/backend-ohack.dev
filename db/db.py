@@ -57,6 +57,9 @@ def delete_user_by_db_id(id):
 def fetch_users():
     return db.fetch_users()
 
+def fetch_user_by_github(github_username):
+    return db.fetch_user_by_github(github_username)
+
 # Problem Statements
 def fetch_problem_statement(id):
     return db.fetch_problem_statement(id)
