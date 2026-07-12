@@ -189,6 +189,7 @@ def create_app():
     from api.email_templates import email_templates_views
     from api.surveys import surveys_views
     from api.feedback import feedback_views
+    from api.praisebot import praisebot_views
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
@@ -213,5 +214,6 @@ def create_app():
     app.register_blueprint(email_templates_views.bp)
     app.register_blueprint(surveys_views.bp)
     app.register_blueprint(feedback_views.bp)
+    app.register_blueprint(praisebot_views.bp)
 
     return app
