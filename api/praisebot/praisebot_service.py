@@ -11,11 +11,13 @@ Doc types:
   - calendar_reminder (Google Calendar ICS reminder config)
   - community         (#introductions matchmaker + weekly community digest)
 """
+import base64
 import re
 import threading
 import time
 import uuid
 from datetime import datetime, timezone
+from urllib.parse import parse_qs, unquote, urlparse
 
 from db.db import get_db
 from common.log import get_logger
@@ -70,6 +72,37 @@ def _normalize_repo(repo):
     if m:
         return f"{m.group(1)}/{m.group(2).removesuffix('.git')}"
     return None
+
+
+def _normalize_calendar_id(value):
+    """Reduce any pasted Google Calendar reference to the bare calendar ID.
+
+    Accepts the ID itself (possibly URL-encoded), a share link
+    (…?cid=<base64url of ID>), an embed link (…?src=<ID>), or an ICS link
+    (…/calendar/ical/<ID>/public/basic.ics).
+    """
+    if not isinstance(value, str):
+        return value
+    value = value.strip()
+    if value.lower().startswith(("http://", "https://")):
+        try:
+            parsed = urlparse(value)
+            qs = parse_qs(parsed.query)
+            if qs.get("cid"):
+                cid = qs["cid"][0].replace("-", "+").replace("_", "/")
+                cid += "=" * ((4 - len(cid) % 4) % 4)
+                decoded = base64.b64decode(cid).decode("utf-8", errors="ignore")
+                if "@" in decoded:
+                    value = decoded
+            elif qs.get("src"):
+                value = qs["src"][0]
+            else:
+                m = re.search(r"/calendar/ical/([^/]+)/", parsed.path)
+                if m:
+                    value = unquote(m.group(1))
+        except Exception:
+            pass
+    return unquote(value)
 
 
 def _normalize_channels(channels):
@@ -145,6 +178,14 @@ def _validate_doc(doc_type, payload):
             errors.append("rollup.channel is required when rollup is enabled")
 
     elif doc_type == "calendar_reminder":
+        if "calendar_id" in payload:
+            normalized = _normalize_calendar_id(payload["calendar_id"])
+            if not isinstance(normalized, str) or "@" not in normalized:
+                errors.append(
+                    "calendar_id must be a Google Calendar ID "
+                    "(…@group.calendar.google.com) or a Google Calendar share link")
+            else:
+                payload["calendar_id"] = normalized
         if "channels" in payload:
             channels = _normalize_channels(payload["channels"])
             if not channels:

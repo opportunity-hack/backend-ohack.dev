@@ -114,6 +114,32 @@ class TestCreate:
         assert svc.create_config_doc({**base, "lead_minutes": 0}, ACTOR)[1] == 400
         assert svc.create_config_doc({**base, "lead_minutes": 500}, ACTOR)[1] == 400
 
+    def test_calendar_id_normalizes_share_links(self, db):
+        real_id = ("c_15c6f25ddc611081a1c59ef917c647fb48a58ae716916c5792"
+                   "eede6a2236ed10@group.calendar.google.com")
+        import base64
+        cid = base64.b64encode(real_id.encode()).decode().rstrip("=")
+        base = {
+            "type": "calendar_reminder", "name": "Office hours", "enabled": True,
+            "channels": ["general"], "lead_minutes": 15, "poll_cron": "*/5 * * * *",
+        }
+        cases = [
+            f"https://calendar.google.com/calendar/u/0?cid={cid}",
+            f"https://calendar.google.com/calendar/embed?src={real_id}",
+            f"https://calendar.google.com/calendar/ical/{real_id.replace('@', '%40')}/public/basic.ics",
+            real_id.replace("@", "%40"),
+            real_id,
+        ]
+        for pasted in cases:
+            body, status = svc.create_config_doc({**base, "calendar_id": pasted}, ACTOR)
+            assert status == 201, f"failed for {pasted}: {body}"
+            stored = db.collection(svc.COLLECTION).document(body["id"]).get().to_dict()
+            assert stored["calendar_id"] == real_id, f"not normalized for {pasted}"
+
+        body, status = svc.create_config_doc({**base, "calendar_id": "not-a-calendar"}, ACTOR)
+        assert status == 400
+        assert "calendar_id" in body["error"]
+
     def test_community_is_singleton(self, db):
         community = {
             "type": "community", "enabled": True, "intro_channel": "introductions",
