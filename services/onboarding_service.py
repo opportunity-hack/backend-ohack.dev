@@ -29,21 +29,19 @@ def save_onboarding_feedback(json_data):
         contact_info = json_data.get("contactForFollowup", {})
         client_info = json_data.get("clientInfo", {})
 
-        has_contact_info = (
-            contact_info.get("name") and
-            contact_info.get("email") and
-            contact_info.get("name").strip() and
-            contact_info.get("email").strip()
-        )
+        # The frontend sends firstName (never name) — see FeedbackSection.js.
+        contact_name = (contact_info.get("firstName") or contact_info.get("name") or "").strip()
+        contact_email = (contact_info.get("email") or "").strip()
+        has_contact_info = bool(contact_name and contact_email)
 
         existing_feedback = None
 
         if has_contact_info:
             logger.info("Searching for existing feedback by contact info")
             existing_docs = db.collection('onboarding_feedbacks').where(
-                "contactForFollowup.name", "==", contact_info["name"]
+                "contactForFollowup.firstName", "==", contact_name
             ).where(
-                "contactForFollowup.email", "==", contact_info["email"]
+                "contactForFollowup.email", "==", contact_email
             ).limit(1).stream()
 
             for doc in existing_docs:
