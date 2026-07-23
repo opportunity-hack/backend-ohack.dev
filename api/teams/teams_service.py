@@ -752,6 +752,81 @@ def get_teams_by_hackathon_id(hackathon_id):
         logger.error(f"Error getting teams for hackathon {hackathon_id}: {str(e)}")
         return {"teams": []}
 
+
+def _normalize_repo_link(link):
+    return (link or "").strip().rstrip("/").lower()
+
+
+def _link_repo_to_problem_statements(db, team_data, nonprofit, repo_name, repo_url):
+    """Append the team's newly created GitHub repo to the `github` array of the
+    problem statement(s) the team is working on, so the public /project/<id>
+    page shows the code. Historically the repo was only written to the team
+    doc, leaving most problem statements with an empty `github` field.
+
+    Prefers the team's own `problem_statements` refs; falls back to the
+    nonprofit's problem statements only when there is exactly one (anything
+    else is ambiguous — skip and log). Never raises: repo linkage is
+    best-effort and must not fail the approval flow.
+    """
+    try:
+        ps_refs = []
+        for ps in team_data.get("problem_statements") or []:
+            if isinstance(ps, str):
+                ps_refs.append(db.collection("problem_statements").document(ps))
+            elif ps is not None and hasattr(ps, "get"):  # DocumentReference
+                ps_refs.append(ps)
+
+        if not ps_refs:
+            # nonprofit comes from get_single_npo → doc_to_json, so entries are id strings
+            npo_ps = (nonprofit or {}).get("problem_statements") or []
+            if len(npo_ps) == 1 and isinstance(npo_ps[0], str):
+                ps_refs.append(db.collection("problem_statements").document(npo_ps[0]))
+            else:
+                logger.info(
+                    "Not linking repo %s to a problem statement: team has no "
+                    "problem_statements and nonprofit has %d (ambiguous)",
+                    repo_url, len(npo_ps),
+                )
+                return
+
+        for ps_ref in ps_refs:
+            ps_doc = ps_ref.get()
+            if not ps_doc.exists:
+                logger.warning("Problem statement %s not found; skipping repo link", ps_ref.id)
+                continue
+            ps_data = ps_doc.to_dict() or {}
+            existing = ps_data.get("github")
+            if isinstance(existing, list):
+                github_list = list(existing)
+            elif isinstance(existing, str) and existing.strip():
+                # Legacy shape: a bare URL string — convert to the {name, link} form
+                legacy_link = existing.strip()
+                github_list = [{"name": legacy_link.rstrip("/").split("/")[-1], "link": legacy_link}]
+            else:
+                github_list = []
+
+            already_linked = {
+                _normalize_repo_link(entry.get("link") if isinstance(entry, dict) else entry)
+                for entry in github_list
+            }
+            if _normalize_repo_link(repo_url) in already_linked:
+                continue
+
+            github_list.append({"name": repo_name, "link": repo_url})
+            ps_ref.set({"github": github_list}, merge=True)
+            logger.info("Linked repo %s to problem statement %s", repo_url, ps_ref.id)
+
+        # The public single-problem-statement read is cached (10 min) and NOT
+        # in the shared cache registry — clear it explicitly
+        try:
+            from api.messages.messages_service import get_single_problem_statement_old
+            get_single_problem_statement_old.cache_clear()
+        except Exception:
+            logger.warning("Could not clear problem statement cache", exc_info=True)
+    except Exception:
+        logger.error("Failed linking repo %s to problem statement(s)", repo_url, exc_info=True)
+
+
 def approve_team(admin_user_id, json):
     """
     Admin function to approve a team and pair with nonprofit
@@ -929,7 +1004,13 @@ Let's make a difference! :muscle: :heart:
         "approved_by": admin_user_id,
         "approved_at": datetime.now().isoformat()
     }, merge=True)
-    
+
+    # Fix-forward: also link the repo to the problem statement(s) so the
+    # public project page shows the code (best-effort, never blocks approval)
+    _link_repo_to_problem_statements(
+        db, team_data, nonprofit, repo_name, full_github_repo_url
+    )
+
     # Clear cache
     clear_cache()
     

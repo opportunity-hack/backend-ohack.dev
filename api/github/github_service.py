@@ -1,10 +1,17 @@
 import logging
 from typing import Dict, Any, List
+from cachetools import TTLCache
 from db.db import get_db
 from common.utils.github import create_issue, get_issues
 
 logger = logging.getLogger("api.github.github_service")
 logger.setLevel(logging.DEBUG)
+
+# Live issue reads are hit by the public project pages, so cache per
+# (org, repo, state) to protect the shared GITHUB_TOKEN rate budget.
+# Only successful responses are cached — errors stay uncached so transient
+# GitHub failures retry on the next request.
+_ISSUES_CACHE = TTLCache(maxsize=512, ttl=600)
 
 def get_github_organization_data(org_name: str) -> Dict[str, Any]:
     """
@@ -360,16 +367,23 @@ def get_github_issues(org_name: str, repo_name: str, state: str ) -> Dict[str, A
         if not org_name or not repo_name:
             return {"error": "Organization name and repository name are required"}
 
+        cache_key = (org_name, repo_name, state)
+        cached_result = _ISSUES_CACHE.get(cache_key)
+        if cached_result is not None:
+            return cached_result
+
         # Get issues using the utility function
         issues = get_issues(org_name=org_name, repo_name=repo_name, state=state)
-        
+
         if "error" in issues:
             return {"error": issues["error"]}
 
-        return {
+        result = {
             "success": True,
             "issues": issues
         }
+        _ISSUES_CACHE[cache_key] = result
+        return result
 
     except Exception as e:
         logger.error("Error getting GitHub issues for %s/%s: %s", org_name, repo_name, e)
