@@ -7,6 +7,7 @@ from openai import OpenAI
 
 from PIL import ImageDraw
 from PIL import Image, ImageEnhance
+import base64
 import urllib.request
 from dotenv import load_dotenv
 import os
@@ -318,21 +319,28 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
 
     # Generate a unique background image
     if generate_backround_image:
-        response = client.images.generate(prompt="without text a mesmerizing background with geometric shapes and fireworks no text high resolution 4k",
-        n=1,
-        size="1024x1024")
-        # Example response object: ImagesResponse(created=1721966968, data=[Image(b64_json=None, revised_prompt=None, url='https://oaidalleapiprodscus.blob.core.windows.net/private/org-EzLrpl9lBdn7NnQA25JOTnpt/user-AqP0NOd4VCetE82ZaR72KYLD/img-ahgzSnHmp5CT7NRxK2Ceczd3.png?st=2024-07-26T03%3A09%3A28Z&se=2024-07-26T05%3A09%3A28Z&sp=r&sv=2023-11-03&sr=b&rscd=inline&rsct=image/png&skoid=6aaadede-4fb3-4698-a8f6-684d7786b067&sktid=a48cca56-e6da-484e-a814-9c849652bcb3&skt=2024-07-25T22%3A07%3A56Z&ske=2024-07-26T22%3A07%3A56Z&sks=b&skv=2023-11-03&sig=GyYscH4FV8vExnSHl8vsNL6usvEjqeRITl8CStdVfRQ%3D')])
-    
+        response = client.images.generate(
+            model="gpt-image-1",
+            prompt="without text a mesmerizing background with geometric shapes and fireworks no text high resolution 4k",
+            n=1,
+            size="1024x1024",
+            timeout=90.0)
+
         # Check if response is valid
         if not response.data:
             # Print error from response
-            error(logger, "Error with OpenAI API", response=response)    
+            error(logger, "Error with OpenAI API", response=response)
             raise Exception("OpenAI response is not valid")
-        
-        image_url = response.data[0].url
-        info(logger, "Generated image from OpenAI", image_url=image_url)
 
-        urllib.request.urlretrieve(image_url, "./generated_image.png")
+        # gpt-image-1 returns base64 data; fall back to URL for other models
+        image_data = response.data[0]
+        if getattr(image_data, "b64_json", None):
+            with open("./generated_image.png", "wb") as f:
+                f.write(base64.b64decode(image_data.b64_json))
+            info(logger, "Generated image from OpenAI (base64)")
+        else:
+            info(logger, "Generated image from OpenAI", image_url=image_data.url)
+            urllib.request.urlretrieve(image_data.url, "./generated_image.png")
 
     background_image = Image.open('generated_image.png')
     enhancer = ImageEnhance.Brightness(background_image)
