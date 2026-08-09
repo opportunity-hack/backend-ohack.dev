@@ -1,5 +1,7 @@
 from model.user import User
 from services import users_service
+from services import user_slug_service
+from services import problem_statements_service
 from common.utils import safe_get_env_var
 from common.auth import auth, auth_user
 
@@ -21,29 +23,30 @@ def getOrgId(req):
 # Used to provide profile details - user must be logged in
 @bp.route("/profile", methods=["GET"])
 @auth.require_user
-def profile():            
-    # user_id is a uuid from Propel Auth
-    if auth_user and auth_user.user_id:
-        u: User | None = users_service.get_profile_metadata(auth_user.user_id)
-        if u is None:
-            return None
-        # vars(u) exposes u.hackathons as raw Hackathon objects, which Flask
-        # can't JSON-encode (TypeError: Object of type Hackathon is not JSON
-        # serializable). Shallow-copy and replace it with serialized dicts.
-        result = dict(vars(u))
-        result["hackathons"] = u.serialize_hackathons()
-        return result
-    else:
-        return None
+def profile():
+    """Canonical own-profile read: the flat build_profile_response dict."""
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    profile_data = users_service.get_profile_metadata(auth_user.user_id)
+    if profile_data is None:
+        # Identity couldn't be resolved by any tier (propel_id, OAuth, metadata)
+        return {"error": "Unable to resolve user profile"}, 503
+    return profile_data
+
 
 @bp.route("/profile", methods=["POST"])
 @auth.require_user
-def save_profile():        
-    if auth_user and auth_user.user_id: 
-        u: User | None = users_service.save_profile_metadata(auth_user.user_id, request.get_json())
-        return vars(u) if u is not None else None
-    else:
-        return None
+def save_profile():
+    """Canonical own-profile write. Returns the updated flat profile dict."""
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    data = request.get_json(silent=True)
+    if not data or "metadata" not in data:
+        return {"error": "metadata is required"}, 400
+    result = users_service.save_profile_metadata(auth_user.user_id, data)
+    if result is None:
+        return {"error": "Unable to resolve user profile"}, 404
+    return result
 
 
 # Get user profile by user id
@@ -108,6 +111,82 @@ def get_all_volunteering_time():
         return None
 
 
+@bp.route("/profile/helping", methods=["POST"])
+@auth.require_user
+def register_helping_status():
+    """Canonical helping toggle (replaces POST /api/messages/profile/helping)."""
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    data = request.get_json(silent=True) or {}
+    for required in ("status", "problem_statement_id", "type"):
+        if required not in data:
+            return {"error": f"{required} is required"}, 400
+    result = problem_statements_service.save_helping_status(auth_user.user_id, data)
+    if result is None:
+        return {"error": "Unable to resolve user or problem statement"}, 404
+    return result
+
+
+# Vanity profile slug (portfolio URL) — dedicated routes so slugs can never be
+# set through the generic profile metadata POST (uniqueness would be bypassed).
+@bp.route("/profile/slug", methods=["POST"])
+@auth.require_user
+def claim_profile_slug():
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    data = request.get_json() or {}
+    payload, status = user_slug_service.claim_profile_slug(auth_user.user_id, data.get("slug"))
+    return payload, status
+
+
+@bp.route("/profile/slug/check/<slug>", methods=["GET"])
+@auth.require_user
+def check_profile_slug(slug):
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    return user_slug_service.check_slug_availability(slug)
+
+
+@bp.route("/profile/visibility", methods=["PATCH"])
+@auth.require_user
+def set_profile_visibility():
+    """Portfolio master toggle: private (default) or public (search-indexable)."""
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    data = request.get_json() or {}
+    payload, status = users_service.set_profile_visibility(auth_user.user_id, data.get("visibility"))
+    return payload, status
+
+
+@bp.route("/portfolio/sitemap", methods=["GET"])
+def get_portfolio_sitemap():
+    """Public feed of opted-in portfolio slugs for the frontend server-sitemap."""
+    return {"portfolios": users_service.get_searchable_portfolio_sitemap()}
+
+
+@bp.route("/profile/bio-video/upload-url", methods=["POST"])
+@auth.require_user
+def create_bio_video_upload_url():
+    """Mint a signed GCS PUT URL — video bytes never pass through this API."""
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    data = request.get_json() or {}
+    payload, status = users_service.create_bio_video_upload_url(
+        auth_user.user_id, data.get("content_type"), data.get("content_length"))
+    return payload, status
+
+
+@bp.route("/profile/bio-video", methods=["POST"])
+@auth.require_user
+def set_bio_video_url():
+    """Set (own-CDN upload or YouTube/Vimeo/Loom link) or clear the bio video."""
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    data = request.get_json() or {}
+    payload, status = users_service.set_bio_video_url(auth_user.user_id, data.get("url"))
+    return payload, status
+
+
 @bp.route("/profile/privacy-settings", methods=["GET"])
 @auth.require_user
 def get_privacy_settings():
@@ -142,8 +221,8 @@ def update_privacy_settings():
 # Privacy-aware public profile endpoints
 @bp.route("/<user_id>/profile/public", methods=["GET"])
 def get_public_profile_by_db_id(user_id):
-    """Get privacy-filtered public profile by database ID"""
-    profile_data = users_service.get_privacy_filtered_profile_by_db_id(user_id)
+    """Get privacy-filtered public profile by database ID or vanity slug (cached)"""
+    profile_data = users_service.get_portfolio_profile(user_id)
     if profile_data:
         return profile_data
     return {"error": "User not found"}, 404

@@ -60,6 +60,8 @@ class InMemoryDatabaseInterface(DatabaseInterface):
 
     def __init__(self):
         super().__init__()
+        # slug -> {"slug", "user_db_id", "is_primary", "created_at"}
+        self.user_slugs = {}
         self.init_users()
         self.init_problem_statements()
         self.init_problem_statement_helping()
@@ -70,6 +72,80 @@ class InMemoryDatabaseInterface(DatabaseInterface):
         self.init_donation_goals()
         self.init_problem_statement_hackathons()
         self.init_nonprofits()
+
+    # ----------------------- User slugs ---------------------------------------- #
+
+    def create_user_slug(self, slug, user_db_id, previous_slug=None):
+        existing = self.user_slugs.get(slug)
+        if existing is not None and existing.get("user_db_id") != str(user_db_id):
+            return False
+        self.user_slugs[slug] = {
+            "slug": slug,
+            "user_db_id": str(user_db_id),
+            "is_primary": True,
+            "created_at": datetime.now().isoformat() + "Z",
+        }
+        if previous_slug and previous_slug != slug and previous_slug in self.user_slugs:
+            self.user_slugs[previous_slug]["is_primary"] = False
+        try:
+            u = self.users.by.id[int(user_db_id)]
+            setattr(u, "profile_slug", slug)
+        except (KeyError, ValueError, TypeError):
+            pass
+        return True
+
+    def fetch_user_db_id_by_slug(self, slug):
+        entry = self.user_slugs.get(slug)
+        return dict(entry) if entry else None
+
+    def fetch_user_portfolio_teams(self, db_id):
+        # The in-memory fixture data carries no team references.
+        return []
+
+    def update_user_profile_visibility(self, user_db_id, visibility):
+        try:
+            u = self.users.by.id[int(user_db_id)]
+            setattr(u, "profile_visibility", visibility)
+            return True
+        except (KeyError, ValueError, TypeError):
+            return False
+
+    def fetch_public_portfolio_users(self):
+        results = []
+        for u in self.users:
+            if getattr(u, "profile_visibility", None) == "public" and getattr(u, "profile_slug", None):
+                results.append({"slug": u.profile_slug, "last_login": getattr(u, "last_login", None)})
+        return results
+
+    def update_user_volunteering(self, user):
+        try:
+            u = self.users.by.id[int(user.id)]
+            setattr(u, "volunteering", user.volunteering or [])
+            return True
+        except (KeyError, ValueError, TypeError):
+            return False
+
+    def update_user_login(self, user_db_id, payload):
+        allowed = ("last_login", "profile_image", "name", "nickname")
+        try:
+            u = self.users.by.id[int(user_db_id)]
+        except (KeyError, ValueError, TypeError):
+            return False
+        for k, v in (payload or {}).items():
+            if k in allowed and v:
+                setattr(u, k, v)
+        return True
+
+    def update_user_bio_video(self, user_db_id, url):
+        try:
+            u = self.users.by.id[int(user_db_id)]
+            setattr(u, "bio_video_url", url or "")
+            return True
+        except (KeyError, ValueError, TypeError):
+            return False
+
+    def fetch_user_slugs_by_db_id(self, user_db_id):
+        return [dict(e) for e in self.user_slugs.values() if e.get("user_db_id") == str(user_db_id)]
 
     # ----------------------- Users -------------------------------------------- #
 

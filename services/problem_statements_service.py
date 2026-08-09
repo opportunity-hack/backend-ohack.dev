@@ -5,8 +5,8 @@ from common.utils.slack import invite_user_to_channel, send_slack, send_slack_au
 from common.utils.oauth_providers import extract_slack_user_id, is_slack_user_id
 from model.problem_statement import ProblemStatement
 from model.user import User
-from db.db import (delete_helping, fetch_hackathon, fetch_problem_statements,
-                  insert_helping, delete_problem_statement, fetch_problem_statement,
+from db.db import (fetch_hackathon, fetch_problem_statements, get_db,
+                  delete_problem_statement, fetch_problem_statement,
                   insert_problem_statement, update_problem_statement,
                   insert_problem_statement_hackathon, update_problem_statement_hackathons)
 import logging
@@ -119,89 +119,123 @@ def update_problem_statement_fields(d):
     
 @limits(calls=100, period=ONE_MINUTE)
 def save_helping_status(propel_user_id, d):
+    """Toggle the caller's "helping" status on a problem statement.
+
+    Port of the legacy messages_service.save_helping_status_old body (the
+    rich version: Slack mention + channel invite for Slack logins, profile
+    link + Slack-join email CTA for non-Slack logins, npo suffix), with
+    identity via the 3-tier resolver so a broken OAuth token can't 404 the
+    toggle. Returns a plain dict, or None when identity can't be resolved.
+    """
     info(logger, "save_helping_status", propel_user_id=propel_user_id, data=d)
-    user = users_service.get_user_from_propel_user_id(propel_user_id)
 
-    slack_message = None
+    user, user_id = users_service._resolve_and_ensure_user(propel_user_id)
+    if user is None or not getattr(user, "id", None):
+        warning(logger, "Could not resolve user for helping toggle", propel_user_id=propel_user_id)
+        return None
 
-    # Do the actual data wrangling
-    problem_statement = save_user_helping_status(user, d)
-
-    problem_statement_title = problem_statement.title
-    problem_statement_slack_channel = problem_statement.slack_channel
-
-    helping_status = d["status"] # helping or not_helping
-
-    problem_statement_id = d["problem_statement_id"]
-
-    npo_id =  d["npo_id"] if "npo_id" in d else ""
-
-    mentor_or_hacker = d["type"]
-
-    url = ""
-    if npo_id == "":
-        url = f"for project https://ohack.dev/project/{problem_statement_id}"
-    else:
-        url = f"for nonprofit https://ohack.dev/nonprofit/{npo_id} on project https://ohack.dev/project/{problem_statement_id}"
-
-
-    slack_user_id = None
-    try:
-        # Extract raw Slack user ID for Slack API calls (handles OAuth formats)
-        if is_slack_user_id(user.user_id):
-            slack_user_id = extract_slack_user_id(user.user_id)
-            invite_user_to_channel(user_id=slack_user_id,
-                                channel_name=problem_statement_slack_channel)
-    except Exception:
-        pass # Don't return error if slack invite fails.
-
-
-    if slack_user_id is not None:
-        try:
-            slack_message = f"<@{slack_user_id}>"
-
-            if "helping" == helping_status:
-                slack_message = f"{slack_message} is helping as a *{mentor_or_hacker}* on *{problem_statement_title}* {url}"
-            else:
-                slack_message = f"{slack_message} is _no longer able to help_ on *{problem_statement_title}* {url}"
-
-            send_slack(message=slack_message,
-                    channel=problem_statement_slack_channel)
-        except:
-            pass # Don't return error if slack message fails.
-
-    return problem_statement
-
-def save_user_helping_status(user: User, d):
-
-    info(logger, "save_user_helping_status", user=user.serialize(), data=d)
-    helping_status = d["status"] # helping or not_helping
-    
+    helping_status = d["status"]  # helping or not_helping
     problem_statement_id = d["problem_statement_id"]
     mentor_or_hacker = d["type"]
+    npo_id = d.get("npo_id", "")
 
-    helping_date = datetime.now().isoformat()
-    
     to_add = {
         "user": user.id,
         "slack_user": user.user_id,
         "type": mentor_or_hacker,
-        "timestamp": helping_date
+        "timestamp": datetime.now().isoformat(),
     }
-    
-    try: 
+
+    db = get_db()
+    problem_statement_doc = db.collection('problem_statements').document(problem_statement_id)
+    ps_dict = problem_statement_doc.get().to_dict()
+    # Missing doc: real Firestore yields None, MockFirestore yields {} — treat both as unknown
+    if not ps_dict:
+        warning(logger, "Helping toggle on unknown problem statement", problem_statement_id=problem_statement_id)
+        return None
+
+    helping_list = ps_dict.get("helping", [])
+    if "helping" == helping_status:
+        helping_list.append(to_add)
+    else:
+        # NOTE: the legacy body used `d['user'] not in user.id` — a substring
+        # test that could remove other users' entries. Exact match only.
+        helping_list = [h for h in helping_list if h.get('user') != user.id]
+
+    problem_statement_doc.update({"helping": helping_list})
+
+    # Project pages read helping through the messages-side caches
+    try:
+        from api.messages import messages_service
+        messages_service.clear_cache()
+    except Exception as e:
+        warning(logger, "Failed to clear messages caches after helping toggle", error=str(e))
+
+    try:
         send_slack_audit(action="helping", message=user.user_id, payload=to_add)
     except Exception:
         pass
 
-    problem_statement: ProblemStatement | None = None
-  
-    if "helping" == helping_status:
-        problem_statement = insert_helping(problem_statement_id, user, mentor_or_hacker, helping_date)
-    else:
-        problem_statement = delete_helping(problem_statement_id, user)
+    # Determine how to identify this user in the Slack post.
+    # Slack logins get a real <@Uxxx> mention + auto-invite to the project
+    # channel. Non-Slack logins (Google, etc.) fall back to their display name
+    # so we don't render a broken "@oauth2" mention, and get a follow-up email
+    # asking them to join the Slack workspace.
+    display_name = (user.name or user.nickname or user.email_address or "A volunteer").strip()
+    profile_url = f"https://ohack.dev/profile/{user.id}" if user.id else None
 
-    return problem_statement
+    if is_slack_user_id(user.user_id):
+        slack_user_id = extract_slack_user_id(user.user_id)
+        mention = f"<@{slack_user_id}> (<{profile_url}|profile>)" if profile_url else f"<@{slack_user_id}>"
+        is_slack_login = True
+    else:
+        slack_user_id = None
+        mention = f"<{profile_url}|{display_name}>" if profile_url else display_name
+        is_slack_login = False
+
+    problem_statement_title = ps_dict.get("title", "")
+
+    if "slack_channel" in ps_dict:
+        problem_statement_slack_channel = ps_dict["slack_channel"]
+
+        project_link = f"<https://ohack.dev/project/{problem_statement_id}|{problem_statement_title}>"
+        suffix = f" for <https://ohack.dev/nonprofit/{npo_id}|the nonprofit>" if npo_id else ""
+
+        if "helping" == helping_status:
+            slack_message = f"{mention} is helping as a *{mentor_or_hacker}* on *{project_link}*{suffix}"
+        else:
+            slack_message = f"{mention} is _no longer able to help_ on *{project_link}*{suffix}"
+
+        if is_slack_login and slack_user_id:
+            try:
+                invite_user_to_channel(user_id=slack_user_id,
+                                       channel_name=problem_statement_slack_channel)
+            except Exception as e:
+                warning(logger, "invite_user_to_channel failed", slack_user_id=slack_user_id, error=str(e))
+
+        try:
+            send_slack(message=slack_message, channel=problem_statement_slack_channel)
+        except Exception as e:
+            warning(logger, "helping Slack post failed", error=str(e))
+
+    # For non-Slack users signing up to help, email them a Slack join CTA so
+    # their project team can actually reach them. Swallow errors so a Resend
+    # outage never breaks the help toggle.
+    if not is_slack_login and helping_status == "helping" and user.email_address:
+        try:
+            from services.email_service import send_project_help_slack_invite_email
+            send_project_help_slack_invite_email(
+                name=user.name or user.nickname,
+                email=user.email_address,
+                problem_statement_title=ps_dict.get("title"),
+                mentor_or_hacker=mentor_or_hacker,
+                npo_id=npo_id or None,
+                problem_statement_id=problem_statement_id,
+            )
+        except Exception as e:
+            warning(logger, "send_project_help_slack_invite_email failed", error=str(e))
+
+    return {"message": "Updated helping status"}
 
 
 @limits(calls=100, period=ONE_MINUTE)

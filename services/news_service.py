@@ -235,6 +235,20 @@ def get_all_praises():
 
 @cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 def get_praises_about_user(user_id):
+    # Privacy gate: praises key off raw Slack ids, but the receiving user may
+    # have set their "praises" privacy field to private. Users not in our DB
+    # (or with no explicit setting) default to public — matches
+    # model/user.py default_public_privacy_fields.
+    try:
+        receiver = get_user_by_user_id(user_id)
+        if receiver:
+            praises_setting = (receiver.get("privacy_settings") or {}).get("praises", "public")
+            if praises_setting != "public":
+                logger.info(f"Praises for {user_id} are private — returning empty list")
+                return Message([])
+    except Exception as e:
+        logger.warning(f"Praise privacy check failed for {user_id}: {e}")
+
     results = get_praises_by_user_id(user_id)
 
     slack_ids = set()
