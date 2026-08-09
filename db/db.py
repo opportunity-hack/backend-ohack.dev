@@ -66,6 +66,34 @@ def fetch_users():
 def fetch_user_by_github(github_username):
     return db.fetch_user_by_github(github_username)
 
+# User slugs (vanity profile URLs)
+def create_user_slug(slug, user_db_id, previous_slug=None):
+    return db.create_user_slug(slug, user_db_id, previous_slug=previous_slug)
+
+def fetch_user_db_id_by_slug(slug):
+    return db.fetch_user_db_id_by_slug(slug)
+
+def fetch_user_slugs_by_db_id(user_db_id):
+    return db.fetch_user_slugs_by_db_id(user_db_id)
+
+def fetch_user_portfolio_teams(user_db_id):
+    return db.fetch_user_portfolio_teams(user_db_id)
+
+def update_user_profile_visibility(user_db_id, visibility):
+    return db.update_user_profile_visibility(user_db_id, visibility)
+
+def fetch_public_portfolio_users():
+    return db.fetch_public_portfolio_users()
+
+def update_user_bio_video(user_db_id, url):
+    return db.update_user_bio_video(user_db_id, url)
+
+def update_user_login(user_db_id, payload):
+    return db.update_user_login(user_db_id, payload)
+
+def update_user_volunteering(user):
+    return db.update_user_volunteering(user)
+
 # Problem Statements
 def fetch_problem_statement(id):
     return db.fetch_problem_statement(id)
@@ -82,11 +110,10 @@ def update_problem_statement(problem_statement: ProblemStatement):
 def delete_problem_statement(id):
     return db.delete_problem_statement(id)
 
-def insert_helping(problem_statement_id, user: User, mentor_or_hacker, helping_date):
-    return db.insert_helping(problem_statement_id, user, mentor_or_hacker, helping_date)
-
-def delete_helping(problem_statement_id, user: User):
-    return db.delete_helping(problem_statement_id, user)
+# NOTE: insert_helping/delete_helping dispatchers were removed — the pair was
+# broken (4-arg call into a 3-arg firestore method; delete had no firestore
+# impl at all) and its only caller was replaced by
+# problem_statements_service.save_helping_status.
 
 # Hackathons
 

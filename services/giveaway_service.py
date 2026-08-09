@@ -74,8 +74,8 @@ def get_all_giveaways():
         if not user_id:
             continue
         if user_id not in giveaways:
-            from api.messages.messages_service import get_user_by_id_old
-            user = get_user_by_id_old(user_id)
+            from services.users_service import get_profile_by_db_id
+            user = get_profile_by_db_id(user_id)
             giveaway["user"] = user if user is not None else {}
             giveaways[user_id] = giveaway
 

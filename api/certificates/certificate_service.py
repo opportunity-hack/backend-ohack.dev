@@ -1,5 +1,6 @@
 import uuid
 import os
+import re
 
 from PIL import ImageFont
 from os import getenv, path, remove
@@ -14,7 +15,8 @@ import hashlib
 import resend
 
 # Import get_team_by_slack_channel
-from common.utils.firebase import get_team_by_slack_channel, save_certificate, get_certficate_by_file_id, get_recent_certs_from_db
+from common.utils.firebase import get_team_by_slack_channel, save_certificate, get_certficate_by_file_id, get_recent_certs_from_db, fetch_certificates_by_github_username
+from common.utils.redis_cache import redis_cached
 from common.utils.cdn import upload_to_cdn
 from common.utils.slack import async_send_slack
 from common.log import get_logger
@@ -42,6 +44,45 @@ BLACK_COLOR: Tuple[int, int, int] = (0, 0, 0)
 
 # Organizer names/usernames excluded from certificate generation (lowercase)
 EXCLUDED_AUTHORS = {"gregv", "greg v"}
+
+# GitHub noreply emails look like 123456+login@users.noreply.github.com
+GITHUB_NOREPLY_PATTERN = re.compile(r"^(?:\d+\+)?(?P<login>[^@+]+)@users\.noreply\.github\.com$", re.IGNORECASE)
+
+
+def _extract_github_username(author_email, author_name):
+    """Best-effort GitHub login for a cert, lowercased.
+
+    Prefers the noreply-email encoding; falls back to author_name when it looks
+    like a bare login (no spaces). Returns None when neither works — the
+    backfill script logs those.
+    """
+    if author_email:
+        m = GITHUB_NOREPLY_PATTERN.match(author_email.strip())
+        if m:
+            return m.group("login").lower()
+    if author_name and " " not in author_name.strip():
+        return author_name.strip().lower()
+    return None
+
+
+@redis_cached(prefix="certs:by_github", ttl=900)
+def get_certificates_by_github_username(github_username):
+    """Public list of a user's git-fame certificates, newest first."""
+    if not github_username:
+        return []
+    certs = fetch_certificates_by_github_username(github_username.strip().lower())
+    # Sort + dedupe in Python — an order_by alongside the where() would force a
+    # composite index.
+    certs.sort(key=lambda c: c.get("date") or "", reverse=True)
+    deduped = []
+    seen_file_ids = set()
+    for cert in certs:
+        file_id = cert.get("file_id")
+        if file_id in seen_file_ids:
+            continue
+        seen_file_ids.add(file_id)
+        deduped.append(cert)
+    return deduped
 
 
 def get_cert_info(id):
@@ -334,15 +375,22 @@ def generate_certificate(repositoryURL: str, username: str) -> str:
         "certificate_url" : file_url,
         "author_name": username,
         "author_email" : authorWithEmailData.author,
+        # Stamped so certs can be queried per-user (portfolio page); the
+        # backfill script computes this for pre-existing docs.
+        "github_username": _extract_github_username(authorWithEmailData.author, username),
         "stats": stats_json,
         "totals": totals_json,
         "file_id": file_id,
         "file_id_hash": file_id_hash,
         "date": iso_date,
-        "repository_url": repositoryURL        
+        "repository_url": repositoryURL
     }
 
     save_certificate(result)
+    try:
+        get_certificates_by_github_username.cache_clear()
+    except Exception:
+        pass
     return result
 
 def validateCertificate(certificateBase64Str: str) -> bool:

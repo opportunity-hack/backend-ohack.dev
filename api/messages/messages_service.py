@@ -80,130 +80,15 @@ if not firebase_admin._apps:
 # --------------------------- Problem Statement functions to be deleted -----------------  #
 @limits(calls=100, period=ONE_MINUTE)
 def save_helping_status_old(propel_user_id, json):
-    logger.info(f"save_helping_status {propel_user_id} // {json}")
-    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    if slack_user is None:
-        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+    """Thin delegate to the canonical helping service (profile-stack
+    retirement). Deleted once the frontend calls /api/users/profile/helping."""
+    logger.info("legacy-profile-route hit: POST /api/messages/profile/helping")
+    from services.problem_statements_service import save_helping_status
+    result = save_helping_status(propel_user_id, json)
+    if result is None:
         return None
-    user_id = slack_user["sub"]
+    return Message("Updated helping status")
 
-    helping_status = json["status"] # helping or not_helping
-    
-    problem_statement_id = json["problem_statement_id"]
-    mentor_or_hacker = json["type"]
-
-    npo_id =  json["npo_id"] if "npo_id" in json else ""
-    
-    user_obj = fetch_user_by_user_id(user_id)
-    my_date = datetime.now()
-
-
-    to_add = {
-        "user": user_obj.id,
-        "slack_user": user_id,
-        "type": mentor_or_hacker,
-        "timestamp": my_date.isoformat()
-    }
-
-    db = get_db() 
-    problem_statement_doc = db.collection(
-        'problem_statements').document(problem_statement_id)
-    
-    ps_dict = problem_statement_doc.get().to_dict()
-    helping_list = []
-    if "helping" in ps_dict:
-        helping_list = ps_dict["helping"]
-        logger.debug(f"Start Helping list: {helping_list}")
-
-        if "helping" == helping_status:            
-            helping_list.append(to_add)
-        else:
-            helping_list = [
-                d for d in helping_list if d['user'] not in user_obj.id]            
-
-    else:
-        logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
-        if "helping" == helping_status:
-            helping_list.append(to_add)
-
-
-    logger.debug(f"End Helping list: {helping_list}")
-    problem_result = problem_statement_doc.update({
-        "helping": helping_list
-    })
-
-    clear_cache()
-    
-
-    send_slack_audit(action="helping", message=user_id, payload=to_add)
-
-    # Determine how to identify this user in the Slack post.
-    # Slack logins get a real <@Uxxx> mention + auto-invite to the project channel.
-    # Non-Slack logins (Google, etc.) fall back to their display name so we don't
-    # render a broken "@oauth2" mention, and get a follow-up email asking them to
-    # join the Slack workspace.
-    display_name = (user_obj.name or user_obj.nickname or user_obj.email_address or "A volunteer").strip()
-    profile_url = f"https://ohack.dev/profile/{user_obj.id}" if user_obj.id else None
-
-    if is_slack_user_id(user_id):
-        slack_user_id = extract_slack_user_id(user_id)
-        if profile_url:
-            mention = f"<@{slack_user_id}> (<{profile_url}|profile>)"
-        else:
-            mention = f"<@{slack_user_id}>"
-        is_slack_login = True
-        logger.info(f"save_helping_status_old: Slack login, mention={slack_user_id}")
-    else:
-        slack_user_id = None
-        mention = f"<{profile_url}|{display_name}>" if profile_url else display_name
-        is_slack_login = False
-        logger.info(f"save_helping_status_old: non-Slack login ({user_id}), mention={display_name}")
-
-    problem_statement_title = ps_dict["title"]
-
-    if "slack_channel" in ps_dict:
-        problem_statement_slack_channel = ps_dict["slack_channel"]
-
-        project_link = f"<https://ohack.dev/project/{problem_statement_id}|{problem_statement_title}>"
-        if npo_id:
-            suffix = f" for <https://ohack.dev/nonprofit/{npo_id}|the nonprofit>"
-        else:
-            suffix = ""
-
-        if "helping" == helping_status:
-            slack_message = f"{mention} is helping as a *{mentor_or_hacker}* on *{project_link}*{suffix}"
-        else:
-            slack_message = f"{mention} is _no longer able to help_ on *{project_link}*{suffix}"
-
-        if is_slack_login and slack_user_id:
-            try:
-                invite_user_to_channel(user_id=slack_user_id,
-                                    channel_name=problem_statement_slack_channel)
-            except Exception as e:
-                logger.warning(f"invite_user_to_channel failed for {slack_user_id}: {e}")
-
-        send_slack(message=slack_message,
-                    channel=problem_statement_slack_channel)
-
-    # For non-Slack users who are signing up to help, email them with a Slack join CTA
-    # so their project team can actually reach them. Swallow errors so a Resend
-    # outage never breaks the help toggle.
-    if not is_slack_login and helping_status == "helping" and user_obj.email_address:
-        try:
-            send_project_help_slack_invite_email(
-                name=user_obj.name or user_obj.nickname,
-                email=user_obj.email_address,
-                problem_statement_title=ps_dict.get("title"),
-                mentor_or_hacker=mentor_or_hacker,
-                npo_id=npo_id or None,
-                problem_statement_id=problem_statement_id,
-            )
-        except Exception as e:
-            logger.warning(f"send_project_help_slack_invite_email failed for {user_obj.email_address}: {e}")
-
-    return Message(
-        "Updated helping status"
-    )
 
 @limits(calls=50, period=ONE_MINUTE)
 def save_problem_statement_old(json):
@@ -288,7 +173,9 @@ def get_problem_statement_list_old():
     logger.debug(results)        
     return { "problem_statements": results }
 
-@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
+# Contribution data comes from a batch scraper — 1h cache, matching the
+# redis cache on get_github_contributions_for_user (was ttl=10, absurdly short)
+@cached(cache=TTLCache(maxsize=100, ttl=3600), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_github_profile(github_username):
     logger.debug(f"Getting Github Profile for {github_username}")
@@ -304,49 +191,17 @@ def get_github_profile(github_username):
 @cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata_old(propel_id):
-    logger.debug("Profile Metadata")
-
-    email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_id)
-
-    if user_id is None:
-        logger.warning("Could not resolve user details from PropelAuth for propel_id=%s", propel_id)
+    """Thin delegate to the canonical users-service profile read, preserving
+    the legacy {"text": ...} envelope and auth_failed error shape.
+    (Profile-stack retirement — deleted once the frontend is migrated.)"""
+    logger.info("legacy-profile-route hit: GET /api/messages/profile")
+    from services.users_service import get_profile_metadata
+    response = get_profile_metadata(propel_id)
+    if response is None:
         return {"error": "Unable to resolve user profile", "status": "auth_failed"}
-
-    send_slack_audit(
-        action="login", message=f"User went to profile: {user_id} with email: {email}")
+    return {"text": response}
 
 
-    logger.debug(f"Account Details:\
-            \nEmail: {email}\nSlack User ID: {user_id}\n\
-            Last Login:{last_login}\
-            Image:{profile_image}")
-
-    # Call firebase to see if account exists and save these details
-    db_id = save_user_old(
-            user_id=user_id,
-            email=email,
-            last_login=last_login,
-            profile_image=profile_image,
-            name=name,
-            nickname=nickname,
-            propel_id=propel_id
-            )
-
-    # Get all of the user history and profile data from the DB
-    response = get_history_old(db_id)
-    logger.debug(f"get_profile_metadata {response}")
-
-
-    return {
-        "text" : response
-    }
-
-
-# Fields returned to the admin /admin/profiles consumers (page + UserSearchDialog).
-# Keep this in sync with frontend src/pages/admin/profile/index.js and
-# src/components/admin/UserSearchDialog.js. Drop anything heavy (history) or
-# unused (mailing address, propel_id, want_stickers) — those routes have their
-# own /profile/<id> fetch when a row is opened.
 _ADMIN_PROFILE_LEAN_FIELDS = (
     "name",
     "nickname",
@@ -410,6 +265,8 @@ def get_all_profiles():
 
 
 # Caching is not needed because the parent method already is caching
+
+
 @limits(calls=100, period=ONE_MINUTE)
 def get_history_old(db_id):
     logger.debug("Get History Start")
@@ -481,6 +338,13 @@ def get_history_old(db_id):
         "postal_code": res["postal_code"] if "postal_code" in res else "",
         "country": res["country"] if "country" in res else "",
         "want_stickers": res["want_stickers"] if "want_stickers" in res else "",
+        # Portfolio fields (Profile.js PortfolioTab)
+        "bio": res.get("bio", ""),
+        "headline": res.get("headline", ""),
+        "bio_video_url": res.get("bio_video_url", ""),
+        "portfolio_links": res.get("portfolio_links") or [],
+        "profile_slug": res.get("profile_slug"),
+        "profile_visibility": res.get("profile_visibility", "private"),
     }
 
     # Clear cache    
@@ -554,82 +418,24 @@ def save_user_old(
     return doc_id
 
 def save_profile_metadata_old(propel_id, json):
-    send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
-    db = get_db()  # this connects to our Firestore database
-    oauth_user = get_slack_user_from_propel_user_id(propel_id)
-    if oauth_user is None:
-        logger.warning(f"Could not get OAuth user details for propel_id: {propel_id}")
+    """Thin delegate to the canonical users-service profile write.
+    Returns None when identity can't be resolved (route 404s, as before)."""
+    logger.info("legacy-profile-route hit: POST /api/messages/profile")
+    from services.users_service import save_profile_metadata
+    result = save_profile_metadata(propel_id, json)
+    if result is None:
         return None
-    oauth_user_id = oauth_user["sub"]
+    return Message("Saved Profile Metadata")
 
-    logger.info(f"Save Profile Metadata for {oauth_user_id} {json}")
-
-    json = json["metadata"]
-
-    # See if the user exists
-    user = get_user_from_slack_id(oauth_user_id)
-    if user is None:
-        return
-    else:
-        logger.info(f"User exists: {user.id}")        
-
-    # Only update metadata that is in the json
-    metadataList = [
-        "role", "expertise", "education", "company", "why", "shirt_size", "github", "linkedin_url", "instagram_url", "propel_id",
-        "street_address", "street_address_2", "city", "state", "postal_code", "country", "want_stickers"
-        ]
-
-    d = {}
-
-    for m in metadataList:        
-        if m in json:
-            d[m] = json[m]
-
-    logger.info(f"Metadata: {d}")
-    update_res = db.collection("users").document(user.id).set( d, merge=True)
-
-    logger.info(f"Update Result: {update_res}")
-
-    # Clear cache for get_profile_metadata
-    get_profile_metadata_old.cache_clear()
-    get_user_by_id_old.cache_clear()
-
-    return Message(
-        "Saved Profile Metadata"
-    )
 
 @cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock(), key=lambda id: id)
 def get_user_by_id_old(id):
-    logger.debug(f"Attempting to get user by ID: {id}")
-    db = get_db()
-    doc_ref = db.collection('users').document(id)
-
-    try:
-        doc = doc_ref.get()
-        if not doc.exists:
-            logger.warning(f"User with ID {id} not found")
-            return {}
-
-        fields = ["name", "profile_image", "user_id", "nickname", "github"]
-        res = {}
-        for field in fields:
-            try:
-                value = doc.get(field)
-                if value is not None:
-                    res[field] = value
-            except KeyError:
-                logger.info(f"Field '{field}' not found for user {id}")
-
-        res["id"] = doc.id
-        logger.debug(f"Successfully retrieved user data: {res}")
-        return res
-
-    except NotFound:
-        logger.info(f"Document with ID {id} not found in 'users' collection")
-        return {}
-    except Exception as e:
-        logger.error(f"Error retrieving user data for ID {id}: {str(e)}")
-        return {}
+    """Thin delegate to the privacy-safe public profile getter. Deliberate
+    deltas vs the old body: no longer leaks `github` (privacy-gated field),
+    now includes `profile_slug`."""
+    logger.info("legacy-profile-route hit: GET /api/messages/profile/<id>")
+    from services.users_service import get_profile_by_db_id
+    return get_profile_by_db_id(id) or {}
 
 
 def upload_image_to_cdn(request):
