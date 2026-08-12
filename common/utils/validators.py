@@ -7,6 +7,14 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 logger = logging.getLogger(__name__)
 
+# Per-event judge time constraints (HH:MM 24-hour, nullable). Admin UI in
+# frontend JudgesSection.js; consumed by the judge application page.
+JUDGE_TIME_CONSTRAINT_KEYS = (
+    "judge_venue_arrival_time",
+    "judge_judging_start_time",
+    "judge_judging_end_time",
+)
+
 # Regular expression for email validation
 # This regex follows the RFC 5322 standard for email addresses
 EMAIL_REGEX = re.compile(r"""(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])""", re.IGNORECASE)
@@ -127,11 +135,14 @@ def validate_hackathon_data(data):
             if not isinstance(q.get("error"), str) or not q.get("error"):
                 raise ValueError(f"Question {i} must have a non-empty 'error' string")
 
-    # Validate judge_venue_arrival_time if present (HH:MM 24-hour string or null)
-    arrival = constraints.get("judge_venue_arrival_time")
-    if arrival not in (None, ""):
-        if not isinstance(arrival, str) or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", arrival):
-            raise ValueError("judge_venue_arrival_time must be HH:MM (24-hour)")
+    # Validate judge time constraints if present (HH:MM 24-hour string or null).
+    # judge_judging_{start,end}_time drive the judging-window copy on the
+    # judge application (frontend falls back to 15:00/17:30 when unset).
+    for judge_time_key in JUDGE_TIME_CONSTRAINT_KEYS:
+        judge_time = constraints.get(judge_time_key)
+        if judge_time not in (None, ""):
+            if not isinstance(judge_time, str) or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", judge_time):
+                raise ValueError(f"{judge_time_key} must be HH:MM (24-hour)")
 
     # Validate hacker_deposit if present
     hacker_deposit = constraints.get("hacker_deposit")
@@ -243,11 +254,12 @@ def validate_hackathon_data_partial(data):
                     _skip("constraints.hacker_required_questions", str(e))
                     c.pop("hacker_required_questions")
 
-            arrival = c.get("judge_venue_arrival_time")
-            if arrival not in (None, ""):
-                if not isinstance(arrival, str) or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", arrival):
-                    _skip("constraints.judge_venue_arrival_time", "must be HH:MM (24-hour)")
-                    c.pop("judge_venue_arrival_time")
+            for judge_time_key in JUDGE_TIME_CONSTRAINT_KEYS:
+                judge_time = c.get(judge_time_key)
+                if judge_time not in (None, ""):
+                    if not isinstance(judge_time, str) or not re.match(r"^([01]\d|2[0-3]):[0-5]\d$", judge_time):
+                        _skip(f"constraints.{judge_time_key}", "must be HH:MM (24-hour)")
+                        c.pop(judge_time_key)
 
             if "hacker_deposit" in c and c["hacker_deposit"] is not None:
                 try:
