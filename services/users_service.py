@@ -4,11 +4,13 @@ import threading
 from ratelimit import limits
 import requests
 from common.utils.slack import send_slack_audit, get_slack_user_by_email
-from model.user import User
+from model.user import User, internal_lookup_fields
 from db.db import delete_user_by_db_id, delete_user_by_user_id, fetch_user_by_user_id, fetch_user_by_db_id, fetch_user_by_propel_id, fetch_user_by_email, fetch_users, insert_user, update_user, get_user_profile_by_db_id, upsert_profile_metadata, fetch_user_by_github
 import pytz
 from cachetools import cached, LRUCache, TTLCache
 from cachetools.keys import hashkey
+from common.utils.redis_cache import redis_cached
+from common.utils.validators import sanitize_string, validate_url
 from common.log import get_logger, info, debug, warning, error, exception
 import uuid
 
@@ -31,8 +33,33 @@ ONE_MINUTE = 1*60
 # USER_ID_PREFIX is now imported from oauth_providers module for consistency
 # Note: This maintains backward compatibility with Slack-specific code
 
-def clear_cache():        
+def clear_cache():
     get_profile_metadata.cache_clear()
+    clear_portfolio_caches()
+
+
+def clear_portfolio_caches(db_id=None):
+    """Invalidate the public-portfolio caches after any profile-affecting write.
+
+    Redis prefixes are cleared wholesale (clear_pattern) — entries are few and
+    per-key deletion would need the exact hashed cache_key.
+    """
+    from common.utils.redis_cache import clear_pattern
+    for prefix in ("portfolio:profile", "portfolio:resolve", "portfolio:teams", "portfolio:sitemap"):
+        try:
+            clear_pattern(f"{prefix}:*")
+        except Exception as e:
+            warning(logger, "Failed to clear portfolio cache", prefix=prefix, error=str(e))
+
+    # The profile EDITOR reads through the legacy /api/messages/profile path,
+    # which has its own TTL caches — slug/visibility/bio-video writes must
+    # flush those too or the editor shows stale data for up to 10 minutes.
+    try:
+        from api.messages import messages_service
+        messages_service.get_profile_metadata_old.cache_clear()
+        messages_service.get_user_by_id_old.cache_clear()
+    except Exception as e:
+        warning(logger, "Failed to clear legacy profile caches", error=str(e))
 
 def finish_saving_insert(
         user_id=None,
@@ -307,8 +334,13 @@ def get_profile_by_db_id(id):
 
     res = None
 
-    # Only keep these fields since this is a public api
-    fields = ["name", "profile_image", "user_id", "nickname", "github", "propel_id"] #TODO: Wait. We are getting extended profile data (e.g. hackathons above just to pitch it out here?)
+    # internal_lookup_fields = safe_public_fields + github. github is included
+    # here (unlike the fully public/privacy-filtered portfolio) because this
+    # route backs internal features — team rosters, peer feedback, admin
+    # giveaways — that have always shown a participant's GitHub username.
+    # propel_id is PII and everything else beyond this list is privacy-gated;
+    # those need get_privacy_filtered_profile_by_db_id instead.
+    fields = list(internal_lookup_fields)
 
     if u is not None:
         # Check if the field is in the response first
@@ -319,43 +351,61 @@ def get_profile_by_db_id(id):
     logger.debug(f"Get User By ID Result: {res}")
     return res    
     
+def _refresh_login_details(user, propel_id):
+    """Best-effort login refresh (last_login + provider avatar/name).
+
+    The 3-tier resolver's fast path (stored propel_id) makes no external call
+    and therefore doesn't refresh these like save_user used to. The OAuth
+    round-trip here is strictly optional — when it's down we still stamp
+    last_login and move on. Never raises.
+    """
+    payload = {"last_login": datetime.now().isoformat() + "Z"}
+    try:
+        _email, user_id, _last_login, profile_image, name, nickname = \
+            get_propel_user_details_by_id(propel_id)
+        if user_id:
+            payload.update({
+                "profile_image": profile_image,
+                "name": name,
+                "nickname": nickname,
+            })
+    except Exception as e:
+        warning(logger, "Login-detail refresh skipped (provider unavailable)",
+                propel_id=propel_id, error=str(e))
+    try:
+        from db.db import update_user_login
+        update_user_login(user.id, payload)
+    except Exception as e:
+        warning(logger, "Failed to write login refresh", propel_id=propel_id, error=str(e))
+
+
 # 10 minute cache for 100 objects LRU
 @cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata(propel_id):
+    """Own-profile read. Identity via the 3-tier resolver — a broken OAuth
+    provider token can no longer 404 the profile page (the old path depended
+    solely on the live OAuth round-trip)."""
     logger.debug("Profile Metadata")
-    
-    email, user_id, last_login, profile_image, name, nickname = get_propel_user_details_by_id(propel_id)
-    
-    send_slack_audit(
-        action="login", message=f"User went to profile: {user_id} with email: {email}")
-    
 
-    logger.debug(f"Account Details:\
-            \nEmail: {email}\nUser ID: {user_id}\n\
-            Last Login:{last_login}\
-            Image:{profile_image}")
-
-    # Call firebase to see if account exists and save these details
-    db_id = save_user(
-            user_id=user_id,
-            email=email,
-            last_login=last_login,
-            profile_image=profile_image,
-            name=name,
-            nickname=nickname,
-            propel_id=propel_id
-            )
-
-    if db_id is None:
-        warning(logger, "save_user returned None — PropelAuth provided empty values", propel_id=propel_id)
+    user, user_id = _resolve_and_ensure_user(propel_id)
+    if user is None or not getattr(user, "id", None):
+        warning(logger, "Could not resolve user for profile read", propel_id=propel_id)
         return None
 
-    # Get all of the user history and profile data from the DB
-    response = get_history(db_id.id)
+    send_slack_audit(
+        action="login", message=f"User went to profile: {user_id} with email: {user.email_address}")
+
+    _refresh_login_details(user, propel_id)
+
+    # Re-read through the profile loader (resolves badge refs) and serialize
+    full_user = get_history(user.id)
+    if full_user is None:
+        return None
+    response = build_profile_response(full_user)
     logger.debug(f"get_profile_metadata {response}")
 
-    return response #TODO: Breaking API change
+    return response
 
 # Caching is not needed because the parent method already is caching
 @limits(calls=100, period=ONE_MINUTE)
@@ -366,37 +416,108 @@ def get_history(db_id):
     logger.debug(f"RESULT\n{result}")
     return result
 
+
+def build_profile_response(user):
+    """THE canonical own-profile response dict. Both /api/users/profile and
+    the legacy /api/messages/profile delegates serve exactly this (the legacy
+    route wraps it in its historical {"text": ...} envelope).
+
+    hackathons/hackathon_history are attendance-derived from the volunteers
+    collection (the documented source of truth) — NOT the deprecated
+    users.hackathons ref array.
+    """
+    d = user.serialize_profile_fields()
+    try:
+        from services.volunteers_service import get_user_hackathon_attendance
+        hackathons = get_user_hackathon_attendance(
+            user_id=getattr(user, "user_id", None),
+            email=getattr(user, "email_address", None),
+        )
+    except Exception as e:
+        warning(logger, "Failed to load hackathon attendance for profile response",
+                db_id=getattr(user, "id", None), error=str(e))
+        hackathons = []
+    d["hackathons"] = hackathons
+    d["hackathon_history"] = hackathons
+    return d
+
+MAX_BIO_LENGTH = 2000
+MAX_HEADLINE_LENGTH = 80
+MAX_PORTFOLIO_LINKS = 10
+MAX_LINK_LABEL_LENGTH = 40
+MAX_LINK_URL_LENGTH = 300
+
+
+def _sanitize_portfolio_metadata(metadata):
+    """Sanitize the portfolio-specific metadata fields in place.
+
+    bio/headline are length-capped; portfolio_links is rebuilt as a clean
+    [{label, url}] array (invalid URLs dropped, https:// auto-prefixed).
+    """
+    if "bio" in metadata:
+        metadata["bio"] = sanitize_string(metadata.get("bio") or "", MAX_BIO_LENGTH)
+    if "headline" in metadata:
+        metadata["headline"] = sanitize_string(metadata.get("headline") or "", MAX_HEADLINE_LENGTH)
+    if "portfolio_links" in metadata:
+        raw = metadata.get("portfolio_links")
+        links = []
+        if isinstance(raw, list):
+            for item in raw[:MAX_PORTFOLIO_LINKS]:
+                if not isinstance(item, dict):
+                    continue
+                url = (item.get("url") or "").strip()
+                if not url or any(c.isspace() for c in url):
+                    continue  # validate_url's urlparse check lets spaces through
+                if not url.lower().startswith(("http://", "https://")):
+                    url = f"https://{url}"
+                if not validate_url(url):
+                    continue
+                links.append({
+                    "label": sanitize_string(item.get("label") or "", MAX_LINK_LABEL_LENGTH),
+                    "url": url[:MAX_LINK_URL_LENGTH],
+                })
+        metadata["portfolio_links"] = links
+    return metadata
+
+
 def save_profile_metadata(propel_id, json):
+    """Own-profile write. Identity via the 3-tier resolver (lazily creates the
+    doc for brand-new users) — no longer blocked by a broken OAuth token."""
 
     send_slack_audit(action="save_profile_metadata", message="Saving", payload=json)
 
-    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
-    if oauth_user is None:
-        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
+    if not json or "metadata" not in json:
+        warning(logger, "save_profile_metadata called without metadata", propel_id=propel_id)
         return None
 
-    user_id = oauth_user["sub"]
+    user, user_id = _resolve_and_ensure_user(propel_id)
+    if user is None or not getattr(user, "id", None):
+        warning(logger, "Could not resolve user for profile save", propel_id=propel_id)
+        return None
 
     logger.info(f"Save Profile Metadata for {user_id} {json}")
 
     json = json["metadata"]
 
-    # See if the user exists
-    user = fetch_user_by_user_id(user_id)
-    if user is None:
-        return
-    else:
-        logger.info(f"User exists: {user.id}")
-        user.update_from_metadata(json)
-        upsert_profile_metadata(user)
+    _sanitize_portfolio_metadata(json)
+    user.update_from_metadata(json)
+    upsert_profile_metadata(user)
 
-        # Clear cache for get_profile_metadata
-        get_profile_metadata.cache_clear()
+    # Clear cache for get_profile_metadata
+    get_profile_metadata.cache_clear()
+    clear_portfolio_caches(user.id)
 
-    return user #TODO: Breaking API change
+    return build_profile_response(user)
 
 def get_user_by_db_id(id):
-    return fetch_user_by_db_id(id)
+    user = fetch_user_by_db_id(id)
+    if user is not None:
+        return user
+    # Accept vanity slugs anywhere a db id is accepted (public routes)
+    resolved = resolve_user_db_id(id)
+    if resolved and resolved != id:
+        return fetch_user_by_db_id(resolved)
+    return None
 
 def get_slack_user_id_by_github(github_username):
     """Look up a Slack user ID given a GitHub username."""
@@ -589,7 +710,10 @@ def save_volunteering_time(propel_id, json):
         entry["manual"] = True
 
     user.volunteering.append(entry)
-    upsert_profile_metadata(user)
+    # Targeted write — volunteering is NOT in the generic profile write set
+    # (a concurrent profile save must never clobber a volunteering log).
+    from db.db import update_user_volunteering
+    update_user_volunteering(user)
 
     # Clear cache for get_profile_metadata
     get_profile_metadata.cache_clear()
@@ -732,11 +856,39 @@ def update_privacy_settings(propel_id, data):
 
     # Clear cache for get_profile_metadata
     get_profile_metadata.cache_clear()
+    clear_portfolio_caches(user.id)
 
     return user.get_privacy_settings()
 
 
 PUBLIC_PRAISES_PREVIEW_LIMIT = 3
+
+
+def resolve_user_db_id(id_or_slug):
+    """Resolve a /profile URL param (db id OR vanity slug) to a db id.
+
+    Direct doc ids always win (legacy links); the slug pointer collection is
+    only consulted when no user doc has that id. Returns None when neither
+    resolves.
+    """
+    if not id_or_slug:
+        return None
+    from db.db import fetch_user_db_id_by_slug
+    pointer = fetch_user_db_id_by_slug(str(id_or_slug).strip().lower())
+    if pointer and pointer.get("user_db_id"):
+        return pointer["user_db_id"]
+    return None
+
+
+def _get_user_profile_by_db_id_or_slug(id_or_slug):
+    """get_user_profile_by_db_id that transparently accepts a vanity slug."""
+    user = get_user_profile_by_db_id(id_or_slug)
+    if user is not None:
+        return user
+    resolved = resolve_user_db_id(id_or_slug)
+    if resolved and resolved != id_or_slug:
+        return get_user_profile_by_db_id(resolved)
+    return None
 
 
 def _attach_hackathon_history(user, public_data, privacy_settings):
@@ -757,6 +909,119 @@ def _attach_hackathon_history(user, public_data, privacy_settings):
     public_data["hackathon_history"] = history
     # Keep the legacy key populated so older frontends don't break during rollout
     public_data["hackathons"] = history
+
+
+def _trim_event_for_portfolio(event):
+    if not event:
+        return None
+    keep = ("event_id", "title", "start_date", "end_date", "location", "image_url")
+    return {k: event.get(k) for k in keep if event.get(k) is not None}
+
+
+@redis_cached(prefix="portfolio:teams", ttl=900)
+def _fetch_portfolio_teams_cached(db_id):
+    """User's teams (allowlisted) with a trimmed `event` object attached."""
+    from db.db import fetch_user_portfolio_teams
+    from common.utils.firebase import get_hackathon_by_event_id
+
+    teams = fetch_user_portfolio_teams(db_id)
+    if not teams:
+        return []
+
+    events = {}
+    for event_id in {t.get("hackathon_event_id") for t in teams if t.get("hackathon_event_id")}:
+        try:
+            events[event_id] = _trim_event_for_portfolio(get_hackathon_by_event_id(event_id))
+        except Exception as e:
+            warning(logger, "Failed to enrich portfolio team event", event_id=event_id, error=str(e))
+
+    for team in teams:
+        team["event"] = events.get(team.get("hackathon_event_id"))
+
+    # Newest event first; teams with no event date sink to the end
+    teams.sort(key=lambda t: ((t.get("event") or {}).get("start_date") or ""), reverse=True)
+    return teams
+
+
+def _attach_teams(user, public_data, privacy_settings):
+    """Attach hackathon teams (demo videos, repos, awards) when opted in."""
+    if privacy_settings.get("teams") != "public":
+        return
+    try:
+        public_data["teams"] = _fetch_portfolio_teams_cached(user.id)
+    except Exception as e:
+        warning(logger, "Failed to load teams for public profile",
+                db_id=getattr(user, 'id', None), exc_info=e)
+
+
+def _attach_certificates(user, public_data, privacy_settings):
+    """Attach heart certificates (from history) + git-fame GitHub certificates."""
+    if privacy_settings.get("certificates") != "public":
+        return
+
+    cdn_server = os.getenv("CDN_SERVER", "https://cdn.ohack.dev")
+    certificates = {"heart_certificates": [], "github_certificates": []}
+
+    history = getattr(user, "history", {}) or {}
+    for entry in (history.get("certificates") or []):
+        if isinstance(entry, str):
+            certificates["heart_certificates"].append({"url": f"{cdn_server}/certificates/{entry}"})
+        elif isinstance(entry, dict):
+            url = entry.get("url")
+            if not url and entry.get("filename"):
+                url = f"{cdn_server}/certificates/{entry['filename']}"
+            if not url:
+                continue
+            certificates["heart_certificates"].append({
+                "url": url,
+                "timestamp": entry.get("timestamp"),
+                "reasons": entry.get("reasons"),
+                "hearts": entry.get("hearts"),
+            })
+
+    github = getattr(user, "github", "") or ""
+    if github:
+        try:
+            from api.certificates.certificate_service import get_certificates_by_github_username
+            cert_allow = ("certificate_url", "date", "repository_url", "stats", "file_id")
+            for cert in (get_certificates_by_github_username(github) or []):
+                # Allowlist — author_email must never leak to the public payload
+                certificates["github_certificates"].append(
+                    {k: cert.get(k) for k in cert_allow if cert.get(k) is not None}
+                )
+        except Exception as e:
+            warning(logger, "Failed to load GitHub certificates for public profile",
+                    github=github, exc_info=e)
+
+    if certificates["heart_certificates"] or certificates["github_certificates"]:
+        public_data["certificates"] = certificates
+
+
+def _attach_github_contributions(user, public_data, privacy_settings):
+    """Attach stored GitHub contribution history when opted in."""
+    if privacy_settings.get("github_history") != "public":
+        return
+    github = getattr(user, "github", "") or ""
+    if not github:
+        return
+    try:
+        from common.utils.firebase import get_github_contributions_for_user
+        public_data["github_history"] = get_github_contributions_for_user(github)
+    except Exception as e:
+        warning(logger, "Failed to load GitHub contributions for public profile",
+                github=github, exc_info=e)
+
+
+def _attach_hearts(user, public_data, privacy_settings):
+    """Attach the hearts total + tier summary when opted in. Zero extra reads."""
+    if privacy_settings.get("hearts") != "public":
+        return
+    try:
+        from services.hearts_service import get_hearts_summary
+        public_data["hearts"] = get_hearts_summary(getattr(user, "history", {}) or {})
+    except Exception as e:
+        warning(logger, "Failed to compute hearts summary for public profile",
+                db_id=getattr(user, 'id', None), exc_info=e)
 
 
 def _attach_received_praises(user, public_data, privacy_settings):
@@ -786,9 +1051,9 @@ def _attach_received_praises(user, public_data, privacy_settings):
 
 
 def get_privacy_filtered_profile_by_db_id(db_id):
-    """Get privacy-filtered profile data by database ID"""
+    """Get privacy-filtered profile data by database ID or vanity slug"""
     logger.debug(f"Get Privacy-Filtered Profile By DB ID: {db_id}")
-    user = get_user_profile_by_db_id(db_id)
+    user = _get_user_profile_by_db_id_or_slug(db_id)
 
     if user is None:
         logger.debug("User not found")
@@ -800,9 +1065,165 @@ def get_privacy_filtered_profile_by_db_id(db_id):
 
     _attach_hackathon_history(user, public_data, privacy_settings)
     _attach_received_praises(user, public_data, privacy_settings)
+    _attach_teams(user, public_data, privacy_settings)
+    _attach_certificates(user, public_data, privacy_settings)
+    _attach_github_contributions(user, public_data, privacy_settings)
+    _attach_hearts(user, public_data, privacy_settings)
 
     logger.debug(f"Privacy-Filtered Profile Result: {public_data}")
     return public_data
+
+
+# Bio video: either uploaded to our CDN (signed-URL direct upload) or a link
+# to an allowlisted video provider (rendered via the frontend's VideoDisplay).
+ALLOWED_VIDEO_CONTENT_TYPES = {
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
+}
+MAX_BIO_VIDEO_BYTES = 100 * 1024 * 1024  # 100MB
+ALLOWED_VIDEO_LINK_HOSTS = {
+    "youtube.com", "www.youtube.com", "youtu.be",
+    "vimeo.com", "player.vimeo.com", "www.vimeo.com",
+    "loom.com", "www.loom.com",
+}
+
+
+def _cdn_server():
+    return os.getenv("CDN_SERVER", "https://cdn.ohack.dev").rstrip("/")
+
+
+def create_bio_video_upload_url(propel_id, content_type, content_length):
+    """Mint a signed GCS PUT URL for a bio video. Returns (payload, status)."""
+    if content_type not in ALLOWED_VIDEO_CONTENT_TYPES:
+        return {"error": f"content_type must be one of {sorted(ALLOWED_VIDEO_CONTENT_TYPES)}"}, 400
+    try:
+        content_length = int(content_length)
+    except (TypeError, ValueError):
+        return {"error": "content_length is required"}, 400
+    if content_length <= 0 or content_length > MAX_BIO_VIDEO_BYTES:
+        return {"error": f"Video must be under {MAX_BIO_VIDEO_BYTES // (1024 * 1024)}MB"}, 400
+
+    user, _user_id = _resolve_and_ensure_user(propel_id)
+    if user is None or not getattr(user, "id", None):
+        return {"error": "Could not resolve your account"}, 404
+
+    from common.utils.cdn import generate_signed_upload_url
+    ext = ALLOWED_VIDEO_CONTENT_TYPES[content_type]
+    filename = f"bio_video_{uuid.uuid4().hex}.{ext}"
+    try:
+        payload = generate_signed_upload_url(
+            directory=f"users/{user.id}",
+            filename=filename,
+            content_type=content_type,
+            max_bytes=MAX_BIO_VIDEO_BYTES,
+        )
+    except Exception as e:
+        exception(logger, "Failed to generate signed upload URL", error=str(e))
+        return {"error": "Could not create an upload URL"}, 500
+    return payload, 200
+
+
+def set_bio_video_url(propel_id, url):
+    """The single writer for bio_video_url. Returns (payload, status).
+
+    Accepts: null/"" (clear), an own-CDN URL under users/<db_id>/ (verified to
+    exist), or an allowlisted provider link (YouTube/Vimeo/Loom).
+    bio_video_url is deliberately NOT in metadata_list — arbitrary URLs must
+    never reach the public page.
+    """
+    user, _user_id = _resolve_and_ensure_user(propel_id)
+    if user is None or not getattr(user, "id", None):
+        return {"error": "Could not resolve your account"}, 404
+
+    url = (url or "").strip()
+    previous = getattr(user, "bio_video_url", "") or ""
+    cdn_prefix = f"{_cdn_server()}/users/{user.id}/"
+
+    if url:
+        if url.startswith(cdn_prefix):
+            blob_path = url[len(_cdn_server()) + 1:]
+            try:
+                from common.utils.cdn import get_blob_metadata
+                meta = get_blob_metadata(blob_path)
+            except Exception as e:
+                exception(logger, "Failed to verify uploaded bio video", error=str(e))
+                return {"error": "Could not verify the uploaded video"}, 500
+            if not meta.get("exists"):
+                return {"error": "Upload not found — did the upload finish?"}, 400
+            if meta.get("content_type") not in ALLOWED_VIDEO_CONTENT_TYPES:
+                return {"error": "Uploaded file is not an allowed video type"}, 400
+            if (meta.get("size") or 0) > MAX_BIO_VIDEO_BYTES:
+                return {"error": "Uploaded video exceeds the size limit"}, 400
+        else:
+            if not validate_url(url):
+                return {"error": "Invalid URL"}, 400
+            from urllib.parse import urlparse
+            host = (urlparse(url).netloc or "").lower().split(":")[0]
+            if host not in ALLOWED_VIDEO_LINK_HOSTS:
+                return {"error": "Video links must be YouTube, Vimeo, or Loom (or an upload)"}, 400
+
+    from db.db import update_user_bio_video
+    update_user_bio_video(user.id, url)
+
+    # Best-effort cleanup of a replaced/removed own-CDN upload
+    if previous and previous.startswith(cdn_prefix) and previous != url:
+        try:
+            from common.utils.cdn import delete_from_cdn
+            delete_from_cdn(previous[len(_cdn_server()) + 1:])
+        except Exception as e:
+            warning(logger, "Failed to delete previous bio video", error=str(e))
+
+    send_slack_audit(action="set_bio_video_url", message=f"User {user.id} set bio video")
+    get_profile_metadata.cache_clear()
+    clear_portfolio_caches(user.id)
+    return {"bio_video_url": url}, 200
+
+
+def set_profile_visibility(propel_id, visibility):
+    """Set the portfolio master toggle. Returns (payload, http_status).
+
+    "public" (search-indexable + sitemap-listed) requires a claimed slug so
+    every indexed portfolio has a clean /u/<slug> URL.
+    """
+    from model.user import PROFILE_VISIBILITY_VALUES
+
+    if visibility not in PROFILE_VISIBILITY_VALUES:
+        return {"error": f"visibility must be one of {list(PROFILE_VISIBILITY_VALUES)}"}, 400
+
+    user, _user_id = _resolve_and_ensure_user(propel_id)
+    if user is None or not getattr(user, "id", None):
+        return {"error": "Could not resolve your account"}, 404
+
+    if visibility == "public" and not getattr(user, "profile_slug", None):
+        return {"error": "Claim a portfolio URL before making your portfolio public"}, 400
+
+    from db.db import update_user_profile_visibility
+    update_user_profile_visibility(user.id, visibility)
+
+    send_slack_audit(action="set_profile_visibility",
+                     message=f"User {user.id} set portfolio visibility to {visibility}")
+    get_profile_metadata.cache_clear()
+    clear_portfolio_caches(user.id)
+    return {"profile_visibility": visibility}, 200
+
+
+@redis_cached(prefix="portfolio:sitemap", ttl=3600)
+def get_searchable_portfolio_sitemap():
+    """[{slug, last_login}] for every opted-in public portfolio (sitemap feed)."""
+    from db.db import fetch_public_portfolio_users
+    return fetch_public_portfolio_users()
+
+
+@redis_cached(prefix="portfolio:profile", ttl=300)
+def get_portfolio_profile(id_or_slug):
+    """Cached public portfolio payload (the fat response the profile page SSRs).
+
+    Cache is keyed on the requested param (db id, slug, or alias each get their
+    own 300s entry); clear_portfolio_caches() wipes the whole prefix on any
+    profile-affecting write. Misses (None) are not cached by redis_cached.
+    """
+    return get_privacy_filtered_profile_by_db_id(id_or_slug)
 
 
 def get_received_praises_by_db_id(db_id, limit=20, offset=0):
@@ -812,7 +1233,7 @@ def get_received_praises_by_db_id(db_id, limit=20, offset=0):
     not found / has praises set to private.
     """
     logger.debug(f"Get Received Praises By DB ID: {db_id} limit={limit} offset={offset}")
-    user = get_user_profile_by_db_id(db_id)
+    user = _get_user_profile_by_db_id_or_slug(db_id)
     if user is None:
         return None
 
@@ -849,7 +1270,7 @@ def get_received_praises_by_db_id(db_id, limit=20, offset=0):
 def get_public_privacy_settings_by_db_id(db_id):
     """Get only the privacy settings for a user by database ID (for public profile views)"""
     logger.debug(f"Get Public Privacy Settings By DB ID: {db_id}")
-    user = get_user_profile_by_db_id(db_id)
+    user = _get_user_profile_by_db_id_or_slug(db_id)
 
     if user is None:
         logger.debug("User not found")

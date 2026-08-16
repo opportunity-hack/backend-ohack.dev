@@ -227,7 +227,9 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         user = None
 
-        if temp is not None:
+        # Missing doc: real Firestore's to_dict() returns None, but
+        # MockFirestore returns {} — the exists check covers both.
+        if temp is not None and getattr(temp, "exists", True):
 
             d = temp.to_dict()
             
@@ -290,13 +292,176 @@ class FirestoreDatabaseInterface(DatabaseInterface):
         return user
 
     def upsert_profile_metadata(self, user:User):
-    
+
         db = self.get_db()  # this connects to our Firestore database
         data = user.serialize_profile_metadata()
-        update_res = db.collection("users").document(user.id).set( data, merge=True)        
+        update_res = db.collection("users").document(user.id).set( data, merge=True)
         logger.info(f"Update Result: {update_res}")
-                
+
         return
+
+    # ----------------------- User slugs ---------------------------------------
+    # user_slugs/{slug} = {user_db_id, is_primary, created_at}. The slug IS the
+    # doc id, so uniqueness is enforced by DocumentReference.create() (atomic,
+    # raises AlreadyExists when the slug is taken) — no index, no transaction.
+
+    def create_user_slug(self, slug, user_db_id, previous_slug=None):
+        """Claim `slug` for `user_db_id`. Returns True on success, False when taken.
+
+        Old slugs are kept as aliases (is_primary=False) so shared links never
+        break and nobody else can claim them.
+        """
+        db = self.get_db()
+        slug_ref = db.collection('user_slugs').document(slug)
+        payload = {
+            "user_db_id": user_db_id,
+            "is_primary": True,
+            "created_at": datetime.now().isoformat() + "Z",
+        }
+        try:
+            if hasattr(slug_ref, "create"):
+                slug_ref.create(payload)
+            else:
+                # MockFirestore has no create(); emulate (non-atomic, test-only)
+                if slug_ref.get().exists:
+                    raise ValueError("already exists")
+                slug_ref.set(payload)
+        except Exception as e:
+            # google.api_core.exceptions.AlreadyExists in prod; ValueError in tests.
+            # Re-claiming one of your own aliases is allowed — flip it primary.
+            existing = slug_ref.get()
+            existing_dict = existing.to_dict() if getattr(existing, "exists", False) else None
+            if existing_dict and existing_dict.get("user_db_id") == user_db_id:
+                slug_ref.set({"is_primary": True}, merge=True)
+            else:
+                info(logger, "Slug already taken", slug=slug, error=str(e))
+                return False
+
+        db.collection("users").document(user_db_id).set({
+            "profile_slug": slug,
+            "slug_updated_at": datetime.now().isoformat() + "Z",
+        }, merge=True)
+
+        if previous_slug and previous_slug != slug:
+            # set(merge) rather than update() so a missing legacy pointer is
+            # (re)created as an alias instead of erroring.
+            db.collection('user_slugs').document(previous_slug).set({
+                "user_db_id": user_db_id,
+                "is_primary": False,
+            }, merge=True)
+
+        return True
+
+    def fetch_user_portfolio_teams(self, db_id):
+        """Allowlisted team docs for every team the user is on.
+
+        Reads the RAW user doc because User.deserialize drops the `teams`
+        DocumentReference array. Uses db.get_all (no `in`-query 10-item cap).
+        """
+        db = self.get_db()
+        user_doc = self.fetch_user_by_db_id_raw(db, db_id)
+        if user_doc is None or not getattr(user_doc, "exists", False):
+            return []
+        d = user_doc.to_dict() or {}
+        team_refs = d.get("teams") or []
+        if not team_refs:
+            return []
+
+        allow = ("name", "slack_channel", "demo_video_url", "devpost_link",
+                 "github_links", "awards", "status", "hackathon_event_id",
+                 "team_number", "active")
+        teams = []
+        try:
+            for t_doc in db.get_all(team_refs):
+                if not getattr(t_doc, "exists", False):
+                    continue
+                t = t_doc.to_dict() or {}
+                trimmed = {k: t[k] for k in allow if k in t}
+                trimmed["id"] = t_doc.id
+                teams.append(trimmed)
+        except Exception as e:
+            warning(logger, "Failed to fetch portfolio teams", db_id=db_id, error=str(e))
+        return teams
+
+    def fetch_user_db_id_by_slug(self, slug):
+        """Resolve a slug (primary or alias) to {slug, user_db_id, is_primary} or None."""
+        if not slug:
+            return None
+        db = self.get_db()
+        doc = db.collection('user_slugs').document(slug).get()
+        if doc is None or not getattr(doc, "exists", False):
+            return None
+        d = doc.to_dict() or {}
+        d["slug"] = doc.id
+        return d
+
+    def fetch_user_slugs_by_db_id(self, user_db_id):
+        """All slug pointers (primary + aliases) owned by a user."""
+        db = self.get_db()
+        results = []
+        try:
+            docs = db.collection('user_slugs').where("user_db_id", "==", user_db_id).stream()
+            for doc in docs:
+                d = doc.to_dict() or {}
+                d["slug"] = doc.id
+                results.append(d)
+        except Exception as e:
+            warning(logger, "Failed to fetch user slugs", user_db_id=user_db_id, error=str(e))
+        return results
+
+    def update_user_profile_visibility(self, user_db_id, visibility):
+        """Set the portfolio master-visibility field on the user doc."""
+        db = self.get_db()
+        db.collection("users").document(user_db_id).set(
+            {"profile_visibility": visibility}, merge=True)
+        return True
+
+    def update_user_volunteering(self, user):
+        """Targeted write of the volunteering array only (dedicated writer —
+        deliberately not part of the generic profile upsert)."""
+        db = self.get_db()
+        db.collection("users").document(user.id).set(
+            {"volunteering": user.volunteering or []}, merge=True)
+        return True
+
+    def update_user_login(self, user_db_id, payload):
+        """Targeted merge write of login-refresh fields (last_login, and
+        provider avatar/name when available). Used by the profile GET path so
+        the propel_id fast-path resolver still refreshes these."""
+        allowed = ("last_login", "profile_image", "name", "nickname")
+        data = {k: v for k, v in (payload or {}).items() if k in allowed and v}
+        if not data:
+            return False
+        db = self.get_db()
+        db.collection("users").document(user_db_id).set(data, merge=True)
+        return True
+
+    def update_user_bio_video(self, user_db_id, url):
+        """Set (or clear) the validated bio_video_url on the user doc."""
+        db = self.get_db()
+        db.collection("users").document(user_db_id).set(
+            {"bio_video_url": url or ""}, merge=True)
+        return True
+
+    def fetch_public_portfolio_users(self):
+        """Slugs of all users who opted into a public (search-indexable) portfolio.
+
+        Single-field equality query — auto-indexed. Only slug + last_login are
+        projected (sitemap needs nothing else; no PII).
+        """
+        db = self.get_db()
+        results = []
+        try:
+            docs = db.collection('users').where("profile_visibility", "==", "public").stream()
+            for doc in docs:
+                d = doc.to_dict() or {}
+                slug = d.get("profile_slug")
+                if not slug:
+                    continue  # public requires a slug; skip inconsistent docs
+                results.append({"slug": slug, "last_login": d.get("last_login")})
+        except Exception as e:
+            warning(logger, "Failed to fetch public portfolio users", error=str(e))
+        return results
     
 
     def finish_deleting_user(self, db, user, user_id):
@@ -527,44 +692,6 @@ class FirestoreDatabaseInterface(DatabaseInterface):
 
         return p
     
-    def insert_helping(self, problem_statement_id, user: User, mentor_or_hacker):
-        
-        my_date = datetime.now()
-        
-        to_add = {
-            "user": user.id,
-            "slack_user": user.user_id,
-            "type": mentor_or_hacker,
-            "timestamp": my_date.isoformat()
-        }
-
-        db = self.get_db()
-
-        problem_statement_doc = db.collection(
-        'problem_statements').document(problem_statement_id)
-    
-        ps_dict = problem_statement_doc.get().to_dict()
-        helping_list = []
-        if "helping" in ps_dict:
-            helping_list = ps_dict["helping"]
-            logger.debug(f"Helping list: {helping_list}")
-
-            helping_list.append(to_add)
-
-        else:
-            logger.debug(f"Start Helping list: {helping_list} * New list created for this problem")
-            helping_list.append(to_add)
-
-
-        logger.debug(f"End Helping list: {helping_list}")
-        problem_result = problem_statement_doc.update({
-            "helping": helping_list
-        })
-
-        return ProblemStatement.deserialize(ps_dict)
-    
-    # ----------------------- Hackathons ------------------------------------------
-
     def fetch_hackathons(self):
         hackathons = []
         db = self.get_db()  # this connects to our Firestore database

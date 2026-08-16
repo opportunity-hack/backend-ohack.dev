@@ -8,6 +8,7 @@ import re
 from google.cloud.firestore import FieldFilter
 # Import OAuth utilities for handling multiple providers (Slack, Google, etc.)
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id
+from common.utils.redis_cache import redis_cached
 
 
 cert_env = json.loads(safe_get_env_var("FIREBASE_CERT_CONFIG"))
@@ -161,15 +162,22 @@ def get_users_by_emails(email_addresses):
     return user_map
 
 
+@redis_cached(prefix="github:contrib", ttl=3600)
 def get_github_contributions_for_user(login):
+    """All stored GitHub contributions for a login, across every org/event.
+
+    Collection-group query on login only (needs the github_contributors.login
+    COLLECTION_GROUP fieldOverride in firestore.indexes.json). Contribution
+    data comes from a batch scraper, so a 1h cache is appropriate.
+    """
     logger.info(f"Getting github contributions for user {login}")
 
     db = get_db()  # this connects to our Firestore database
-    
-    # Use a collection group query to search across all contributor subcollections
-    # FIXME: Hardcoded org_name filter, make this dynamic later
-    contributors_ref = db.collection_group('github_contributors').where("login", "==", login).where("org_name", "==", "2025-Arizona-Opportunity-Hack")
-    
+
+    # Collection group query across all contributor subcollections — every
+    # org/hackathon the user contributed to, not just one hardcoded event.
+    contributors_ref = db.collection_group('github_contributors').where("login", "==", login)
+
     docs = contributors_ref.stream()
 
     github_history = []
@@ -182,11 +190,15 @@ def get_github_contributions_for_user(login):
         org_ref = repo_ref.parent.parent
         contribution["repo_name"] = repo_ref.id
         contribution["org_name"] = org_ref.id
+        # Firestore timestamps aren't JSON-serializable (blocks redis caching)
+        ts = contribution.get("timestamp")
+        if hasattr(ts, "isoformat"):
+            contribution["timestamp"] = ts.isoformat()
         github_history.append(contribution)
 
     logger.info(f"Found {len(github_history)} contributions for user {login}")
 
-    return github_history     
+    return github_history
 
 
 
@@ -602,6 +614,28 @@ def get_certficate_by_file_id(file_id):
         adict["id"] = doc.id
         return adict
     
+def fetch_certificates_by_github_username(github_username):
+    """All certificate docs stamped with this github_username (lowercased).
+
+    Single-field equality query — auto-indexed, no composite needed (sorting
+    happens in the service layer). Pre-backfill docs without the field simply
+    don't match.
+    """
+    if not github_username:
+        return []
+    db = get_db()
+    certs = []
+    try:
+        docs = db.collection('certificates').where("github_username", "==", github_username).stream()
+        for doc in docs:
+            adict = doc.to_dict()
+            adict["id"] = doc.id
+            certs.append(adict)
+    except Exception as e:
+        logger.warning(f"Failed to fetch certificates for github user {github_username}: {e}")
+    return certs
+
+
 def get_recent_certs_from_db():
     db = get_db()  # this connects to our Firestore database
     # Get recent certificates by date

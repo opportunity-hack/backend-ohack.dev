@@ -33,7 +33,59 @@ from common.utils.oauth_providers import normalize_slack_user_id
 from services.users_service import save_user
 
 
-def get_hearts_for_all_users():    
+# Heart tiers — thresholds mirror the frontend's src/lib/heartTiers.js.
+# Keep both in lockstep if rewards change.
+HEART_TIERS = [
+    ("Diamond", 48),
+    ("Platinum", 24),
+    ("Gold", 10),
+    ("Silver", 5),
+    ("Bronze", 2),
+]
+
+
+def get_heart_tier(total):
+    """Highest tier name reached for a heart total, or None below Bronze."""
+    try:
+        total = float(total or 0)
+    except (TypeError, ValueError):
+        return None
+    for name, threshold in HEART_TIERS:
+        if total >= threshold:
+            return name
+    return None
+
+
+def get_hearts_summary(history):
+    """Pure summary of a user's hearts from their `history` map.
+
+    Sum rule = the explicit `what` + `how` maps only — matches the frontend
+    HeartGauge and stays deterministic if unrelated keys (certificates, etc.)
+    are added to history later. Note the leaderboard sum
+    (get_hearts_leaderboard) instead skips keys containing "certificates" —
+    TODO: unify it onto this function.
+    """
+    breakdown = {"what": {}, "how": {}}
+    total = 0.0
+    for section in ("what", "how"):
+        values = (history or {}).get(section) or {}
+        if not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            try:
+                amount = float(value or 0)
+            except (TypeError, ValueError):
+                continue
+            breakdown[section][key] = amount
+            total += amount
+    return {
+        "total": total,
+        "breakdown": breakdown,
+        "tier": get_heart_tier(total),
+    }
+
+
+def get_hearts_for_all_users():
     users = fetch_users()
 
     result = []    
@@ -211,6 +263,13 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
     if len(reasons) >= 1:
         for reason in reasons:
             add_hearts_for_user(id, amount, reason)
+
+        # New hearts must show up on the public portfolio promptly
+        try:
+            from services.users_service import clear_portfolio_caches
+            clear_portfolio_caches(id)
+        except Exception as e:
+            warning(logger, "Failed to clear portfolio caches after hearts", error=str(e))
 
         reasons_string = ", ".join(get_reason_pretty(reason) for reason in reasons)
 

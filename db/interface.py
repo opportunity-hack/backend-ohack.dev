@@ -21,7 +21,13 @@ class DatabaseInterface(metaclass=abc.ABCMeta):
                 hasattr(__subclass, 'delete_user_by_user_id') and
                 callable(__subclass.delete_user_by_user_id) and
                 hasattr(__subclass, 'delete_user_by_db_id') and
-                callable(__subclass.delete_user_by_db_id))
+                callable(__subclass.delete_user_by_db_id) and
+                hasattr(__subclass, 'create_user_slug') and
+                callable(__subclass.create_user_slug) and
+                hasattr(__subclass, 'fetch_user_db_id_by_slug') and
+                callable(__subclass.fetch_user_db_id_by_slug) and
+                hasattr(__subclass, 'fetch_user_slugs_by_db_id') and
+                callable(__subclass.fetch_user_slugs_by_db_id))
     
     #Team:
     #get_team_by_name

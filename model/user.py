@@ -1,5 +1,68 @@
-metadata_list = ["role", "expertise", "education", "company", "why", "shirt_size", "github", "volunteering", "linkedin_url", "instagram_url", "propel_id"]
-privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback", "hackathon_history", "praises"]
+# ---------------------------------------------------------------------------
+# PROFILE FIELD REGISTRY — the single source of truth for flat, user-owned
+# profile storage fields. Adding a profile field = ONE entry here (plus a
+# privacy_fields entry if it's privacy-gated). The registry generates the
+# read set (deserialize), the owner-write set (update_from_metadata), the
+# persistence set (serialize_profile_metadata), and the canonical response
+# serializer (serialize_profile_fields). api/users/tests/test_field_registry.py
+# fails CI when any remaining hand-list drifts out of sync.
+#
+# Tuple: (name, default, owner_editable, persisted)
+#   owner_editable — POST /api/users/profile may set it
+#   persisted      — the generic profile upsert writes it
+# Derived collections (badges/teams/hackathons/history), identity fields
+# (id/user_id/email_address/name/nickname/profile_image/last_login), and
+# dedicated-route fields (bio_video_url/profile_slug/profile_visibility) are
+# deliberately NOT specs — see PROFILE_READONLY_RESPONSE_FIELDS below.
+# ---------------------------------------------------------------------------
+PROFILE_FIELD_SPECS = [
+    ("role", "", True, True),
+    ("expertise", "", True, True),
+    ("education", "", True, True),
+    ("company", "", True, True),
+    ("why", "", True, True),
+    ("shirt_size", "", True, True),
+    ("github", "", True, True),
+    ("linkedin_url", "", True, True),
+    ("instagram_url", "", True, True),
+    ("street_address", "", True, True),
+    ("street_address_2", "", True, True),
+    ("city", "", True, True),
+    ("state", "", True, True),
+    ("postal_code", "", True, True),
+    ("country", "", True, True),
+    ("want_stickers", "", True, True),
+    ("bio", "", True, True),
+    ("headline", "", True, True),
+    ("portfolio_links", list, True, True),
+    # System-managed: persisted (the tier-3 resolver backfills it) but a
+    # POSTed metadata.propel_id must never be accepted from the client.
+    ("propel_id", None, False, True),
+    # Dedicated writer (save_volunteering_time -> update_user_volunteering).
+    # NEVER in the generic upsert write set — a profile save racing a
+    # volunteering log must not clobber entries.
+    ("volunteering", list, False, False),
+]
+
+
+def _default(dv):
+    return dv() if callable(dv) else dv
+
+
+# Read set — name kept for backwards compatibility with existing importers
+metadata_list = [n for (n, _d, _e, _p) in PROFILE_FIELD_SPECS]
+# What POST /profile may set
+OWNER_EDITABLE_FIELDS = [n for (n, _d, e, _p) in PROFILE_FIELD_SPECS if e]
+# What the generic profile upsert persists
+PROFILE_PERSISTED_FIELDS = [n for (n, _d, _e, p) in PROFILE_FIELD_SPECS if p]
+
+# Read-only extras every canonical profile response also carries. These are
+# either identity fields, derived data, or dedicated-route fields.
+PROFILE_READONLY_RESPONSE_FIELDS = [
+    "id", "user_id", "email_address", "name", "nickname", "profile_image",
+    "last_login", "history", "bio_video_url", "profile_slug", "profile_visibility",
+]
+privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback", "hackathon_history", "praises", "bio", "bio_video_url", "portfolio_links", "teams", "certificates", "github_history", "hearts"]
 
 # Privacy fields that default to "public" for new/legacy users (everything else defaults private).
 default_public_privacy_fields = {"praises"}
@@ -7,8 +70,25 @@ default_public_privacy_fields = {"praises"}
 # Fields that should NEVER be shared publicly regardless of privacy settings
 pii_fields = ["email_address", "last_login", "propel_id", "volunteering"]
 
-# Fields that are always safe to share publicly (basic profile info)
-safe_public_fields = ["name", "nickname", "profile_image", "user_id"]
+# Fields that are always safe to share publicly (basic profile info).
+# id + profile_slug are the public URL identifiers; the frontend needs both to
+# canonicalize /profile/<db_id> <-> /u/<slug>.
+safe_public_fields = ["name", "nickname", "profile_image", "user_id", "id", "profile_slug"]
+
+# Fields exposed by the internal by-id profile lookup (GET /api/users/<id>/profile),
+# consumed by team rosters, peer feedback, and admin giveaway UIs to show a
+# GitHub username alongside name/avatar — a lower bar than the fully public,
+# search-indexable portfolio (get_public_profile_data), which independently
+# gates `github` behind that user's own privacy toggle. github is NOT added to
+# safe_public_fields itself because get_public_profile_data also reads that
+# list unconditionally — doing so would leak github there regardless of privacy.
+internal_lookup_fields = safe_public_fields + ["github"]
+
+# Portfolio visibility master toggle: "private" (default — shareable link,
+# noindex, today's per-field rendering) or "public" (search-indexable, listed
+# in the sitemap; requires a claimed slug).
+DEFAULT_PROFILE_VISIBILITY = "private"
+PROFILE_VISIBILITY_VALUES = ("private", "public")
 
 
 def _default_privacy_value(field):
@@ -29,6 +109,21 @@ class User:
     role = ""
     company = ""
     why = ""
+    bio = ""
+    headline = ""
+    linkedin_url = ""
+    instagram_url = ""
+    street_address = ""
+    street_address_2 = ""
+    city = ""
+    state = ""
+    postal_code = ""
+    country = ""
+    want_stickers = ""
+    bio_video_url = ""
+    portfolio_links = []
+    profile_slug = None
+    profile_visibility = None
     badges = []
     teams = []
     hackathons = []
@@ -47,7 +142,14 @@ class User:
         u.badges = []
         u.hackathons = []
         u.teams = []
-        u.volunteering = []
+
+        # Registry-driven: every spec field is ALWAYS set as an instance attr
+        # (kills the old dir(self) fragility where linkedin_url/instagram_url
+        # only existed after deserialize happened to set them).
+        for field_name, default_value, _editable, _persisted in PROFILE_FIELD_SPECS:
+            setattr(u, field_name, d.get(field_name, _default(default_value)))
+
+        # Identity + dedicated-route fields (hand-written by design)
         u.id = d['id']
         u.email_address = d.get('email_address', '')
         u.last_login = d.get('last_login')
@@ -55,17 +157,9 @@ class User:
         u.profile_image = d.get('profile_image')
         u.name = d['name'] if 'name' in d else ''
         u.nickname = d['nickname'] if 'nickname' in d else ''
-        u.expertise = d['expertise'] if 'expertise' in d else ''
-        u.education = d['education'] if 'education' in d else ''
-        u.shirt_size = d['shirt_size'] if 'shirt_size' in d else ''
-        u.linkedin_url = d['linkedin_url'] if 'linkedin_url' in d else ''
-        u.instagram_url = d['instagram_url'] if 'instagram_url' in d else ''
-        u.github = d['github'] if 'github' in d else ''
-        u.role = d['role'] if 'role' in d else ''
-        u.company = d['company'] if 'company' in d else ''
-        u.why = d['why'] if 'why' in d else ''
-        u.volunteering = d['volunteering'] if 'volunteering' in d else []
-        u.propel_id = d['propel_id'] if 'propel_id' in d else None
+        u.bio_video_url = d.get('bio_video_url', '')
+        u.profile_slug = d.get('profile_slug')
+        u.profile_visibility = d.get('profile_visibility')
         u.privacy_settings = d['privacy_settings'] if 'privacy_settings' in d else {}
 
         # Handle history in a generic way
@@ -121,22 +215,35 @@ class User:
         return [h.serialize() for h in self.hackathons] if self.hackathons else []
 
     def serialize_profile_metadata(self):
-        d = {}
-        props = dir(self)
-        for m in metadata_list:
-            if m in props:
-                d[m] = getattr(self, m)
+        """What the generic profile upsert persists. Registry-driven —
+        `volunteering` is deliberately NOT here (dedicated writer)."""
+        d = {m: getattr(self, m) for m in PROFILE_PERSISTED_FIELDS}
 
         # Add privacy settings
         d['privacy_settings'] = self.get_privacy_settings()
         return d
-    
+
     def update_from_metadata(self, d):
-        props = dir(self)
-        for m in metadata_list:
-            if m in d and m in props:
+        """Apply a client-submitted metadata dict. Registry-driven — only
+        OWNER_EDITABLE_FIELDS are accepted (a POSTed propel_id/volunteering
+        is ignored)."""
+        for m in OWNER_EDITABLE_FIELDS:
+            if m in d:
                 setattr(self, m, d[m])
         return
+
+    def serialize_profile_fields(self):
+        """THE one flat profile serializer — every canonical profile response
+        (new stack AND legacy delegates) is built from this."""
+        d = {n: getattr(self, n, _default(dv)) for n, dv, _e, _p in PROFILE_FIELD_SPECS}
+        for n in PROFILE_READONLY_RESPONSE_FIELDS:
+            d[n] = getattr(self, n, None)
+        d["profile_visibility"] = d.get("profile_visibility") or DEFAULT_PROFILE_VISIBILITY
+        if not isinstance(d.get("history"), dict):
+            d["history"] = {}
+        d["badges"] = self.badges or []
+        d["privacy_settings"] = self.get_privacy_settings()
+        return d
 
     def get_privacy_settings(self):
         """Get privacy settings, initializing defaults if needed.
@@ -171,8 +278,13 @@ class User:
             if hasattr(self, field) and getattr(self, field) is not None:
                 public_data[field] = getattr(self, field)
 
-        # Fields that need special handling (not simple attribute lookups)
-        special_fields = {"hackathon_history", "what", "how", "badges"}
+        # Fields that need special handling (not simple attribute lookups).
+        # teams/certificates/github_history/hearts are attached by
+        # users_service (they need extra reads); portfolio_links is list-valued;
+        # headline rides the bio privacy field below.
+        special_fields = {"hackathon_history", "what", "how", "badges",
+                          "teams", "certificates", "github_history", "hearts",
+                          "portfolio_links"}
 
         # Include privacy-controlled fields only if user made them public
         for field in privacy_fields:
@@ -205,6 +317,18 @@ class User:
         # Badges: stored as a list, not a simple field value
         if privacy_settings.get("badges", False) == "public" and hasattr(self, 'badges') and self.badges:
             public_data["badges"] = self.badges
+
+        # Portfolio links: list-valued, only emitted when non-empty
+        if privacy_settings.get("portfolio_links", False) == "public" and self.portfolio_links:
+            public_data["portfolio_links"] = self.portfolio_links
+
+        # Headline rides the bio privacy field (one "About" toggle covers both)
+        if privacy_settings.get("bio", False) == "public" and self.headline:
+            public_data["headline"] = self.headline
+
+        # Master visibility toggle is always emitted so the frontend can decide
+        # robots/index behavior. Default private (never indexed without opt-in).
+        public_data["profile_visibility"] = self.profile_visibility or DEFAULT_PROFILE_VISIBILITY
 
         # Include privacy settings themselves for the frontend to know what's public
         public_data["privacy_settings"] = privacy_settings
