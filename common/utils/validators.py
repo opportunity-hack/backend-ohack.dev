@@ -161,6 +161,20 @@ def validate_hackathon_data(data):
     if meals is not None:
         validate_meals(meals)
 
+    # Validate meals_mode if present ("menu" = hackers pick items per slot,
+    # "schedule" = times-only, nothing to select on the hacker application)
+    meals_mode = constraints.get("meals_mode")
+    if meals_mode not in (None, ""):
+        if not isinstance(meals_mode, str) or meals_mode not in ALLOWED_MEALS_MODES:
+            raise ValueError(f"meals_mode must be one of {sorted(ALLOWED_MEALS_MODES)}")
+
+    # Validate meals_note if present (optional intro line shown to hackers
+    # above the times-only meal schedule)
+    meals_note = constraints.get("meals_note")
+    if meals_note is not None:
+        if not isinstance(meals_note, str) or len(meals_note) > MAX_MEALS_NOTE_LENGTH:
+            raise ValueError(f"meals_note must be a string <= {MAX_MEALS_NOTE_LENGTH} chars")
+
     # Validate event_photos if present
     event_photos = data.get("event_photos")
     if event_photos is not None:
@@ -283,6 +297,18 @@ def validate_hackathon_data_partial(data):
                     _skip("constraints.meals", str(e))
                     c.pop("meals")
 
+            if "meals_mode" in c and c["meals_mode"] not in (None, ""):
+                mm = c["meals_mode"]
+                if not isinstance(mm, str) or mm not in ALLOWED_MEALS_MODES:
+                    _skip("constraints.meals_mode", f"must be one of {sorted(ALLOWED_MEALS_MODES)}")
+                    c.pop("meals_mode")
+
+            if "meals_note" in c and c["meals_note"] is not None:
+                mn = c["meals_note"]
+                if not isinstance(mn, str) or len(mn) > MAX_MEALS_NOTE_LENGTH:
+                    _skip("constraints.meals_note", f"must be a string <= {MAX_MEALS_NOTE_LENGTH} chars")
+                    c.pop("meals_note")
+
             cleaned["constraints"] = c
 
     # event_photos
@@ -329,6 +355,15 @@ def validate_hackathon_data_partial(data):
 
     return cleaned, skipped
 
+
+# How an event collects meals from hackers. Kept in sync with the frontend
+# MEALS_MODE_* constants in src/components/ApplicationForm/MealSchedule.js.
+# "menu" (default) = hackers pick one item per slot; "schedule" = times-only.
+ALLOWED_MEALS_MODES = {"menu", "schedule"}
+
+# Max length for constraints.meals_note (kept in sync with
+# MEALS_NOTE_MAX_LENGTH in the frontend MealSchedule.js).
+MAX_MEALS_NOTE_LENGTH = 500
 
 ALLOWED_DIETARY_TAGS = {
     "vegetarian",
