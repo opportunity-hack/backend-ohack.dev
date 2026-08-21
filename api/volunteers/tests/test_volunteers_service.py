@@ -47,8 +47,11 @@ def test_create_volunteer(mock_get_db):
     mock_db.collection.return_value = mock_collection
     mock_collection.document.return_value = mock_doc
     
-    # Mock get_volunteer_by_user_id to return None (new volunteer)
-    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=None):
+    # Mock get_volunteer_by_user_id to return None (new volunteer). The shared
+    # identity resolver then falls back to PropelAuth — stub that out too so
+    # tests never make a network call.
+    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=None), \
+         patch('services.users_service.get_propel_user_details_by_id', return_value=None):
         # Mock get_slack_user_by_email
         with patch('services.volunteers_service.get_slack_user_by_email', return_value={"id": "slack-123"}):
             # Call the function
@@ -102,10 +105,231 @@ def test_update_volunteer(mock_get_db):
         assert result["id"] == "abc-123"
         assert result["shortBio"] == "Updated bio"
         
-        # Verify database calls
+        # Verify database calls. The update path writes via set(..., merge=True)
+        # so that brand-new fields land too.
         mock_db.collection.assert_called_with('volunteers')
         mock_collection.document.assert_called_once_with("abc-123")
-        mock_doc.update.assert_called_once()
+        mock_doc.set.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Staff-owned fields (STAFF_OWNED_VOLUNTEER_FIELDS)
+#
+# An applicant's own submit/update must never write approval, check-in or
+# refund state. Regression cover for the bug where every application edit sent
+# `isSelected: false` from the form's initial state and silently un-approved
+# an already-approved mentor/judge/volunteer/sponsor.
+# ---------------------------------------------------------------------------
+
+# The notification fan-out at the end of create/update talks to Slack and
+# Resend for real; these tests only care about what gets written to Firestore.
+def _silence_notifications():
+    return [
+        patch('services.volunteers_service.send_admin_notification_email'),
+        patch('services.volunteers_service.send_slack_volunteer_notification'),
+        patch('services.volunteers_service.send_volunteer_confirmation_email'),
+        patch('services.volunteers_service.get_slack_user_by_email', return_value=None),
+    ]
+
+
+def _written_doc(mock_doc):
+    """The dict handed to Firestore by whichever write path ran."""
+    if mock_doc.set.called:
+        return mock_doc.set.call_args[0][0]
+    return mock_doc.update.call_args[0][0]
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_does_not_let_applicant_reset_isSelected(mock_get_db):
+    """An approved volunteer editing their application stays approved."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    mock_collection = MagicMock()
+    mock_doc = MagicMock()
+    mock_db.collection.return_value = mock_collection
+    mock_collection.document.return_value = mock_doc
+
+    approved = {**MOCK_VOLUNTEER_DOC, "isSelected": True}
+
+    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=approved):
+        for p in _silence_notifications():
+            p.start()
+        try:
+            result = create_or_update_volunteer(
+                user_id=MOCK_USER_ID,
+                email=MOCK_EMAIL,
+                event_id=MOCK_EVENT_ID,
+                volunteer_data={
+                    **MOCK_MENTOR_DATA,
+                    "shortBio": "Updated bio",
+                    # What the mentor/volunteer/sponsor forms actually send.
+                    "isSelected": False,
+                },
+            )
+        finally:
+            patch.stopall()
+
+    written = _written_doc(mock_doc)
+    assert written["isSelected"] is True, "applicant payload must not un-approve"
+    assert result["isSelected"] is True
+    # The rest of the edit still goes through.
+    assert written["shortBio"] == "Updated bio"
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_does_not_let_applicant_clobber_checkin_or_refund_state(mock_get_db):
+    """Check-in and refund bookkeeping are staff/system-owned."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    mock_collection = MagicMock()
+    mock_doc = MagicMock()
+    mock_db.collection.return_value = mock_collection
+    mock_collection.document.return_value = mock_doc
+
+    existing = {
+        **MOCK_VOLUNTEER_DOC,
+        "isSelected": True,
+        "checkInTime": "2026-10-12T09:00:00",
+        "isCheckedIn": True,
+        "deposit_status": "refunded",
+    }
+
+    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=existing):
+        for p in _silence_notifications():
+            p.start()
+        try:
+            create_or_update_volunteer(
+                user_id=MOCK_USER_ID,
+                email=MOCK_EMAIL,
+                event_id=MOCK_EVENT_ID,
+                volunteer_data={
+                    **MOCK_MENTOR_DATA,
+                    "checkInTime": None,
+                    "isCheckedIn": False,
+                    "deposit_status": "paid",
+                    "deposit_refund_id": "re_attacker",
+                },
+            )
+        finally:
+            patch.stopall()
+
+    written = _written_doc(mock_doc)
+    # Omitted from the merge write, so Firestore keeps the stored values.
+    for field in ("checkInTime", "isCheckedIn", "deposit_status", "deposit_refund_id"):
+        assert field not in written, f"{field} must not be writable by an applicant"
+
+
+@patch('services.volunteers_service.get_db')
+def test_create_ignores_applicant_supplied_isSelected(mock_get_db):
+    """A first-time applicant cannot self-approve via the payload."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    mock_collection = MagicMock()
+    mock_doc = MagicMock()
+    mock_db.collection.return_value = mock_collection
+    mock_collection.document.return_value = mock_doc
+
+    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=None), \
+         patch('services.users_service.get_propel_user_details_by_id', return_value=None):
+        for p in _silence_notifications():
+            p.start()
+        try:
+            result = create_or_update_volunteer(
+                user_id=MOCK_USER_ID,
+                email=MOCK_EMAIL,
+                event_id=MOCK_EVENT_ID,
+                volunteer_data={**MOCK_MENTOR_DATA, "isSelected": True},
+            )
+        finally:
+            patch.stopall()
+
+    assert _written_doc(mock_doc)["isSelected"] is False
+    assert result["isSelected"] is False
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_still_accepts_deposit_payment_fields(mock_get_db):
+    """The hacker Stripe return sets these on /update — must not be stripped."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    mock_collection = MagicMock()
+    mock_doc = MagicMock()
+    mock_db.collection.return_value = mock_collection
+    mock_collection.document.return_value = mock_doc
+
+    existing = {**MOCK_VOLUNTEER_DOC, "volunteer_type": "hacker", "type": "hackers"}
+
+    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=existing):
+        for p in _silence_notifications():
+            p.start()
+        try:
+            create_or_update_volunteer(
+                user_id=MOCK_USER_ID,
+                email=MOCK_EMAIL,
+                event_id=MOCK_EVENT_ID,
+                volunteer_data={
+                    "volunteer_type": "hacker",
+                    "type": "hackers",
+                    "stripe_payment_intent_id": "pi_123",
+                    "deposit_amount_cents": 2500,
+                    "deposit_disposition": "refund",
+                },
+            )
+        finally:
+            patch.stopall()
+
+    written = _written_doc(mock_doc)
+    assert written["stripe_payment_intent_id"] == "pi_123"
+    assert written["deposit_amount_cents"] == 2500
+    assert written["deposit_disposition"] == "refund"
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_resolves_existing_doc_by_email_when_user_id_differs(mock_get_db):
+    """The duplicate-doc bug: a volunteer doc stored under a different identity
+    shape (email match, OAuth user_id, admin-created) must hit the UPDATE
+    branch, not spawn a second isSelected=False doc. The write path uses the
+    same 3-way resolver as the GET route (find_volunteer_by_caller_identity)."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    mock_collection = MagicMock()
+    mock_doc = MagicMock()
+    mock_db.collection.return_value = mock_collection
+    mock_collection.document.return_value = mock_doc
+
+    # Doc was stored with an OAuth-shaped user_id, so the propel-UUID lookup
+    # misses; the PropelAuth-email lookup is what finds it.
+    approved_legacy_doc = {
+        **MOCK_VOLUNTEER_DOC,
+        "user_id": "oauth2|slack|T1Q7936BH-U123ABC",
+        "isSelected": True,
+    }
+
+    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=None), \
+         patch('services.users_service.get_propel_user_details_by_id',
+               return_value=(MOCK_EMAIL, "oauth2|slack|T1Q7936BH-U123ABC", None, None, "Test Mentor", "tm")), \
+         patch('services.volunteers_service.get_volunteer_by_email', return_value=approved_legacy_doc):
+        for p in _silence_notifications():
+            p.start()
+        try:
+            result = create_or_update_volunteer(
+                user_id=MOCK_USER_ID,  # propel UUID != stored user_id
+                email=MOCK_EMAIL,
+                event_id=MOCK_EVENT_ID,
+                volunteer_data={**MOCK_MENTOR_DATA, "shortBio": "Edited bio"},
+            )
+        finally:
+            patch.stopall()
+
+    # UPDATE branch: writes to the EXISTING doc id — no new doc created.
+    mock_collection.document.assert_called_once_with("abc-123")
+    written = _written_doc(mock_doc)
+    assert written["shortBio"] == "Edited bio"
+    # Approval and the doc's original identity survive the edit.
+    assert written["isSelected"] is True
+    assert written["user_id"] == "oauth2|slack|T1Q7936BH-U123ABC"
+    assert result["isSelected"] is True
+
 
 @patch('services.volunteers_service.get_db')
 def test_get_volunteers_by_event(mock_get_db):

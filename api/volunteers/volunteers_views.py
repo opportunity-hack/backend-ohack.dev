@@ -6,8 +6,7 @@ from common.log import get_logger
 from common.exceptions import InvalidUsageError
 from common.utils.slack import send_slack_audit
 from services.volunteers_service import (
-    get_volunteer_by_user_id,
-    get_volunteer_by_email,
+    find_volunteer_by_caller_identity,
     get_volunteers_by_event,
     create_or_update_volunteer,
     update_volunteer_selection,
@@ -97,13 +96,13 @@ def handle_submit(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, A
         if not isinstance(email, str) or '@' not in email:
             return _error_response("Invalid email format", 400)
         
-        # Set user_id if provided in user, otherwise see if it's in volunteer_data, otherwise use None
-        user_id = None
-        if hasattr(user, 'user_id'):
-            user_id = user.user_id
-        elif 'user_id' in volunteer_data:
-            user_id = volunteer_data['user_id']
-        
+        # Identity comes from the verified token only. These routes are
+        # @auth.require_user, so never trust a user_id supplied in the body —
+        # that let an anonymous caller submit an application as someone else.
+        user_id = getattr(user, 'user_id', None)
+        if not user_id:
+            return _error_response("Authentication required", 401)
+
         # Set appropriate type field based on volunteer_type
         type_mapping = {
             'mentor': 'mentors',
@@ -143,29 +142,11 @@ def handle_get(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, Any]
     try:
         uid = getattr(user, "user_id", None)
 
-        # 1. Direct match on the id we were handed. For self-submitted apps this
-        #    is the PropelAuth UUID (handle_submit stores auth_user.user_id), and
-        #    for the ?userId= query-param path it's whatever the caller passed.
-        volunteer = get_volunteer_by_user_id(uid, event_id, volunteer_type) if uid else None
-
-        # 2. Fall back to email / OAuth user_id. Volunteer docs created through
-        #    flows that stored the OAuth identity (oauth2|slack|...) rather than
-        #    the PropelAuth UUID won't match step 1, so resolve the caller the
-        #    same way the mentor self-check does: email first, then OAuth user_id.
-        if volunteer is None and uid:
-            email = oauth_user_id = None
-            try:
-                from services.users_service import get_propel_user_details_by_id
-                details = get_propel_user_details_by_id(uid) or ()
-                email = details[0] if len(details) > 0 else None
-                oauth_user_id = details[1] if len(details) > 1 else None
-            except Exception as resolve_err:
-                logger.warning(f"handle_get: could not resolve caller {uid}: {resolve_err}")
-
-            if email:
-                volunteer = get_volunteer_by_email(email, event_id, volunteer_type)
-            if volunteer is None and oauth_user_id and oauth_user_id != uid:
-                volunteer = get_volunteer_by_user_id(oauth_user_id, event_id, volunteer_type)
+        # Shared 3-way resolver (propel UUID -> PropelAuth email -> OAuth
+        # user_id). The submit/update path uses the SAME resolver, so any doc
+        # this route can show, an update can also find — keeping edits from
+        # falling into the create branch and duplicating the application.
+        volunteer = find_volunteer_by_caller_identity(uid, event_id, volunteer_type)
 
         if volunteer:
             logger.info(f"Retrieved {volunteer_type} application for event {event_id}")
@@ -194,7 +175,7 @@ def handle_admin_list(user, event_id: str, volunteer_type: str) -> Tuple[Dict[st
 
 # Mentor routes
 @bp.route('/mentor/application/<event_id>/submit', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def submit_mentor_application(event_id):    
     """Submit a mentor application for a specific event."""
     user = auth_user
@@ -205,7 +186,7 @@ def submit_mentor_application(event_id):
     return handle_submit(user, event_id, 'mentor')
 
 @bp.route('/mentor/application/<event_id>/update', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def update_mentor_application(event_id):
     """Update a mentor application for a specific event."""
     user = auth_user
@@ -260,7 +241,7 @@ def get_my_volunteer_status_for_event(event_id):
 
 # Sponsor routes
 @bp.route('/sponsor/application/<event_id>/submit', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def submit_sponsor_application(event_id):
     """Submit a sponsor application for a specific event."""
     user = auth_user
@@ -271,7 +252,7 @@ def submit_sponsor_application(event_id):
     return handle_submit(user, event_id, 'sponsor')
 
 @bp.route('/sponsor/application/<event_id>/update', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def update_sponsor_application(event_id):
     """Update a sponsor application for a specific event."""
     user = auth_user
@@ -307,7 +288,7 @@ def admin_list_sponsors(user, org, event_id):
 
 # Judge routes
 @bp.route('/judge/application/<event_id>/submit', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def submit_judge_application(event_id):
     """Submit a judge application for a specific event."""
     user = auth_user
@@ -318,7 +299,7 @@ def submit_judge_application(event_id):
     return handle_submit(user, event_id, 'judge')
 
 @bp.route('/judge/application/<event_id>/update', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def update_judge_application(event_id):
     """Update a judge application for a specific event."""
     user = auth_user
@@ -354,7 +335,7 @@ def admin_list_judges(user, org, event_id):
 
 # Generic volunteer routes
 @bp.route('/volunteer/application/<event_id>/submit', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def submit_volunteer_application(event_id):
     """Submit a general volunteer application for a specific event."""
     user = auth_user
@@ -365,7 +346,7 @@ def submit_volunteer_application(event_id):
     return handle_submit(user, event_id, 'volunteer')
 
 @bp.route('/volunteer/application/<event_id>/update', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def update_volunteer_application(event_id):
     """Update a general volunteer application for a specific event."""
     user = auth_user
@@ -535,7 +516,7 @@ def stripe_webhook_hacker_deposit():
 
 # Generic hacker routes
 @bp.route('/hacker/application/<event_id>/submit', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def submit_hacker_application(event_id):
     """Submit a hacker application for a specific event."""
     user = auth_user
@@ -546,7 +527,7 @@ def submit_hacker_application(event_id):
     return handle_submit(user, event_id, 'hacker')
 
 @bp.route('/hacker/application/<event_id>/update', methods=['POST'])
-@auth.optional_user
+@auth.require_user
 def update_hacker_application(event_id):
     """Update a hacker application for a specific event."""
     user = auth_user
