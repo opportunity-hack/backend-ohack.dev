@@ -26,7 +26,17 @@ Submit or update volunteer applications for specific events.
 - `event_id`: Event ID
 
 #### Authentication
-- Optional user authentication
+- **Required.** A valid bearer token is mandatory; identity is taken from the
+  token only, never from a `user_id` in the request body.
+
+#### Staff-owned fields (accepted but ignored)
+Approval, check-in and refund state are server-authoritative — an applicant's
+payload can never set them. See `STAFF_OWNED_VOLUNTEER_FIELDS` in
+`services/volunteers_service.py`. Notably `isSelected` is ignored here; approval
+changes only via `POST /api/admin/volunteer/<volunteer_id>/select`. Deposit
+*payment* fields (`stripe_payment_intent_id`, `deposit_amount_cents`,
+`deposit_disposition`) are NOT in that set — the hacker Stripe return flow sets
+them on `/update`.
 
 #### Request Body (JSON)
 ```json

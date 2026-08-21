@@ -26,6 +26,34 @@ import io
 
 logger = get_logger("services.volunteers_service")
 
+# Volunteer-doc fields that only staff / system flows may write. A self-service
+# application submit or update must never change these — the applicant's own
+# payload is not authoritative. Owners: approval -> update_volunteer_selection();
+# check-in/out -> mentor_checkin()/mentor_checkout(); refund bookkeeping ->
+# refund_hacker_deposit() and the Stripe webhook handlers.
+#
+# Deliberately NOT listed: deposit_amount_cents, deposit_disposition and
+# stripe_payment_intent_id — the hacker form legitimately sets those when it
+# returns from Stripe Checkout, which happens on the /update path.
+STAFF_OWNED_VOLUNTEER_FIELDS = frozenset({
+    'isSelected',
+    'isCheckedIn', 'checkedIn', 'checkInTime', 'checkInTimeList',
+    'checkOutTime', 'checkoutTimeList',
+    'deposit_status', 'deposit_refund_id', 'deposit_refund_amount_cents',
+    'deposit_refunded_at', 'deposit_refunded_by', 'deposit_refund_status_msg',
+    'certificates', 'sent_emails',
+})
+
+def _notifications_disabled() -> bool:
+    """
+    True when outbound notifications (Slack, Resend email) must be suppressed.
+    Mirrors the ENVIRONMENT=test gate get_db() uses for MockFirestore — without
+    this, unit tests exercising create_or_update_volunteer posted REAL Slack
+    messages and attempted REAL Resend sends.
+    """
+    return os.environ.get("ENVIRONMENT") == "test"
+
+
 def _generate_volunteer_id() -> str:
     """Generate a unique ID for a volunteer."""
     return str(uuid.uuid4())
@@ -84,10 +112,56 @@ def get_volunteer_by_email(email: str, event_id: str, volunteer_type: str) -> Op
                                           .where('event_id', '==', event_id) \
                                           .where('volunteer_type', '==', volunteer_type) \
                                           .limit(1).stream()
-    
+
     for volunteer in volunteers:
         return volunteer.to_dict()
     return None
+
+
+def find_volunteer_by_caller_identity(propel_user_id: str, event_id: str, volunteer_type: str) -> Optional[Dict[str, Any]]:
+    """
+    Resolve the calling user's volunteer doc for an event, trying every
+    identity shape a doc may have been stored under:
+
+      1. raw PropelAuth UUID  — self-submitted apps store auth_user.user_id
+         (the propel UUID) in the doc's `user_id` field. The common case.
+      2. PropelAuth email     — docs created by admin/import flows, or legacy
+         self-submits, where `user_id` holds something else. The email comes
+         from the VERIFIED token identity (never the form payload, which would
+         let a caller hijack someone else's application by typing their email).
+      3. OAuth user_id        — legacy docs that stored oauth2|slack|... .
+
+    This is the single resolver shared by the GET application route
+    (handle_get), the submit/update path (create_or_update_volunteer), and the
+    mentor gate (_find_mentor_volunteer). Keeping read and write on the SAME
+    resolver matters: when the read path found a doc the write path couldn't,
+    an application edit fell into the create branch and spawned a duplicate
+    isSelected=False doc, orphaning the approved one.
+    """
+    if not propel_user_id:
+        return None
+
+    volunteer = get_volunteer_by_user_id(propel_user_id, event_id, volunteer_type)
+    if volunteer:
+        return volunteer
+
+    email = oauth_user_id = None
+    try:
+        # Lazy import: users_service lazily imports this module, so a
+        # top-level import here would risk a cycle.
+        from services.users_service import get_propel_user_details_by_id
+        details = get_propel_user_details_by_id(propel_user_id) or ()
+        email = details[0] if len(details) > 0 else None
+        oauth_user_id = details[1] if len(details) > 1 else None
+    except Exception as e:
+        warning(logger, "Could not resolve caller identity via PropelAuth",
+                propel_user_id=propel_user_id, exc_info=e)
+
+    if email:
+        volunteer = get_volunteer_by_email(email, event_id, volunteer_type)
+    if volunteer is None and oauth_user_id and oauth_user_id != propel_user_id:
+        volunteer = get_volunteer_by_user_id(oauth_user_id, event_id, volunteer_type)
+    return volunteer
 
 # Function to clear all caches related to a volunteer
 def _clear_volunteer_caches(user_id: str, email: str, event_id: str, volunteer_type: str):
@@ -197,13 +271,17 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
     Returns:
         True if email was sent successfully, False otherwise
     """
+    if _notifications_disabled():
+        info(logger, "ENVIRONMENT=test — skipping volunteer confirmation email", email=email)
+        return None
+
     resend_api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
     if not resend_api_key:
         error(logger, "Missing required environment variable", var_name="RESEND_WELCOME_EMAIL_KEY")
         return False
-    
+
     resend.api_key = resend_api_key
-    
+
     try:
         volunteer_type_readable = volunteer_type.capitalize()
         is_reviewed_role = volunteer_type.lower() in ("mentor", "judge")
@@ -341,11 +419,15 @@ def send_admin_notification_email(volunteer_data: Dict[str, Any], is_update: boo
     Returns:
         True if email was sent successfully, False otherwise
     """
+    if _notifications_disabled():
+        info(logger, "ENVIRONMENT=test — skipping admin notification email")
+        return False
+
     resend_api_key = os.environ.get('RESEND_WELCOME_EMAIL_KEY')
     if not resend_api_key:
         error(logger, "Missing required environment variable", var_name="RESEND_WELCOME_EMAIL_KEY")
         return False
-    
+
     resend.api_key = resend_api_key
     
     try:
@@ -390,6 +472,10 @@ def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update:
     Returns:
         True if notification was sent successfully, False otherwise
     """
+    if _notifications_disabled():
+        info(logger, "ENVIRONMENT=test — skipping Slack volunteer notification")
+        return False
+
     import datetime as _dt
 
     # --- Derive display values ---
@@ -903,9 +989,23 @@ def create_or_update_volunteer(
 
     db = get_db()
     volunteer_type = volunteer_data.get('volunteer_type')
-    
-    # Check if volunteer already exists
-    existing = get_volunteer_by_user_id(user_id, event_id, volunteer_type)
+
+    # Applicants may not write staff-owned fields. Several application forms ship
+    # a stale `isSelected: false` from their initial form state, which used to
+    # silently un-approve the applicant on every edit. Stripping here (before the
+    # create/update branch) covers both paths: on update, set(merge=True) omits
+    # the keys so the stored values survive; on create, it stops a crafted
+    # payload from overriding the isSelected=False seed to self-approve.
+    volunteer_data = {
+        k: v for k, v in volunteer_data.items()
+        if k not in STAFF_OWNED_VOLUNTEER_FIELDS
+    }
+
+    # Check if volunteer already exists. Use the SAME 3-way identity resolver
+    # as the GET route — matching by propel UUID only made a user whose doc was
+    # stored under another identity shape (email / OAuth id) fall into the
+    # create branch on edit, spawning a duplicate isSelected=False doc.
+    existing = find_volunteer_by_caller_identity(user_id, event_id, volunteer_type)
     
     if existing:
         # Update existing record
@@ -927,9 +1027,9 @@ def create_or_update_volunteer(
         update_data['timestamp'] = existing.get('timestamp')
         update_data['status'] = existing.get('status', 'active')
         
-        # Keep existing isSelected status if not explicitly provided
-        if 'isSelected' not in volunteer_data:
-            update_data['isSelected'] = existing.get('isSelected', False)
+        # isSelected is staff-owned (stripped from volunteer_data above) — carry
+        # the stored value forward so docs predating the field still get one.
+        update_data['isSelected'] = existing.get('isSelected', False)
 
         # Log volunteer_data
         logger.debug(f"volunteer_data: {volunteer_data}")
@@ -1864,6 +1964,10 @@ def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optio
     Returns True if notification was sent, False if skipped (no Slack account)
     or on error.
     """
+    if _notifications_disabled():
+        info(logger, "ENVIRONMENT=test — skipping mentor check-in notification")
+        return False
+
     email = volunteer.get('email', '')
     areas_of_expertise = volunteer.get('expertise', [])
     specialties = volunteer.get('softwareEngineeringSpecifics', [])
