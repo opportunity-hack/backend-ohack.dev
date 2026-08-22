@@ -190,6 +190,7 @@ def create_app():
     from api.surveys import surveys_views
     from api.feedback import feedback_views
     from api.praisebot import praisebot_views
+    from api.jobs import jobs_views
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
@@ -215,5 +216,6 @@ def create_app():
     app.register_blueprint(surveys_views.bp)
     app.register_blueprint(feedback_views.bp)
     app.register_blueprint(praisebot_views.bp)
+    app.register_blueprint(jobs_views.bp)
 
     return app
