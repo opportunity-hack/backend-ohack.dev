@@ -534,6 +534,158 @@ def validate_planning_subobject(planning):
         raise ValueError("planning.budget_widget_on_event_page must be a boolean")
 
 
+# ---------------------------------------------------------------------------
+# Volunteer job board (job_listings / job_applications collections)
+# ---------------------------------------------------------------------------
+
+ALLOWED_JOB_STATUSES = ("draft", "published", "hidden", "closed")
+ALLOWED_JOB_LOCATION_TYPES = ("remote", "phoenix_in_person", "hybrid")
+ALLOWED_JOB_APPLICATION_STATUSES = (
+    "submitted", "confirmed", "call_scheduled", "accepted", "rejected", "withdrawn",
+)
+JOB_SLUG_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*$")
+MAX_JOB_TITLE_LENGTH = 120
+MAX_JOB_SUMMARY_LENGTH = 500
+MAX_JOB_DESCRIPTION_LENGTH = 20000
+MAX_JOB_PROMPT_LENGTH = 2000
+MAX_JOB_VIDEO_PROMPTS = 5
+MIN_JOB_WORK_SAMPLE_LENGTH = 200
+MAX_JOB_WORK_SAMPLE_LENGTH = 10000
+MAX_JOB_FREETEXT_LENGTH = 2000
+
+# Fields an admin create/patch may set on a job_listings doc. slug is
+# create-only (doc id); status transitions are allowed via patch.
+JOB_LISTING_ADMIN_KEYS = (
+    "title", "status", "location_type", "location_label",
+    "hours_per_week_label", "min_hours_per_week", "duration_ask",
+    "summary", "description_markdown", "work_sample_prompt", "video_prompts",
+    "valid_through",
+)
+
+
+def _validate_job_listing_field(field, value):
+    """Validate one job-listing field. Raises ValueError on a bad value."""
+    if field == "title":
+        if not isinstance(value, str) or not value.strip():
+            raise ValueError("title must be a non-empty string")
+        if len(value) > MAX_JOB_TITLE_LENGTH:
+            raise ValueError(f"title must be under {MAX_JOB_TITLE_LENGTH} characters")
+    elif field == "status":
+        if value not in ALLOWED_JOB_STATUSES:
+            raise ValueError(f"status must be one of {list(ALLOWED_JOB_STATUSES)}")
+    elif field == "location_type":
+        if value not in ALLOWED_JOB_LOCATION_TYPES:
+            raise ValueError(f"location_type must be one of {list(ALLOWED_JOB_LOCATION_TYPES)}")
+    elif field == "min_hours_per_week":
+        if not isinstance(value, int) or isinstance(value, bool) or value < 0 or value > 40:
+            raise ValueError("min_hours_per_week must be an integer between 0 and 40")
+    elif field in ("location_label", "hours_per_week_label", "duration_ask", "valid_through"):
+        if not isinstance(value, str):
+            raise ValueError(f"{field} must be a string")
+        if len(value) > MAX_JOB_TITLE_LENGTH:
+            raise ValueError(f"{field} must be under {MAX_JOB_TITLE_LENGTH} characters")
+    elif field == "summary":
+        if not isinstance(value, str):
+            raise ValueError("summary must be a string")
+        if len(value) > MAX_JOB_SUMMARY_LENGTH:
+            raise ValueError(f"summary must be under {MAX_JOB_SUMMARY_LENGTH} characters")
+    elif field == "description_markdown":
+        if not isinstance(value, str):
+            raise ValueError("description_markdown must be a string")
+        if len(value) > MAX_JOB_DESCRIPTION_LENGTH:
+            raise ValueError(f"description_markdown must be under {MAX_JOB_DESCRIPTION_LENGTH} characters")
+    elif field == "work_sample_prompt":
+        if not isinstance(value, str):
+            raise ValueError("work_sample_prompt must be a string")
+        if len(value) > MAX_JOB_PROMPT_LENGTH:
+            raise ValueError(f"work_sample_prompt must be under {MAX_JOB_PROMPT_LENGTH} characters")
+    elif field == "video_prompts":
+        if not isinstance(value, list):
+            raise ValueError("video_prompts must be a list of strings")
+        if len(value) > MAX_JOB_VIDEO_PROMPTS:
+            raise ValueError(f"video_prompts must have at most {MAX_JOB_VIDEO_PROMPTS} entries")
+        for i, prompt in enumerate(value):
+            if not isinstance(prompt, str) or not prompt.strip():
+                raise ValueError(f"video_prompts[{i}] must be a non-empty string")
+            if len(prompt) > MAX_JOB_PROMPT_LENGTH:
+                raise ValueError(f"video_prompts[{i}] must be under {MAX_JOB_PROMPT_LENGTH} characters")
+
+
+def validate_job_listing(data):
+    """Strict validation for creating a job listing. Raises ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError("Listing payload must be an object")
+
+    for field in ("slug", "title", "status", "location_type", "summary", "description_markdown"):
+        if not data.get(field):
+            raise ValueError(f"Missing required field: {field}")
+
+    slug = data["slug"]
+    if not isinstance(slug, str) or not JOB_SLUG_RE.match(slug) or len(slug) > 80:
+        raise ValueError("slug must be lowercase letters/digits separated by hyphens (max 80 chars)")
+
+    for field in JOB_LISTING_ADMIN_KEYS:
+        if field in data and data[field] is not None:
+            _validate_job_listing_field(field, data[field])
+
+
+def validate_job_listing_partial(data):
+    """Lenient validation for admin partial saves.
+
+    Returns (cleaned_data, skipped_fields); only keys in JOB_LISTING_ADMIN_KEYS
+    survive, and individually-invalid optional fields are skipped (not fatal).
+    """
+    cleaned = {}
+    skipped = []
+    for field, value in (data or {}).items():
+        if field not in JOB_LISTING_ADMIN_KEYS:
+            skipped.append({"field": field, "reason": "not an editable listing field"})
+            continue
+        if value is None:
+            cleaned[field] = value
+            continue
+        try:
+            _validate_job_listing_field(field, value)
+            cleaned[field] = value
+        except ValueError as e:
+            skipped.append({"field": field, "reason": str(e)})
+            logger.warning("Job listing field '%s' failed validation and will not be saved: %s", field, e)
+    return cleaned, skipped
+
+
+def validate_job_application(data):
+    """Strict validation of a job application submit. Raises ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError("Application payload must be an object")
+
+    for field in ("name", "email", "linkedin_url", "hours_per_week",
+                  "duration_commitment", "work_sample_answer", "video_url", "resume_url"):
+        if not data.get(field):
+            raise ValueError(f"Missing required field: {field}")
+
+    if data.get("visa_ack") is not True:
+        raise ValueError("visa_ack must be accepted")
+
+    if not validate_email(data["email"]):
+        raise ValueError("email is not a valid email address")
+
+    for url_field in ("linkedin_url", "video_url", "resume_url"):
+        if not validate_url(data[url_field]):
+            raise ValueError(f"{url_field} is not a valid URL")
+
+    work_sample = data["work_sample_answer"]
+    if not isinstance(work_sample, str) or len(work_sample.strip()) < MIN_JOB_WORK_SAMPLE_LENGTH:
+        raise ValueError(f"work_sample_answer must be at least {MIN_JOB_WORK_SAMPLE_LENGTH} characters")
+    if len(work_sample) > MAX_JOB_WORK_SAMPLE_LENGTH:
+        raise ValueError(f"work_sample_answer must be under {MAX_JOB_WORK_SAMPLE_LENGTH} characters")
+
+    for field in ("pronouns", "phone", "location", "hours_per_week", "duration_commitment",
+                  "preferred_channel", "referral_source", "why_ohack", "slack_member"):
+        value = data.get(field)
+        if value is not None and (not isinstance(value, str) or len(value) > MAX_JOB_FREETEXT_LENGTH):
+            raise ValueError(f"{field} must be a string under {MAX_JOB_FREETEXT_LENGTH} characters")
+
+
 if __name__ == "__main__":
     # Simple tests
     print(validate_email("test@example.com"))  # Should print True
