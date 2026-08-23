@@ -24,7 +24,7 @@ from common.utils.firestore_helpers import clear_all_caches
 from common.utils.slack import send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
 from services.users_service import get_propel_user_details_by_id
-from services.volunteers_service import get_volunteer_by_email, get_volunteer_by_user_id
+from services.volunteers_service import find_volunteer_by_caller_identity
 from services.teams_service import get_team
 
 logger = logging.getLogger("myapp")
@@ -105,52 +105,20 @@ def _resolve_caller(propel_user_id):
 
 def _find_mentor_volunteer(propel_user_id, event_id):
     """
-    Resolve the caller's mentor volunteer doc for THIS event, trying every
-    identity shape a doc may have been stored under. Mirrors handle_get
-    (volunteers_views.py) so the panel gate matches the same docs the
-    GET-application path already matches:
-
-      1. raw PropelAuth UUID  — self-submitted apps store auth_user.user_id
-         (the propel UUID) in the doc's `user_id` field. THIS is the common
-         case and was the missing lookup that caused approved mentors with a
-         form-email != login-email to 403.
-      2. PropelAuth email     — form-entered email == login email.
-      3. OAuth user_id        — legacy docs that stored oauth2|slack|... .
+    Resolve the caller's mentor volunteer doc for THIS event via the shared
+    3-way resolver (propel UUID -> PropelAuth email -> OAuth user_id) in
+    volunteers_service — the same one the GET-application route and the
+    submit/update path use, so the panel gate matches the same docs.
 
     Returns the first volunteer doc found (regardless of isSelected) or None.
     """
     if not propel_user_id or not event_id:
         return None
-
-    # 1. Direct match on the raw propel UUID (how handle_submit stores user_id).
     try:
-        v = get_volunteer_by_user_id(propel_user_id, event_id, "mentor")
-        if v:
-            return v
+        return find_volunteer_by_caller_identity(propel_user_id, event_id, "mentor")
     except Exception as e:
-        logger.warning("_find_mentor_volunteer: propel_id lookup failed: %s", e)
-
-    email, oauth_user_id, _ = _resolve_caller(propel_user_id)
-
-    # 2. Email match.
-    if email:
-        try:
-            v = get_volunteer_by_email(email, event_id, "mentor")
-            if v:
-                return v
-        except Exception as e:
-            logger.warning("_find_mentor_volunteer: email lookup failed: %s", e)
-
-    # 3. OAuth user_id match (legacy docs), only if it differs from the propel UUID.
-    if oauth_user_id and oauth_user_id != propel_user_id:
-        try:
-            v = get_volunteer_by_user_id(oauth_user_id, event_id, "mentor")
-            if v:
-                return v
-        except Exception as e:
-            logger.warning("_find_mentor_volunteer: user_id lookup failed: %s", e)
-
-    return None
+        logger.warning("_find_mentor_volunteer: lookup failed: %s", e)
+        return None
 
 
 def user_is_mentor_for_event(propel_user_id, event_id) -> bool:
