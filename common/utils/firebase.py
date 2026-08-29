@@ -48,6 +48,8 @@ PUBLIC_VOLUNTEER_DENYLIST = frozenset({
     "checkedIn", "checkedInBy", "checkedInAt",
     # admin-only enrichment
     "certificates",
+    # judge intro video + LMS training cert links (review team only)
+    "introductionVideoUrl", "judgeTrainingIntroCertUrl", "judgeTrainingToolCertUrl",
 })
 
 def get_db():
