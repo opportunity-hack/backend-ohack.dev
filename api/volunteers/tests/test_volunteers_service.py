@@ -1,9 +1,12 @@
+import logging
+
 import pytest
 from unittest.mock import patch, MagicMock
 from typing import Dict, Any
 
 from services.volunteers_service import (
     create_or_update_volunteer,
+    get_calendar_email_attachment_from_availability,
     get_volunteer_by_user_id,
     get_volunteers_by_event,
     get_user_hackathon_attendance,
@@ -500,6 +503,47 @@ def test_get_user_hackathon_attendance_filters_and_groups(mock_get_db):
     assert entry['title'] == 'Fall 2024 Hack'
     # Roles collapse onto a single card
     assert sorted(entry['roles']) == ['Hacker', 'Mentor']
+
+
+# ---------------------------------------------------------------------------
+# Calendar attachments from availability
+#
+# Mentor/volunteer forms send machine-generated slot strings; the judge form's
+# availability is free text. Free text must be skipped quietly — it used to
+# fire an ERROR ("All patterns failed to match slot") into Sentry on every
+# judge submission that filled the field.
+# ---------------------------------------------------------------------------
+
+def test_calendar_attachments_skip_free_text_availability(caplog):
+    free_text = (
+        "I will be Present near ASU during Entire November month for Client "
+        "visit and will be available all month"
+    )
+    with caplog.at_level(logging.DEBUG):
+        result = get_calendar_email_attachment_from_availability(
+            free_text, "judge@example.com", volunteer_type="judge"
+        )
+
+    assert result == []
+    errors = [r for r in caplog.records if r.levelno >= logging.ERROR]
+    assert not errors, f"free-text availability must not log errors: {errors}"
+
+
+def test_calendar_attachments_parse_structured_availability():
+    structured = (
+        "Saturday, Oct 11: ☀️ Morning (9am - 12pm PST), "
+        "Sunday, Oct 12: 🏙️ Afternoon (1pm - 3pm PST)"
+    )
+    result = get_calendar_email_attachment_from_availability(
+        structured, "mentor@example.com", volunteer_type="mentor", year=2026
+    )
+
+    assert len(result) == 2
+    for attachment in result:
+        assert attachment["type"] == "text/calendar"
+        assert attachment["filename"].endswith(".ics")
+        assert "BEGIN:VCALENDAR" in attachment["content"]
+        assert "ATTENDEE:MAILTO:mentor@example.com" in attachment["content"]
 
 
 def test_generate_qr_code():
