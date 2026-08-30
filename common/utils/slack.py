@@ -10,6 +10,7 @@ from requests.exceptions import ConnectionError
 from cachetools import TTLCache, cached
 from ratelimit import limits, sleep_and_retry
 import threading
+from common.utils.redis_cache import redis_cached
 
 load_dotenv()
 
@@ -57,6 +58,11 @@ def presence(user_id=None):
     client = get_client()
     return client.users_getPresence(user=user_id)
 
+# Cache the full member crawl so callers that filter it differently (e.g.
+# get_active_users with varying active_days) don't each pay a full paginated
+# users.list crawl behind the blocking rate limiter. Cache hits skip the
+# limiter entirely because redis_cached is the outer decorator.
+@redis_cached(prefix="slack:userlist", ttl=600)
 @RateLimiter(max_calls=20, period=60)
 def userlist():
     client = get_client()
