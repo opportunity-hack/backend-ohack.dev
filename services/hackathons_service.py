@@ -822,9 +822,151 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
 
 
 from services.email_service import add_utm
+from html import escape as html_escape
 
 
-def send_hackathon_request_email(contact_name, contact_email, request_id):
+# Labels mirror the frontend admin view (HackathonRequestDetailDialog.js) so
+# the applicant's copy of their submission reads the same as what we review.
+_REQUEST_SUMMARY_FIELDS = [
+    ("companyName", "Organization"),
+    ("organizationType", "Organization type"),
+    ("contactName", "Contact name"),
+    ("contactEmail", "Contact email"),
+    ("contactPhone", "Contact phone"),
+    ("employeeCount", "Expected participants"),
+    ("participantType", "Participant types"),
+    ("hackathonTheme", "Theme"),
+    ("expectedHackathonDate", "Expected hackathon date"),
+    ("preferredDate", "Preferred call date"),
+    ("alternateDate", "Alternate call date"),
+    ("location", "Location"),
+    ("eventFormat", "Event format"),
+    ("hasNonprofitList", "Has a nonprofit list"),
+    ("nonprofitDetails", "Nonprofit details"),
+    ("hasWorkedWithNonprofitsBefore", "Worked with nonprofits before"),
+    ("nonprofitSource", "Nonprofit sources"),
+    ("preferredNonprofitLocation", "Preferred nonprofit location"),
+    ("specificRegion", "Specific region"),
+    ("budget", "Budget"),
+    ("donationPercentage", "Donation percentage"),
+    ("additionalInfo", "Additional information"),
+]
+
+_RESPONSIBILITY_LABELS = {
+    "venue": "Venue & equipment",
+    "food": "Food & refreshments",
+    "prizes": "Prizes & swag",
+    "judges": "Judges",
+    "mentors": "Technical mentors",
+    "marketing": "Marketing & communications",
+    "nonprofitRecruitment": "Nonprofit recruitment",
+    "participantRecruitment": "Participant recruitment",
+    "postEventSupport": "Post-event support",
+}
+
+_RESPONSIBILITY_OWNER_LABELS = {
+    "requestor": "Your organization",
+    "ohack": "Opportunity Hack",
+    "shared": "Shared",
+}
+
+# Mirrors the checkbox labels on the /hack/request form.
+_NONPROFIT_SOURCE_LABELS = {
+    "own-list": "We'll provide our own nonprofit partners",
+    "ohack-support": "We'd like Opportunity Hack to help identify nonprofits",
+    "open-call": "We'd like to do an open call for nonprofit applications",
+}
+
+
+def _humanize_request_value(key, value, request_data):
+    """Format one hackathon-request field for the confirmation email. Returns
+    a display string, or None to skip the row."""
+    if value is None or value == "" or value == []:
+        return None
+    if key == "hackathonTheme" and value == "custom":
+        custom = request_data.get("customTheme")
+        return f"Custom — {custom}" if custom else "Custom"
+    if key == "budget":
+        try:
+            return f"${float(value):,.0f}"
+        except (TypeError, ValueError):
+            return str(value)
+    if key == "donationPercentage":
+        try:
+            return f"{value}%" if float(value) > 0 else None
+        except (TypeError, ValueError):
+            return str(value)
+    if key in ("expectedHackathonDate", "preferredDate", "alternateDate"):
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            return parsed.strftime("%A, %B %-d, %Y")
+        except ValueError:
+            return str(value)
+    if key == "nonprofitSource" and isinstance(value, list):
+        return "; ".join(_NONPROFIT_SOURCE_LABELS.get(v, str(v)) for v in value)
+    if isinstance(value, list):
+        return ", ".join(str(v).replace("-", " ").title() for v in value)
+    if isinstance(value, bool):
+        return "Yes" if value else "No"
+    if isinstance(value, str) and key in (
+        "organizationType",
+        "eventFormat",
+        "hasNonprofitList",
+        "hasWorkedWithNonprofitsBefore",
+        "preferredNonprofitLocation",
+    ):
+        return value.replace("-", " ").title()
+    return str(value)
+
+
+def _render_request_summary_html(request_data):
+    """Render the submitted form contents as an HTML table for the
+    confirmation email. Returns "" when there's nothing to show."""
+    if not isinstance(request_data, dict) or not request_data:
+        return ""
+
+    rows = []
+    for key, label in _REQUEST_SUMMARY_FIELDS:
+        display = _humanize_request_value(key, request_data.get(key), request_data)
+        if display is None:
+            continue
+        rows.append(
+            f'<tr><td style="padding: 6px 12px 6px 0; color: #555; vertical-align: top; white-space: nowrap;">{html_escape(label)}</td>'
+            f'<td style="padding: 6px 0; color: #333;">{html_escape(display)}</td></tr>'
+        )
+
+    responsibilities = request_data.get("responsibilities")
+    if isinstance(responsibilities, dict):
+        resp_rows = []
+        for resp_key, resp_label in _RESPONSIBILITY_LABELS.items():
+            owner = responsibilities.get(resp_key)
+            if not owner:
+                continue
+            owner_label = _RESPONSIBILITY_OWNER_LABELS.get(owner, str(owner))
+            resp_rows.append(
+                f"{html_escape(resp_label)}: {html_escape(owner_label)}"
+            )
+        if resp_rows:
+            rows.append(
+                '<tr><td style="padding: 6px 12px 6px 0; color: #555; vertical-align: top; white-space: nowrap;">Responsibilities</td>'
+                f'<td style="padding: 6px 0; color: #333;">{"<br>".join(resp_rows)}</td></tr>'
+            )
+
+    if not rows:
+        return ""
+
+    return f"""
+        <div style="background-color: #f7f7f7; padding: 15px; border-radius: 5px; margin: 20px 0;">
+            <h2 style="color: #0088FE; margin-top: 0;">Your Submission</h2>
+            <p style="margin-top: 0;">Here's a copy of what you sent us for your records:</p>
+            <table role="presentation" cellpadding="0" cellspacing="0" style="width: 100%; border-collapse: collapse; font-size: 14px;">
+                {''.join(rows)}
+            </table>
+        </div>
+    """
+
+
+def send_hackathon_request_email(contact_name, contact_email, request_id, request_data=None):
     """
     Send a specialized confirmation email to someone who has submitted a hackathon request.
     """
@@ -839,6 +981,7 @@ def send_hackathon_request_email(contact_name, contact_email, request_id):
 
     base_url = os.getenv("FRONTEND_URL", "https://www.ohack.dev")
     edit_link = f"{base_url}/hack/request/{request_id}"
+    submission_summary_html = _render_request_summary_html(request_data)
 
     html_content = f"""
     <!DOCTYPE html>
@@ -865,6 +1008,8 @@ def send_hackathon_request_email(contact_name, contact_email, request_id):
                 <li>Together, we'll create a customized hackathon plan for your community</li>
             </ol>
         </div>
+
+        {submission_summary_html}
 
         <p><strong>Need to make changes to your request?</strong><br>
         You can <a href="{add_utm(edit_link, medium='email', campaign='hackathon_request', content=image_utm_content)}" style="color: #0088FE; font-weight: bold;">edit your request here</a> at any time.</p>
@@ -924,7 +1069,7 @@ def create_hackathon(json):
     json["id"] = doc_id
 
     if "contactEmail" in json and "contactName" in json:
-        send_hackathon_request_email(json["contactName"], json["contactEmail"], doc_id)
+        send_hackathon_request_email(json["contactName"], json["contactEmail"], doc_id, request_data=json)
 
     send_slack(
         message=":rocket: New Hackathon Request :rocket: with json: " + str(json), channel="log-hackathon-requests", icon_emoji=":rocket:")
@@ -956,7 +1101,7 @@ def update_hackathon_request(doc_id, json):
     if doc:
         doc_dict = doc.get().to_dict()
         send_slack_audit(action="update_hackathon_request", message="Updating", payload=doc_dict)
-        send_hackathon_request_email(json["contactName"], json["contactEmail"], doc_id)
+        send_hackathon_request_email(json["contactName"], json["contactEmail"], doc_id, request_data=json)
         doc_dict["updated"] = datetime.now().isoformat()
 
         doc.update(json)
