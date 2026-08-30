@@ -144,9 +144,10 @@ def clear_slack_cache() -> Dict[str, Any]:
     # Clear all Slack caches
     active_users_cleared = clear_pattern("slack:active_users:*")
     user_details_cleared = clear_pattern("slack:user_details:*")
-    
+    userlist_cleared = clear_pattern("slack:userlist:*")
+
     return {
-        "success": active_users_cleared and user_details_cleared,
+        "success": active_users_cleared and user_details_cleared and userlist_cleared,
         "message": "All Slack caches cleared successfully"
     }
 

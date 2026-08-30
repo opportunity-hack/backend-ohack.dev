@@ -201,9 +201,10 @@ def test_clear_slack_cache(mock_clear_pattern):
     assert result["message"] == "All Slack caches cleared successfully"
     
     # Verify mocks
-    assert mock_clear_pattern.call_count == 2
+    assert mock_clear_pattern.call_count == 3
     mock_clear_pattern.assert_any_call("slack:active_users:*")
     mock_clear_pattern.assert_any_call("slack:user_details:*")
+    mock_clear_pattern.assert_any_call("slack:userlist:*")
 
 
 # --- Tests for sync_slack_users_to_firestore ---
