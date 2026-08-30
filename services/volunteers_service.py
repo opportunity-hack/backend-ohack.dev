@@ -648,7 +648,14 @@ def get_calendar_email_attachment_from_availability(
     if not availability:
         warning(logger, "No availability provided, skipping calendar generation")
         return []
-        
+
+    # Structured slots always start "Weekday, Mon D" — the prefix all 3 parse
+    # patterns require. Judge applications send free-text availability, which
+    # is expected input here, not an error.
+    if not re.search(r'[A-Za-z]+day,\s*[A-Za-z]{3,}\s+\d{1,2}', availability):
+        info(logger, "Availability is free text (no structured slots); skipping calendar attachments")
+        return []
+
     # Use current year if not specified
     if not year:
         info(logger, "No year provided, using current year", year=datetime.now().year)
@@ -714,7 +721,7 @@ def get_calendar_email_attachment_from_availability(
                  time_name=time_emoji_name,
                  time_range=time_range)
         else:
-            warning(logger, "FAILED: Pattern 1 did not match", pattern=pattern1, slot=slot.strip())
+            debug(logger, "Pattern 1 did not match", pattern=pattern1, slot=slot.strip())
             
             # Pattern 2: "Sunday, Oct 12-Afternoon" (fallback format)
             pattern2 = r'([A-Za-z]+),\s*([A-Za-z]+)\s+(\d+)[-\s]([A-Za-z\s]+)'
@@ -739,7 +746,7 @@ def get_calendar_email_attachment_from_availability(
                      time_name=time_emoji_name,
                      original_time_name=time_name)
             else:
-                warning(logger, "FAILED: Pattern 2 did not match", pattern=pattern2, slot=slot.strip())
+                debug(logger, "Pattern 2 did not match", pattern=pattern2, slot=slot.strip())
                 
                 # Pattern 3: More flexible - just capture everything after the colon
                 pattern3 = r'([A-Za-z]+),\s*([A-Za-z]+)\s+(\d+):\s*(.+)'
@@ -772,14 +779,9 @@ def get_calendar_email_attachment_from_availability(
                              day=day_str, 
                              time_name=time_emoji_name)
                 else:
-                    error(logger, "CRITICAL: All patterns failed to match slot", 
-                          slot=slot.strip(),
-                          pattern1=pattern1,
-                          pattern2=pattern2, 
-                          pattern3=pattern3,
-                          slot_length=len(slot.strip()),
-                          slot_chars=[ord(c) for c in slot.strip()[:50]]  # Show character codes for debugging
-                          )
+                    warning(logger, "All patterns failed to match slot",
+                            slot=slot.strip(),
+                            slot_length=len(slot.strip()))
                     continue
         
         try:
@@ -1073,7 +1075,7 @@ def create_or_update_volunteer(
             if calendar_attachments and len(calendar_attachments) > 0:
                 info(logger, "Sending email with calendar attachments", email=email, attachment_count=len(calendar_attachments))
             else:
-                warning(logger, "No calendar attachments generated despite availability data", email=email)
+                info(logger, "No calendar attachments generated from availability data", email=email)
                 
             send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
 
@@ -1146,7 +1148,7 @@ def create_or_update_volunteer(
             if calendar_attachments and len(calendar_attachments) > 0:
                 info(logger, "Sending email with calendar attachments", email=email, attachment_count=len(calendar_attachments))
             else:
-                warning(logger, "No calendar attachments generated despite availability data", email=email)
+                info(logger, "No calendar attachments generated from availability data", email=email)
                 
             send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
             send_admin_notification_email(volunteer_doc)
