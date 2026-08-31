@@ -13,6 +13,7 @@ from services.hackathons_service import (
     get_hackathon_request_by_id,
     create_hackathon,
     update_hackathon_request,
+    _render_request_summary_html,
 )
 
 
@@ -322,6 +323,8 @@ class TestCreateHackathon:
         call_args = mock_email.call_args[0]
         assert call_args[0] == "Diana"
         assert call_args[1] == "diana@example.com"
+        # The full form payload is passed through so the email can include it
+        assert mock_email.call_args[1]["request_data"]["companyName"] == "Email Corp"
 
     @patch('services.hackathons_service.send_slack')
     @patch('services.hackathons_service.send_slack_audit')
@@ -338,3 +341,62 @@ class TestCreateHackathon:
         with patch('services.hackathons_service.send_hackathon_request_email') as mock_email:
             create_hackathon(payload)
             mock_email.assert_not_called()
+
+
+class TestRenderRequestSummaryHtml:
+    """Test cases for the submission summary embedded in the confirmation email."""
+
+    def test_renders_submitted_fields_with_labels(self):
+        html = _render_request_summary_html({
+            "companyName": "ASU Coding Club",
+            "organizationType": "university",
+            "eventFormat": "in-person",
+            "participantType": ["students", "industry-professionals"],
+            "budget": 15000,
+            "responsibilities": {"venue": "requestor", "judges": "shared"},
+        })
+        assert "Your Submission" in html
+        assert "ASU Coding Club" in html
+        assert "University" in html
+        assert "In Person" in html
+        assert "Students, Industry Professionals" in html
+        assert "$15,000" in html
+        assert "Venue &amp; equipment: Your organization" in html
+        assert "Judges: Shared" in html
+
+    def test_escapes_html_in_user_values(self):
+        html = _render_request_summary_html({
+            "companyName": '<script>alert("x")</script>',
+        })
+        assert "<script>" not in html
+        assert "&lt;script&gt;" in html
+
+    def test_skips_empty_fields_and_internal_keys(self):
+        html = _render_request_summary_html({
+            "companyName": "Acme",
+            "contactPhone": "",
+            "alternateDate": None,
+            "nonprofitSource": [],
+            "donationPercentage": 0,
+            "status": "pending",
+            "agreeToContact": True,
+        })
+        assert "Contact phone" not in html
+        assert "Alternate call date" not in html
+        assert "Donation percentage" not in html
+        assert "pending" not in html
+        assert "agree" not in html.lower()
+
+    def test_empty_or_missing_data_renders_nothing(self):
+        assert _render_request_summary_html(None) == ""
+        assert _render_request_summary_html({}) == ""
+        assert _render_request_summary_html("not-a-dict") == ""
+
+    def test_custom_theme_and_dates_humanized(self):
+        html = _render_request_summary_html({
+            "hackathonTheme": "custom",
+            "customTheme": "AI for accessibility",
+            "expectedHackathonDate": "2027-02-20T00:00:00.000Z",
+        })
+        assert "Custom — AI for accessibility" in html
+        assert "February" in html and "2027" in html
