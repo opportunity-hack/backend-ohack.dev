@@ -72,6 +72,19 @@ def get_single_problem(id):
         logger.debug(f"Problem statement data: {result}")  # Add debug logging
         return jsonify({"error": "Internal server error"}), 500
 
+@bp.route("/<id>/helpers", methods=["GET"])
+def get_problem_statement_helpers(id):
+    """Public "Who's helping" roster: one row per person (deduped), with
+    name/avatar and the timestamp they first signed up, oldest first."""
+    try:
+        result = service.get_problem_statement_helpers(id)
+        if result is None:
+            return jsonify({"error": "Problem statement not found"}), 404
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"Error in get_problem_statement_helpers: {str(e)}")
+        return jsonify({"error": "Internal server error"}), 500
+
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 @bp.route("/events", methods=["PATCH"])
