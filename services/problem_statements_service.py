@@ -154,15 +154,29 @@ def save_helping_status(propel_user_id, d):
         warning(logger, "Helping toggle on unknown problem statement", problem_statement_id=problem_statement_id)
         return None
 
-    helping_list = ps_dict.get("helping", [])
+    helping_list = [h for h in ps_dict.get("helping", []) if isinstance(h, dict)]
     if "helping" == helping_status:
-        helping_list.append(to_add)
+        mine = [h for h in helping_list if h.get("user") == user.id]
+        if mine:
+            # Already helping: switch role in place and keep the ORIGINAL
+            # timestamp (their "helping since"). The legacy append-on-every-
+            # click is why real docs carry the same person two or three times;
+            # collapse those duplicates while we're here.
+            mine.sort(key=lambda h: (h.get("timestamp") is None, h.get("timestamp") or ""))
+            kept = mine[0]
+            kept["type"] = mentor_or_hacker
+            kept["slack_user"] = user.user_id
+            helping_list = [h for h in helping_list if h.get("user") != user.id] + [kept]
+            to_add = kept
+        else:
+            helping_list.append(to_add)
     else:
         # NOTE: the legacy body used `d['user'] not in user.id` — a substring
         # test that could remove other users' entries. Exact match only.
         helping_list = [h for h in helping_list if h.get('user') != user.id]
 
     problem_statement_doc.update({"helping": helping_list})
+    clear_helpers_cache(problem_statement_id)
 
     # Project pages read helping through the messages-side caches
     try:
@@ -236,6 +250,148 @@ def save_helping_status(propel_user_id, d):
             warning(logger, "send_project_help_slack_invite_email failed", error=str(e))
 
     return {"message": "Updated helping status"}
+
+
+# ---------------------------------------------------------------------------
+# "Who's helping" roster (frontend issue #359)
+#
+# The raw `helping` array on a problem statement is append-only history:
+# {user: <db id>, slack_user: <oauth id>, type: hacker|mentor, timestamp}.
+# The project page wants one row per person with a name/avatar and the date
+# they first raised their hand, so this collapses duplicates and batch-loads
+# the user docs in a single get_all. Public, PII-free (same fields the team
+# rosters already expose), cached briefly and cleared on every toggle.
+# ---------------------------------------------------------------------------
+HELPERS_CACHE_TTL = 60
+HELPER_TYPES = ("hacker", "mentor")
+_helpers_cache: TTLCache = TTLCache(maxsize=512, ttl=HELPERS_CACHE_TTL)
+_helpers_cache_lock = threading.Lock()
+
+
+def clear_helpers_cache(problem_statement_id=None):
+    with _helpers_cache_lock:
+        if problem_statement_id is None:
+            _helpers_cache.clear()
+        else:
+            _helpers_cache.pop(hashkey(problem_statement_id), None)
+
+
+def _helping_timestamp(entry):
+    ts = entry.get("timestamp")
+    return ts if isinstance(ts, str) and ts else None
+
+
+def normalize_helping_entries(helping):
+    """Collapse raw helping entries into one record per person.
+
+    Keeps the EARLIEST timestamp as `since` (when they first signed up) and
+    the LATEST type (hacker/mentor) so a role switch is reflected. Entries
+    without a user or slack_user are dropped. Result is oldest-first.
+    """
+    by_key = {}
+    for entry in helping or []:
+        if not isinstance(entry, dict):
+            continue
+        key = entry.get("user") or entry.get("slack_user")
+        if not key:
+            continue
+        ts = _helping_timestamp(entry)
+        etype = entry.get("type") if isinstance(entry.get("type"), str) and entry.get("type") else None
+        rec = by_key.get(key)
+        if rec is None:
+            by_key[key] = {
+                "db_id": entry.get("user") or None,
+                "user_id": entry.get("slack_user") or None,
+                "type": etype,
+                "since": ts,
+                "_latest": ts,
+            }
+            continue
+        if ts and (rec["since"] is None or ts < rec["since"]):
+            rec["since"] = ts
+        if etype and (ts is None and rec["_latest"] is None or ts and (rec["_latest"] is None or ts >= rec["_latest"])):
+            rec["type"] = etype
+        if ts and (rec["_latest"] is None or ts >= rec["_latest"]):
+            rec["_latest"] = ts
+        if not rec["db_id"] and entry.get("user"):
+            rec["db_id"] = entry["user"]
+        if not rec["user_id"] and entry.get("slack_user"):
+            rec["user_id"] = entry["slack_user"]
+
+    records = []
+    for rec in by_key.values():
+        rec.pop("_latest", None)
+        records.append(rec)
+    records.sort(key=lambda r: (r["since"] is None, r["since"] or ""))
+    return records
+
+
+def _enrich_helpers_batch(records, db):
+    """Attach name/nickname/profile_image from the users collection (one get_all)."""
+    refs = {}
+    for rec in records:
+        db_id = rec.get("db_id")
+        if db_id and db_id not in refs:
+            refs[db_id] = db.collection("users").document(db_id)
+
+    profiles = {}
+    if refs:
+        try:
+            for snap in db.get_all(list(refs.values())):
+                if getattr(snap, "exists", False):
+                    d = snap.to_dict() or {}
+                    profiles[snap.id] = {
+                        "name": d.get("name"),
+                        "nickname": d.get("nickname"),
+                        "profile_image": d.get("profile_image"),
+                        "user_id": d.get("user_id"),
+                    }
+        except Exception as e:
+            warning(logger, "helpers get_all failed; returning roster without names", error=str(e))
+
+    for rec in records:
+        prof = profiles.get(rec.get("db_id")) or {}
+        rec["name"] = prof.get("name")
+        rec["nickname"] = prof.get("nickname")
+        rec["profile_image"] = prof.get("profile_image")
+        if not rec.get("user_id") and prof.get("user_id"):
+            rec["user_id"] = prof["user_id"]
+    return records
+
+
+def get_problem_statement_helpers(problem_statement_id):
+    """Public roster for a project's "Who's helping" panel.
+
+    Returns None when the problem statement doesn't exist, else
+    {problem_statement_id, slack_channel, helpers: [...], counts: {hacker, mentor, total}}.
+    """
+    key = hashkey(problem_statement_id)
+    with _helpers_cache_lock:
+        hit = _helpers_cache.get(key)
+    if hit is not None:
+        return hit
+
+    db = get_db()
+    snap = db.collection("problem_statements").document(problem_statement_id).get()
+    ps = snap.to_dict() if snap is not None else None
+    if not ps:
+        return None
+
+    records = _enrich_helpers_batch(normalize_helping_entries(ps.get("helping")), db)
+    counts = {"hacker": 0, "mentor": 0, "total": len(records)}
+    for rec in records:
+        if rec.get("type") in counts:
+            counts[rec["type"]] += 1
+
+    result = {
+        "problem_statement_id": problem_statement_id,
+        "slack_channel": ps.get("slack_channel"),
+        "helpers": records,
+        "counts": counts,
+    }
+    with _helpers_cache_lock:
+        _helpers_cache[key] = result
+    return result
 
 
 @limits(calls=100, period=ONE_MINUTE)
