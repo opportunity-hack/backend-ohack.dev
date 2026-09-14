@@ -1161,15 +1161,20 @@ def create_or_update_volunteer(
 
 def update_volunteer_selection(volunteer_id: str, selected: bool, updated_by: str) -> Dict[str, Any]:
     """
-    Update the selection status of a volunteer.
-    
+    Single admin writer for isSelected (event roster).
+
+    Backs ``POST /api/admin/volunteer/<volunteer_id>/select``. Status
+    (``status``) is a separate field written through the hackathon PATCH route
+    (``update_hackathon_volunteers``); that route must not be used for
+    isSelected, and this function writes nothing but the flag + audit stamps.
+
     Args:
         volunteer_id: The volunteer ID
         selected: The selection status (True/False)
         updated_by: User who made the update
-        
+
     Returns:
-        The updated volunteer record
+        The updated volunteer record, or None when the doc doesn't exist
     """
     db = get_db()
     volunteer_ref = db.collection('volunteers').document(volunteer_id)
@@ -1193,6 +1198,42 @@ def update_volunteer_selection(volunteer_id: str, selected: bool, updated_by: st
     event_id = volunteer_data.get('event_id')
     volunteer_type = volunteer_data.get('volunteer_type')
     _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+
+    # The admin roster list (GET /api/messages/admin/hackathon/<event>/<type>)
+    # is served from hackathons_service.get_volunteer_by_event — an in-process
+    # cachetools TTLCache the redis pattern-clear above never reaches. Without
+    # this it kept serving the pre-toggle isSelected for the rest of the TTL.
+    # Lazy import: hackathons_service is heavy and doesn't import this module.
+    try:
+        from services.hackathons_service import get_volunteer_by_event
+        get_volunteer_by_event.cache_clear()
+    except Exception as e:
+        warning(logger, "Failed to clear get_volunteer_by_event cache",
+                volunteer_id=volunteer_id, event_id=event_id, exc_info=e)
+
+    # Slack audit — parity with update_hackathon_volunteers (the PATCH route).
+    # Gated like every other outbound notification in this service so tests
+    # never post to Slack; never allowed to fail the write.
+    if not _notifications_disabled():
+        try:
+            from common.utils.slack import send_slack_audit
+            send_slack_audit(
+                action="update_volunteer_selection",
+                message=(
+                    f"{updated_by} set isSelected={selected} for {volunteer_type} "
+                    f"volunteer {volunteer_id} (event_id={event_id})"
+                ),
+                payload={
+                    "volunteer_id": volunteer_id,
+                    "event_id": event_id,
+                    "volunteer_type": volunteer_type,
+                    "isSelected": selected,
+                    "updated_by": updated_by,
+                },
+            )
+        except Exception as e:
+            warning(logger, "Failed to send selection Slack audit",
+                    volunteer_id=volunteer_id, exc_info=e)
 
     return {**volunteer_data, **update_data}
 

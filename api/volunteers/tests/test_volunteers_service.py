@@ -12,6 +12,7 @@ from services.volunteers_service import (
     get_user_hackathon_attendance,
     _did_volunteer_attend,
     generate_qr_code,
+    update_volunteer_selection,
 )
 
 # Mock data for tests
@@ -332,6 +333,92 @@ def test_update_resolves_existing_doc_by_email_when_user_id_differs(mock_get_db)
     assert written["isSelected"] is True
     assert written["user_id"] == "oauth2|slack|T1Q7936BH-U123ABC"
     assert result["isSelected"] is True
+
+
+# ---------------------------------------------------------------------------
+# update_volunteer_selection — the single admin writer for isSelected
+# (POST /api/admin/volunteer/<id>/select).
+# ---------------------------------------------------------------------------
+
+def _selection_db(mock_get_db, existing):
+    """Wire get_db() so volunteers/<id>.get().to_dict() returns `existing`."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    mock_collection = MagicMock()
+    mock_doc = MagicMock()
+    mock_db.collection.return_value = mock_collection
+    mock_collection.document.return_value = mock_doc
+    mock_doc.get.return_value.to_dict.return_value = dict(existing)
+    return mock_collection, mock_doc
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_volunteer_selection_clears_event_cache(mock_get_db):
+    """
+    The admin roster list is served from hackathons_service.get_volunteer_by_event,
+    an in-process TTLCache. A toggle must bust it or the list keeps showing the
+    pre-toggle flag until the TTL lapses.
+    """
+    _selection_db(mock_get_db, MOCK_VOLUNTEER_DOC)
+
+    with patch('services.hackathons_service.get_volunteer_by_event') as mock_by_event:
+        update_volunteer_selection("abc-123", True, "admin-x")
+
+    mock_by_event.cache_clear.assert_called_once()
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_volunteer_selection_sets_flag_and_audit_fields(mock_get_db):
+    """Writes exactly isSelected + who/when — nothing else on the doc moves."""
+    mock_collection, mock_doc = _selection_db(mock_get_db, MOCK_VOLUNTEER_DOC)
+
+    with patch('services.hackathons_service.get_volunteer_by_event'):
+        result = update_volunteer_selection("abc-123", True, "admin-x")
+
+    mock_collection.document.assert_called_once_with("abc-123")
+    written = mock_doc.update.call_args[0][0]
+    assert written["isSelected"] is True
+    assert written["updated_by"] == "admin-x"
+    assert written["updated_timestamp"]
+    assert set(written) == {"isSelected", "updated_by", "updated_timestamp"}
+
+    # Returned record reflects the write on top of the stored doc.
+    assert result["isSelected"] is True
+    assert result["updated_by"] == "admin-x"
+    assert result["event_id"] == MOCK_EVENT_ID
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_volunteer_selection_missing_doc_returns_none(mock_get_db):
+    """The view maps None → 404; nothing must be written for an unknown id."""
+    _, mock_doc = _selection_db(mock_get_db, {})
+    mock_doc.get.return_value.to_dict.return_value = None
+
+    assert update_volunteer_selection("nope", True, "admin-x") is None
+    mock_doc.update.assert_not_called()
+
+
+@patch('services.volunteers_service.get_db')
+def test_update_volunteer_selection_sends_slack_audit_when_enabled(mock_get_db):
+    """Parity with the hackathon PATCH route: every toggle is Slack-audited
+    (outside ENVIRONMENT=test, where the notification gate suppresses it)."""
+    _selection_db(mock_get_db, MOCK_VOLUNTEER_DOC)
+
+    with patch('services.volunteers_service._notifications_disabled', return_value=False), \
+         patch('services.hackathons_service.get_volunteer_by_event'), \
+         patch('common.utils.slack.send_slack_audit') as mock_audit:
+        update_volunteer_selection("abc-123", False, "admin-x")
+
+    mock_audit.assert_called_once()
+    kwargs = mock_audit.call_args.kwargs
+    assert kwargs["action"] == "update_volunteer_selection"
+    assert kwargs["payload"] == {
+        "volunteer_id": "abc-123",
+        "event_id": MOCK_EVENT_ID,
+        "volunteer_type": "mentor",
+        "isSelected": False,
+        "updated_by": "admin-x",
+    }
 
 
 @patch('services.volunteers_service.get_db')

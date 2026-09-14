@@ -400,14 +400,24 @@ def admin_list_volunteers(user, org, event_id):
     """Admin endpoint to list general volunteer applications."""
     return handle_admin_list(user, event_id, 'volunteer')
 
-# Admin selection update route
+# Admin selection update route — the ONLY writer of isSelected (event roster).
 @bp.route('/admin/volunteer/<volunteer_id>/select', methods=['POST'])
-@auth.require_org_member_with_permission("all") #TODO
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_update_selection(user, org, volunteer_id):
-    """Admin endpoint to update volunteer selection status."""
+    """
+    Single admin writer for a volunteer's ``isSelected`` flag (event roster).
+
+    Body: ``{"selected": bool}`` — anything other than a JSON boolean is a 400.
+    The generic hackathon PATCH (``update_hackathon_volunteers``) must NOT be
+    used to flip isSelected: the frontend routes every approval/un-approval
+    through here so the permission gate, cache busting and Slack audit live in
+    one place.
+    """
     try:
         data = _process_request()
-        selected = data.get('selected', False)
+        selected = data.get('selected')
+        if not isinstance(selected, bool):
+            return _error_response("selected must be a boolean", 400)
 
         updated_volunteer = update_volunteer_selection(
             volunteer_id=volunteer_id,
@@ -424,9 +434,8 @@ def admin_update_selection(user, org, volunteer_id):
         return _error_response(f"Failed to update selection status: {str(e)}")
 
 
-# Admin hacker deposit refund — irreversible, real money. Uses the stricter
-# volunteer.admin permission rather than the lighter "all" used for isSelected
-# toggles.
+# Admin hacker deposit refund — irreversible, real money. volunteer.admin-gated,
+# same as the isSelected toggle above.
 @bp.route('/admin/hacker/<volunteer_id>/refund-deposit', methods=['POST'])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_refund_hacker_deposit(user, org, volunteer_id):
