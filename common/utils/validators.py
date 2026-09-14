@@ -694,3 +694,60 @@ if __name__ == "__main__":
     print(validate_url("invalid-url"))  # Should print False
     print(sanitize_string("  Hello, World!  "))  # Should print "Hello, World!"
     print(sanitize_string("Too long", 5))  # Should print "Too l"
+
+
+# ---------------------------------------------------------------------------
+# Volunteer admin PATCH (services/hackathons_service.update_hackathon_volunteers)
+# ---------------------------------------------------------------------------
+# The admin workbench edits application fields + the REVIEW status through
+# the generic hackathon PATCH. The ROSTER bit (`isSelected`) has exactly one
+# writer — POST /api/admin/volunteer/<id>/select → update_volunteer_selection —
+# so it is stripped here (logged) rather than written through a side door.
+ALLOWED_VOLUNTEER_STATUSES = (
+    "pending",
+    "approved",
+    "waitlisted",
+    "verified_travel",
+    "confirmed",
+    "denied",
+    "withdrew",
+    "no_show",
+)
+
+# `type` is the frontend's tab-routing key ("judges") that older UI versions
+# round-tripped onto docs; never a real field.
+VOLUNTEER_ADMIN_PATCH_STRIPPED_KEYS = ("type", "isSelected")
+
+
+def validate_volunteer_admin_patch(data):
+    """Normalize an admin PATCH body for a volunteer doc.
+
+    - drops `type` and `isSelected` (see above) with a warning
+    - folds `status` (case/whitespace) onto ALLOWED_VOLUNTEER_STATUSES;
+      blank → "pending"; anything else raises ValueError
+    Returns a NEW dict; the caller decides how to surface a ValueError.
+    """
+    if not isinstance(data, dict):
+        return data
+    cleaned = dict(data)
+    for key in VOLUNTEER_ADMIN_PATCH_STRIPPED_KEYS:
+        if key in cleaned:
+            reason = (
+                "isSelected is written only by POST /api/admin/volunteer/<id>/select"
+                if key == "isSelected"
+                else "UI routing key, never a doc field"
+            )
+            logger.warning(
+                "volunteer admin PATCH dropped %r for id=%s — %s",
+                key, cleaned.get("id"), reason,
+            )
+            cleaned.pop(key)
+    if "status" in cleaned:
+        raw = cleaned["status"]
+        if raw is None or (isinstance(raw, str) and not raw.strip()):
+            cleaned["status"] = "pending"
+        elif isinstance(raw, str) and raw.strip().lower().replace(" ", "_").replace("-", "_") in ALLOWED_VOLUNTEER_STATUSES:
+            cleaned["status"] = raw.strip().lower().replace(" ", "_").replace("-", "_")
+        else:
+            raise ValueError(f"status must be one of {list(ALLOWED_VOLUNTEER_STATUSES)}")
+    return cleaned

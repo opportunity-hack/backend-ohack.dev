@@ -19,7 +19,7 @@ from common.utils.firebase import (
     get_volunteer_checked_in_from_db_by_event,
 )
 from common.utils.redis_cache import get_cached, set_cached
-from common.utils.validators import validate_hackathon_data_partial
+from common.utils.validators import validate_hackathon_data_partial, validate_volunteer_admin_patch
 from common.utils.firestore_helpers import (
     doc_to_json,
     doc_to_json_recursive,
@@ -728,6 +728,14 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
     if "id" not in json:
         logger.error("Missing id field")
         return Message("Missing id field")
+
+    # Review fields ride this PATCH; the roster bit (`isSelected`) and the
+    # UI routing key (`type`) are stripped — see validate_volunteer_admin_patch.
+    try:
+        json = validate_volunteer_admin_patch(json)
+    except ValueError as e:
+        logger.error(f"update_hackathon_volunteers rejected payload: {e}")
+        return Message(str(e))
 
     volunteer_id = json["id"]
 

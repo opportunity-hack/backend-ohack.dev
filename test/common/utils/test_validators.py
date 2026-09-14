@@ -112,3 +112,46 @@ def test_partial_strips_invalid_meals_note():
     )
     assert any(s["field"] == "constraints.meals_note" for s in skipped)
     assert "meals_note" not in cleaned["constraints"]
+
+
+# ---------------------------------------------------------------------------
+# validate_volunteer_admin_patch — the generic hackathon PATCH must never be a
+# side door for the roster bit; status is folded onto the catalog.
+# ---------------------------------------------------------------------------
+from common.utils.validators import (  # noqa: E402
+    ALLOWED_VOLUNTEER_STATUSES,
+    validate_volunteer_admin_patch,
+)
+
+
+def test_volunteer_admin_patch_strips_isSelected_and_type():
+    cleaned = validate_volunteer_admin_patch(
+        {"id": "v1", "name": "Jane", "isSelected": True, "type": "judges", "status": "approved"}
+    )
+    assert cleaned == {"id": "v1", "name": "Jane", "status": "approved"}
+
+
+def test_volunteer_admin_patch_does_not_mutate_input():
+    payload = {"id": "v1", "isSelected": True}
+    validate_volunteer_admin_patch(payload)
+    assert payload == {"id": "v1", "isSelected": True}
+
+
+def test_volunteer_admin_patch_folds_status_case_and_blank():
+    assert validate_volunteer_admin_patch({"id": "v1", "status": " Approved "})["status"] == "approved"
+    assert validate_volunteer_admin_patch({"id": "v1", "status": "Verified Travel"})["status"] == "verified_travel"
+    assert validate_volunteer_admin_patch({"id": "v1", "status": ""})["status"] == "pending"
+    assert validate_volunteer_admin_patch({"id": "v1", "status": None})["status"] == "pending"
+
+
+def test_volunteer_admin_patch_rejects_unknown_status():
+    import pytest as _pytest
+
+    with _pytest.raises(ValueError):
+        validate_volunteer_admin_patch({"id": "v1", "status": "selected"})
+    assert "waitlisted" in ALLOWED_VOLUNTEER_STATUSES
+
+
+def test_volunteer_admin_patch_passes_other_fields_through():
+    cleaned = validate_volunteer_admin_patch({"id": "v1", "biography": "x", "checkedIn": True})
+    assert cleaned == {"id": "v1", "biography": "x", "checkedIn": True}
