@@ -22,7 +22,6 @@ from services.volunteers_service import (
     get_resend_email_statuses,
     list_all_resend_emails,
 )
-from common.auth import auth, auth_user
 
 logger = get_logger(__name__)
 logger.setLevel(logging.INFO)
@@ -213,11 +212,15 @@ def get_mentor_application(event_id):
         logger.error(f"Error retrieving mentor application: {str(e)}")
         return _error_response(f"Failed to retrieve application: {str(e)}")
 
+# NOTE: propelauth's require_org_member_with_permission does NOT inject the user/org
+# into the view — it only sets the request-scoped `auth_user` proxy and calls the
+# view with Flask's URL params. A `def view(user, org, <param>)` signature raises
+# TypeError (missing positional args) on every request; read `auth_user` instead.
 @bp.route('/admin/mentors/<event_id>', methods=['GET'])
-@auth.require_org_member_with_permission("all")
-def admin_list_mentors(user, org, event_id):
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_mentors(event_id):
     """Admin endpoint to list mentor applications."""
-    return handle_admin_list(user, event_id, 'mentor')
+    return handle_admin_list(auth_user, event_id, 'mentor')
 
 
 @bp.route('/volunteer/<event_id>/me', methods=['GET'])
@@ -281,10 +284,10 @@ def get_sponsor_application(event_id):
         return _error_response(f"Failed to retrieve application: {str(e)}")
 
 @bp.route('/admin/sponsors/<event_id>', methods=['GET'])
-@auth.require_org_member_with_permission("all")
-def admin_list_sponsors(user, org, event_id):
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_sponsors(event_id):
     """Admin endpoint to list sponsor applications."""
-    return handle_admin_list(user, event_id, 'sponsor')
+    return handle_admin_list(auth_user, event_id, 'sponsor')
 
 # Judge routes
 @bp.route('/judge/application/<event_id>/submit', methods=['POST'])
@@ -328,10 +331,10 @@ def get_judge_application(event_id):
         return _error_response(f"Failed to retrieve application: {str(e)}")
 
 @bp.route('/admin/judges/<event_id>', methods=['GET'])
-@auth.require_org_member_with_permission("all")
-def admin_list_judges(user, org, event_id):
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_judges(event_id):
     """Admin endpoint to list judge applications."""
-    return handle_admin_list(user, event_id, 'judge')
+    return handle_admin_list(auth_user, event_id, 'judge')
 
 # Generic volunteer routes
 @bp.route('/volunteer/application/<event_id>/submit', methods=['POST'])
@@ -395,15 +398,15 @@ def get_volunteer_application_count_by_timeslot(event_id):
 
 
 @bp.route('/admin/volunteers/<event_id>', methods=['GET'])
-@auth.require_org_member_with_permission("all") #TODO
-def admin_list_volunteers(user, org, event_id):
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_volunteers(event_id):
     """Admin endpoint to list general volunteer applications."""
-    return handle_admin_list(user, event_id, 'volunteer')
+    return handle_admin_list(auth_user, event_id, 'volunteer')
 
 # Admin selection update route — the ONLY writer of isSelected (event roster).
 @bp.route('/admin/volunteer/<volunteer_id>/select', methods=['POST'])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-def admin_update_selection(user, org, volunteer_id):
+def admin_update_selection(volunteer_id):
     """
     Single admin writer for a volunteer's ``isSelected`` flag (event roster).
 
@@ -422,7 +425,7 @@ def admin_update_selection(user, org, volunteer_id):
         updated_volunteer = update_volunteer_selection(
             volunteer_id=volunteer_id,
             selected=selected,
-            updated_by=user.user_id
+            updated_by=auth_user.user_id
         )
 
         if updated_volunteer:
@@ -438,7 +441,7 @@ def admin_update_selection(user, org, volunteer_id):
 # same as the isSelected toggle above.
 @bp.route('/admin/hacker/<volunteer_id>/refund-deposit', methods=['POST'])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-def admin_refund_hacker_deposit(user, org, volunteer_id):
+def admin_refund_hacker_deposit(volunteer_id):
     """Issue a Stripe refund for a hacker's deposit. Body: {"override": bool}."""
     try:
         data = _process_request()
@@ -446,13 +449,13 @@ def admin_refund_hacker_deposit(user, org, volunteer_id):
 
         updated = refund_hacker_deposit(
             volunteer_id=volunteer_id,
-            admin_user_id=user.user_id,
+            admin_user_id=auth_user.user_id,
             override=override,
         )
         send_slack_audit(
             action="hacker_deposit_refund",
             message=(
-                f"{user.user_id} refunded hacker deposit for volunteer {volunteer_id} "
+                f"{auth_user.user_id} refunded hacker deposit for volunteer {volunteer_id} "
                 f"(refund_id={updated.get('deposit_refund_id')}, "
                 f"amount_cents={updated.get('deposit_refund_amount_cents')}, "
                 f"override={override})"
@@ -475,16 +478,16 @@ def admin_refund_hacker_deposit(user, org, volunteer_id):
 # are excluded by design (override is a per-row decision).
 @bp.route('/admin/hackathon/<event_id>/refund-eligible-deposits', methods=['POST'])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-def admin_bulk_refund_eligible_deposits(user, org, event_id):
+def admin_bulk_refund_eligible_deposits(event_id):
     try:
         result = bulk_refund_eligible_hacker_deposits(
             event_id=event_id,
-            admin_user_id=user.user_id,
+            admin_user_id=auth_user.user_id,
         )
         send_slack_audit(
             action="hacker_deposit_bulk_refund",
             message=(
-                f"{user.user_id} ran bulk refund for event {event_id}: "
+                f"{auth_user.user_id} ran bulk refund for event {event_id}: "
                 f"{len(result['refunded'])} refunded "
                 f"(${result['total_amount_cents'] / 100:.2f}), "
                 f"{len(result['failed'])} failed"
