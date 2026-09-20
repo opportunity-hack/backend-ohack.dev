@@ -229,18 +229,24 @@ def get_my_volunteer_status_for_event(event_id):
     """
     Lightweight self-check for the calling user against a single event.
     Default type is 'mentor' (used by the per-team mentor panel to decide
-    interactive vs. read-only).
-    Returns { is_mentor: bool, volunteer: {name, email, isSelected, checkInTime?} | null }.
+    interactive vs. read-only); type=hacker backs the team dashboard's
+    "am I an approved hacker for this event" gate (findteam/manageteam,
+    Hackers' Choice eligibility).
+    Returns { is_mentor: bool, volunteer: {name, email, isSelected, checkInTime?} | null }
+    for type=mentor, or { is_hacker: bool, volunteer: {name, isSelected} | null } for
+    type=hacker.
     """
     user = auth_user
     if not user or not user.user_id:
         return _error_response("Authentication required", 401)
     vtype = request.args.get('type', 'mentor')
-    if vtype != 'mentor':
-        # Keep the surface narrow for now; extend later if needed.
-        return _error_response("Only type=mentor is supported", 400)
-    from api.mentors.mentors_service import get_mentor_self_status
-    return get_mentor_self_status(user.user_id, event_id)
+    if vtype == 'mentor':
+        from api.mentors.mentors_service import get_mentor_self_status
+        return get_mentor_self_status(user.user_id, event_id)
+    if vtype == 'hacker':
+        from services.volunteers_service import get_volunteer_self_status
+        return get_volunteer_self_status(user.user_id, event_id, 'hacker'), 200
+    return _error_response("Only type=mentor or type=hacker is supported", 400)
 
 # Sponsor routes
 @bp.route('/sponsor/application/<event_id>/submit', methods=['POST'])
