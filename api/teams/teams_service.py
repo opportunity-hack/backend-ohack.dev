@@ -15,10 +15,23 @@ from common.utils.github import create_github_repo, validate_github_username
 from common.utils.slack import create_slack_channel, invite_user_to_channel, send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
 from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id, normalize_slack_user_id
+from common.utils.validators import sanitize_markdown
 
-from common.utils.slack import add_bot_to_channel    
+from common.utils.slack import add_bot_to_channel
 
 logger = logging.getLogger("myapp")
+
+# Admin override of a team's project_* write-up fields via PATCH
+# /api/team/edit (MEDIUM finding #3 — documented in api/submissions/README.md
+# "Ownership" as always having been the intended admin path, but edit_team's
+# field_mappings never actually carried these fields). Limits/catalog are
+# duplicated from api.submissions.submissions_service's PROJECT_LIMITS /
+# SUBMITTED_STATUSES (not imported — teams_service must never import
+# api.submissions, a one-directional dependency documented in that module's
+# docstring).
+PROJECT_TAGLINE_MAX_LEN = 140
+PROJECT_STORY_MAX_LEN = 20000
+PROJECT_SUBMISSION_STATUSES = {"draft", "submitted", "late"}
 
 # Slack user IDs for OHack admins who are auto-invited to every team channel
 # and CCed on completion broadcasts. Single source of truth for both call sites.
@@ -294,6 +307,13 @@ def edit_team(json):
         "admin_notes": "admin_notes",
         "devpost_link": "devpost_link",
         "demo_video_url": "demo_video_url",
+        "project_tagline": "project_tagline",
+        "project_story": "project_story",
+        "project_built_with": "project_built_with",
+        "project_links": "project_links",
+        "project_thumbnail_url": "project_thumbnail_url",
+        "project_images": "project_images",
+        "project_submission_status": "project_submission_status",
     }
 
     # Normalize demo_video_url: trim, cap at 500 chars, empty string => clear
@@ -302,6 +322,29 @@ def edit_team(json):
         if isinstance(raw, str):
             trimmed = raw.strip()[:500]
             json["demo_video_url"] = trimmed if trimmed else None
+
+    # project_submission_status must be one of the catalog values — a bad
+    # value 400s rather than writing a status the dashboard/gallery/funnel
+    # don't know how to render.
+    if "project_submission_status" in json:
+        status_val = json.get("project_submission_status")
+        if status_val not in PROJECT_SUBMISSION_STATUSES:
+            return {
+                "message": f"Error: project_submission_status must be one of {sorted(PROJECT_SUBMISSION_STATUSES)}",
+                "success": False,
+            }, 400
+        if status_val != team_data.get("project_submission_status"):
+            update_data["project_updated_at"] = datetime.now().isoformat()
+
+    # project_tagline / project_story get the same defence-in-depth
+    # sanitize_markdown treatment as the self-serve save_project path.
+    if "project_tagline" in json:
+        val = json.get("project_tagline")
+        json["project_tagline"] = sanitize_markdown(val, PROJECT_TAGLINE_MAX_LEN) if isinstance(val, str) and val else None
+
+    if "project_story" in json:
+        val = json.get("project_story")
+        json["project_story"] = sanitize_markdown(val, PROJECT_STORY_MAX_LEN) if isinstance(val, str) and val else None
 
     # If this is the first time setting devpost_link, set devpost_link_submitted date
     if "devpost_link" in json and "devpost_link" not in team_data:

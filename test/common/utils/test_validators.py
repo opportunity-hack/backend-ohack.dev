@@ -189,6 +189,39 @@ def test_sanitize_markdown_preserves_generic_angle_brackets():
     assert "Map<K, V>" in cleaned
 
 
+def test_sanitize_markdown_loops_nested_tag_bypass_to_fixpoint():
+    """A single non-looped strip pass on "<scr<script>ipt>" removes only the
+    inner "<script>", and the leftover "<scr" + "ipt>" concatenate right back
+    into "<script>". The strip must loop until nothing changes."""
+    cleaned = sanitize_markdown("<scr<script>ipt>alert(1)", 1000)
+    assert "<script>" not in cleaned
+
+
+def test_sanitize_markdown_strips_onerror_glued_to_self_closing_slash():
+    """No whitespace before "onerror" (glued to the "/" of a self-closing
+    tag) used to slip past a \\s-only lookbehind."""
+    cleaned = sanitize_markdown("<img/onerror=alert(1)>", 1000)
+    assert "onerror" not in cleaned
+
+
+def test_sanitize_markdown_neutralizes_unquoted_javascript_href():
+    cleaned = sanitize_markdown('<a href=javascript:alert(1)>click</a>', 1000)
+    assert "javascript:" not in cleaned
+    assert 'href="#"' in cleaned
+
+
+def test_sanitize_markdown_neutralizes_markdown_link_target():
+    cleaned = sanitize_markdown("[click me](javascript:alert(1))", 1000)
+    assert "javascript:" not in cleaned
+    assert "[click me](#)" in cleaned
+
+
+def test_sanitize_markdown_neutralizes_markdown_image_target():
+    cleaned = sanitize_markdown("![alt](data:text/html;base64,PHNjcmlwdD4=)", 1000)
+    assert "data:" not in cleaned
+    assert "![alt](#)" in cleaned
+
+
 def test_sanitize_markdown_truncates_to_max_length():
     cleaned = sanitize_markdown("x" * 50, 10)
     assert len(cleaned) == 10

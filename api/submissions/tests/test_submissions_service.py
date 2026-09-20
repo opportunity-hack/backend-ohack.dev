@@ -9,6 +9,7 @@ from the same in-memory store so the returned "team" reflects the write.
 """
 import os
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -148,6 +149,50 @@ def test_window_closed_immediately_after_submission_with_no_late_window():
     now = datetime(2026, 10, 10, 15, 0, 1, tzinfo=timezone.utc)
     event = {"timezone": "UTC", "deadlines": {"submission": "2026-10-10T15:00:00+00:00"}}
     assert svc.compute_submission_window(event, now=now)["state"] == "closed"
+
+
+# ---------------------------------------------------------------------------
+# HIGH finding #5 — naive / "Z"-suffixed / garbage stored deadline strings
+# must not crash compute_submission_window (datetime.fromisoformat on a
+# naive string compared against an aware `now` raises TypeError; "Z" raises
+# ValueError on Python 3.9/3.10).
+# ---------------------------------------------------------------------------
+
+def test_window_naive_submission_deadline_is_localized_and_compared():
+    now = datetime(2026, 10, 10, 10, 0, tzinfo=timezone.utc)
+    # Naive string, no offset — must be localized to the event tz, not raise.
+    event = {"timezone": "UTC", "deadlines": {"submission": "2026-10-10T15:00:00"}}
+    window = svc.compute_submission_window(event, now=now)
+    assert window["state"] == "open"
+    assert window["submission"] == "2026-10-10T15:00:00+00:00"
+
+
+def test_window_z_suffixed_submission_deadline_is_normalized():
+    now = datetime(2026, 10, 10, 21, 0, tzinfo=timezone.utc)
+    event = {"timezone": "UTC", "deadlines": {"submission": "2026-10-10T22:00:00Z"}}
+    window = svc.compute_submission_window(event, now=now)
+    assert window["state"] == "open"
+    assert window["submission"] == "2026-10-10T22:00:00+00:00"
+
+
+def test_window_garbage_submission_deadline_treated_as_no_deadline():
+    event = {"timezone": "UTC", "deadlines": {"submission": "not-a-date"}}
+    window = svc.compute_submission_window(event)
+    assert window["state"] == "no_deadline"
+    assert window["submission"] is None
+
+
+def test_window_garbage_late_until_treated_as_absent():
+    now = datetime(2026, 10, 10, 16, 0, tzinfo=timezone.utc)
+    event = {
+        "timezone": "UTC",
+        "deadlines": {"submission": "2026-10-10T15:00:00+00:00", "late_submission_until": "garbage"},
+    }
+    window = svc.compute_submission_window(event, now=now)
+    # late_submission_until couldn't be parsed, so it's treated as absent —
+    # the window falls straight to "closed" rather than raising.
+    assert window["state"] == "closed"
+    assert window["late_until"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +387,20 @@ def test_submit_project_idempotent_when_already_submitted(wire, monkeypatch):
     assert result["already_submitted"] is True
 
 
+def test_submit_project_idempotent_even_after_deadline_closed(wire, monkeypatch):
+    """LOW finding #10 regression: a team that submitted on time must still
+    get the idempotent 200 (not a 409) if they revisit the submit endpoint
+    after the window has fully closed — the already-submitted check has to
+    run BEFORE the deadline gate."""
+    _seed_team(wire, project_submission_status="submitted", project_tagline="T", project_story="S")
+    _member(monkeypatch, is_member=True)
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {})
+    monkeypatch.setattr(svc, "compute_submission_window", lambda event, now=None: {"state": "closed", "submission": "x", "late_until": None, "now": "z", "timezone": "UTC"})
+    result, status = svc.submit_project("propel-1", "team-1")
+    assert status == 200
+    assert result["already_submitted"] is True
+
+
 def test_submit_project_403_for_non_member(wire, monkeypatch):
     _seed_team(wire)
     _member(monkeypatch, is_member=False)
@@ -403,6 +462,38 @@ def test_self_serve_team_edit_409_when_closed(wire, monkeypatch):
     monkeypatch.setattr(svc, "compute_submission_window", lambda event, now=None: {"state": "closed", "submission": "x", "late_until": None, "now": "z", "timezone": "UTC"})
     result, status = svc.self_serve_team_edit("propel-1", "team-1", {"demo_video_url": "https://youtu.be/x"})
     assert status == 409
+
+
+def test_self_serve_team_edit_also_clears_hackathon_event_cache(monkeypatch, team_store):
+    """MEDIUM finding #4 regression: self_serve_team_edit delegates the write
+    to edit_team, which only busts the generic per-function caches — it must
+    ALSO bust services.hackathons_service's own get_single_hackathon_event
+    cache (via this module's clear_cache()), or the event page shows a stale
+    DevPost link / demo video for up to 10 minutes.
+
+    Deliberately does not use the `wire` fixture, which stubs svc.clear_cache
+    to a no-op — this test needs the REAL clear_cache() to run so it can
+    assert on what it calls.
+    """
+    monkeypatch.setattr(svc, "get_db", lambda: FakeDb(team_store))
+    monkeypatch.setattr(svc, "send_slack_audit", lambda **kwargs: None)
+    monkeypatch.setattr(svc, "send_slack", lambda **kwargs: None)
+    monkeypatch.setattr(svc, "clear_all_caches", lambda: None)
+    monkeypatch.setattr(svc, "get_team", lambda team_id: {"team": {"id": team_id}})
+
+    _seed_team(team_store)
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+    monkeypatch.setattr(
+        "api.teams.teams_service.edit_team",
+        lambda json: {"success": True, "message": "Team updated successfully", "team_id": json["id"]},
+    )
+    hackathon_clear = MagicMock()
+    monkeypatch.setattr("services.hackathons_service.clear_cache", hackathon_clear)
+
+    svc.self_serve_team_edit("propel-1", "team-1", {"devpost_link": "https://devpost.com/x"})
+
+    hackathon_clear.assert_called_once()
 
 
 # ---------------------------------------------------------------------------
@@ -651,14 +742,37 @@ def test_send_deadline_reminders_only_if_due_skips_outside_window(reminder_wire,
 
 
 def test_send_deadline_reminders_only_if_due_sends_inside_window(reminder_wire, monkeypatch):
+    # The due window is now exactly one hour wide: [deadline-24h, deadline-23h).
+    # Center the deadline in that window (23h30m away) so the small delay
+    # between building `deadline` here and send_deadline_reminders computing
+    # its own `now_dt` can never push the check outside the window.
     now = datetime.now(timezone.utc)
-    deadline = (now + timedelta(hours=23)).isoformat()
+    deadline = (now + timedelta(hours=23, minutes=30)).isoformat()
     monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": deadline}})
     reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
 
     result, status = svc.send_deadline_reminders("event-1", "submission", 24, only_if_due=True)
     assert status == 200
     assert result["notified"] == ["team-1"]
+
+
+def test_send_deadline_reminders_only_if_due_does_not_double_fire_when_close_to_deadline(reminder_wire, monkeypatch):
+    """LOW finding #9 regression: with the old [deadline-h, deadline) window,
+    a deadline only 3 hours away would fall inside BOTH the 24h and 6h due
+    windows on the very first cron tick, sending two reminders at once. Each
+    tier's due window is now a narrow 1-hour slot, so neither one (whose
+    slot already elapsed, since the deadline is unusually close) fires."""
+    now = datetime.now(timezone.utc)
+    deadline = (now + timedelta(hours=3)).isoformat()
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": deadline}})
+    reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
+
+    result_24h, status_24h = svc.send_deadline_reminders("event-1", "submission", 24, only_if_due=True)
+    result_6h, status_6h = svc.send_deadline_reminders("event-1", "submission", 6, only_if_due=True)
+
+    assert status_24h == status_6h == 200
+    assert result_24h["skipped"] == "not_due"
+    assert result_6h["skipped"] == "not_due"
 
 
 def test_send_deadline_reminders_simulated_flag_reflects_test_environment(reminder_wire, monkeypatch):
@@ -676,7 +790,7 @@ def test_send_deadline_reminders_simulated_flag_reflects_test_environment(remind
 
 def test_send_due_reminders_for_current_events_iterates_hours_and_events(reminder_wire, monkeypatch):
     now = datetime.now(timezone.utc)
-    deadline = (now + timedelta(hours=23)).isoformat()
+    deadline = (now + timedelta(hours=23, minutes=30)).isoformat()
     monkeypatch.setattr(
         "services.hackathons_service.get_hackathon_list",
         lambda kind: {"hackathons": [{"event_id": "event-1"}]},
@@ -689,6 +803,6 @@ def test_send_due_reminders_for_current_events_iterates_hours_and_events(reminde
     assert status == 200
     hours_checked = {r["hours_before"] for r in result["results"]}
     assert hours_checked == {24, 6, 1}
-    # Only the 24h reminder was due (deadline is 23h away); confirm it fired.
+    # Only the 24h reminder was due (deadline is ~23h30m away); confirm it fired.
     fired = [r for r in result["results"] if r["hours_before"] == 24][0]
     assert fired["result"]["notified"] == ["team-1"]

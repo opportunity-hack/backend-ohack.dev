@@ -123,9 +123,19 @@ def validate_https_url(url, max_length=2048):
 # only these specific tag names are removed.
 _MARKDOWN_STRIP_TAG_NAMES = r"script|iframe|object|embed|style|link|meta|form|base"
 _MARKDOWN_TAG_RE = re.compile(rf"</?\s*(?:{_MARKDOWN_STRIP_TAG_NAMES})\b[^>]*>", re.IGNORECASE)
-_MARKDOWN_ON_ATTR_RE = re.compile(r"""\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+# `[\s/]` (not just `\s`) so an attribute glued directly to a self-closing
+# slash — `<img/onerror=alert(1)>`, no space before "onerror" — still matches.
+_MARKDOWN_ON_ATTR_RE = re.compile(r"""[\s/]on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+# Quoted OR unquoted attribute values: `href="javascript:..."` and the
+# unquoted `href=javascript:...` (no quotes at all) both get neutralized.
 _MARKDOWN_DANGEROUS_HREF_RE = re.compile(
-    r"""(href|src)\s*=\s*("|')\s*(?:javascript|vbscript|data):[^"']*\2""", re.IGNORECASE
+    r"""(href|src)\s*=\s*(?:(["'])\s*(?:javascript|vbscript|data):[^"']*\2|(?:javascript|vbscript|data):[^\s>]*)""",
+    re.IGNORECASE,
+)
+# Markdown link/image syntax `[text](javascript:...)` / `![alt](data:...)` —
+# not an HTML attribute, so _MARKDOWN_DANGEROUS_HREF_RE never sees it.
+_MARKDOWN_DANGEROUS_MD_LINK_RE = re.compile(
+    r"""\]\(\s*(?:javascript|vbscript|data):[^)]*\)""", re.IGNORECASE
 )
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
@@ -137,10 +147,16 @@ def sanitize_markdown(text, max_length):
     HTML is already inert on read. This still strips a denylist of dangerous
     tags/attributes server-side in case the content is ever rendered
     elsewhere: script|iframe|object|embed|style|link|meta|form|base tags
-    (open and close), `on*=` attributes, and javascript:/vbscript:/data:
-    link or image targets (rewritten to "#"). Generic `<` (e.g. "List<String>")
-    is preserved. Control characters (except \\n and \\t) are stripped and the
-    result is NFC-normalized, then truncated to max_length.
+    (open and close), `on*=` attributes (whitespace- or slash-preceded),
+    javascript:/vbscript:/data: link or image targets in HTML attributes
+    (quoted or unquoted) rewritten to "#", and the same targets in markdown
+    link/image syntax (`[text](javascript:...)`) rewritten to `](#)`.
+    Generic `<` (e.g. "List<String>", "Map<K, V>") is preserved. The tag-strip
+    pass is looped to a fixpoint so a nested bypass like
+    "<scr<script>ipt>" — where stripping the inner "<script>" once would
+    concatenate the leftovers back into "<script>" — can't survive. Control
+    characters (except \\n and \\t) are stripped and the result is
+    NFC-normalized, then truncated to max_length.
     """
     if text is None:
         return None
@@ -148,9 +164,17 @@ def sanitize_markdown(text, max_length):
         raise ValueError("value must be a string")
     cleaned = _CONTROL_CHARS_RE.sub("", text)
     cleaned = unicodedata.normalize("NFC", cleaned)
-    cleaned = _MARKDOWN_TAG_RE.sub("", cleaned)
+
+    # Loop to a fixpoint: each pass can only remove characters (never add),
+    # so the string is non-increasing in length and this always terminates.
+    previous = None
+    while previous != cleaned:
+        previous = cleaned
+        cleaned = _MARKDOWN_TAG_RE.sub("", cleaned)
+
     cleaned = _MARKDOWN_ON_ATTR_RE.sub("", cleaned)
     cleaned = _MARKDOWN_DANGEROUS_HREF_RE.sub(lambda m: f'{m.group(1)}="#"', cleaned)
+    cleaned = _MARKDOWN_DANGEROUS_MD_LINK_RE.sub("](#)", cleaned)
     if max_length is not None and len(cleaned) > max_length:
         cleaned = cleaned[:max_length]
     return cleaned

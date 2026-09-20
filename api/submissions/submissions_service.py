@@ -31,7 +31,12 @@ from db.db import get_db
 from common.utils.firestore_helpers import clear_all_caches
 from common.utils.slack import send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
-from common.utils.validators import sanitize_markdown, sanitize_string, validate_https_url
+from common.utils.validators import (
+    normalize_deadline_iso,
+    sanitize_markdown,
+    sanitize_string,
+    validate_https_url,
+)
 from services.teams_service import get_team
 
 logger = logging.getLogger("myapp")
@@ -97,6 +102,21 @@ def _cdn_server() -> str:
     return os.getenv("CDN_SERVER", "https://cdn.ohack.dev").rstrip("/")
 
 
+def _safe_normalize_deadline(value, tz_name, label):
+    """None/"" -> None; a naive or "Z"-suffixed value is normalized to an
+    aware ISO string; an unparseable value is logged and treated as absent
+    rather than raising (HIGH finding #5 — datetime.fromisoformat on a naive
+    stored string, compared against an aware `now`, raises TypeError; a
+    "Z"-suffixed string raises ValueError on Python 3.9/3.10)."""
+    if not value:
+        return None
+    try:
+        return normalize_deadline_iso(value, tz_name)
+    except ValueError as e:
+        logger.warning("compute_submission_window: unparseable %s %r: %s", label, value, e)
+        return None
+
+
 def compute_submission_window(event, now=None):
     """{"state": open|late|closed|no_deadline, "submission", "late_until", "now", "timezone"}.
 
@@ -109,8 +129,8 @@ def compute_submission_window(event, now=None):
     tz_name = event.get("timezone") or "America/Phoenix"
     now_dt = now or datetime.now(timezone.utc)
     deadlines = event.get("deadlines") or {}
-    submission = deadlines.get("submission")
-    late_until = deadlines.get("late_submission_until")
+    submission = _safe_normalize_deadline(deadlines.get("submission"), tz_name, "submission")
+    late_until = _safe_normalize_deadline(deadlines.get("late_submission_until"), tz_name, "late_submission_until")
 
     if not submission:
         return {
@@ -369,17 +389,32 @@ def save_project(propel_user_id, team_id, payload, admin=False):
 
 def submit_project(propel_user_id, team_id, admin=False):
     """Marks the project submitted|late. Idempotent — resubmitting an already
-    submitted/late project is a no-op 200 with already_submitted=True. Blocked
-    (409, via _authorize_team_write) once the window is fully closed unless
-    the caller is an admin, in which case the forced submission is recorded
-    as 'late' regardless of how long past close it is."""
-    err, team, _event, window = _authorize_team_write(propel_user_id, team_id, admin=admin, enforce_deadline=True)
+    submitted/late project is a no-op 200 with already_submitted=True, EVEN
+    once the submission window has fully closed (LOW finding #10 — the
+    already-submitted check must run before the deadline gate, not after, or
+    a team that submitted on time gets a spurious 409 just by revisiting the
+    dashboard after close). A fresh (not-yet-submitted) team is still blocked
+    with 409 once the window is fully closed, unless the caller is an admin,
+    in which case the forced submission is recorded as 'late' regardless of
+    how long past close it is."""
+    err, team, _event, window = _authorize_team_write(propel_user_id, team_id, admin=admin, enforce_deadline=False)
     if err:
         return err
 
     if team.get("project_submission_status") in SUBMITTED_STATUSES:
         fresh = (get_team(team_id) or {}).get("team") or {}
         return {"success": True, "already_submitted": True, "team": fresh}, 200
+
+    if not admin and submissions_closed(window):
+        return (
+            {
+                "error": "submissions_closed",
+                "deadline": window.get("submission"),
+                "late_until": window.get("late_until"),
+                "now": window.get("now"),
+            },
+            409,
+        )
 
     missing = [f for f in REQUIRED_SUBMIT_FIELDS if not (team.get(f) or "").strip()]
     if missing:
@@ -422,13 +457,22 @@ def self_serve_team_edit(propel_user_id, team_id, fields, admin=False):
     edit_team (which already knows how to stamp *_submitted timestamps for
     devpost_link/demo_video_url). Lazy import: api.teams.teams_service must
     never import this module, so importing it here (not at module top) keeps
-    the dependency one-directional."""
+    the dependency one-directional.
+
+    MEDIUM finding #4: edit_team only busts the generic per-function caches
+    (common.utils.firestore_helpers.clear_all_caches) — it has no reason to
+    know about the separately-cached get_single_hackathon_event (10-min TTL),
+    so a self-serve DevPost/demo-video save left the event page showing stale
+    data for up to 10 minutes. Call this module's own clear_cache() (which
+    busts both) after edit_team returns.
+    """
     err, _team, _event, _window = _authorize_team_write(propel_user_id, team_id, admin=admin, enforce_deadline=True)
     if err:
         return err
 
     from api.teams.teams_service import edit_team
     edit_result = edit_team({"id": team_id, **fields})
+    clear_cache()
     fresh = (get_team(team_id) or {}).get("team") or {}
     return {**edit_result, "team": fresh}
 
@@ -523,9 +567,14 @@ def send_deadline_reminders(event_id, kind, hours_before, *, only_if_due=False, 
     `force` — `reminders_sent[f"{kind}_{hours_before}h"]` on the hackathon doc
     is the idempotency key. `only_if_due` (used by the hourly cron) skips
     silently ({"success": true, "skipped": "not_due"}) outside the
-    [deadline - hours_before, deadline) window rather than erroring, so the
-    cron can call this for every (event, hours) pair every hour without
-    spamming teams the other 23 hours of the day."""
+    one-hour-wide [deadline - hours_before, deadline - hours_before + 1h)
+    window rather than erroring, so the cron can call this for every
+    (event, hours) pair every hour without spamming teams the other 23 hours
+    of the day. The window is deliberately only one hour wide (it used to be
+    [deadline - hours_before, deadline), i.e. open all the way up to the
+    deadline itself) — with the old window, a deadline set with only a few
+    hours' notice would have its 24h AND 6h tiers both fall "due" on the very
+    first cron tick and fire together (LOW finding #9)."""
     if kind not in REMINDER_KINDS:
         return {"error": f"kind must be one of {sorted(REMINDER_KINDS)}"}, 400
     try:
@@ -551,7 +600,8 @@ def send_deadline_reminders(event_id, kind, hours_before, *, only_if_due=False, 
     now_dt = datetime.now(timezone.utc)
     deadline_dt = datetime.fromisoformat(deadline_iso)
     due_at = deadline_dt - timedelta(hours=hours_before)
-    if only_if_due and not (due_at <= now_dt < deadline_dt):
+    due_window_end = due_at + timedelta(hours=1)
+    if only_if_due and not (due_at <= now_dt < due_window_end):
         return {"success": True, "kind": kind, "hours_before": hours_before, "skipped": "not_due", "simulated": _notifications_disabled()}, 200
 
     db = get_db()
