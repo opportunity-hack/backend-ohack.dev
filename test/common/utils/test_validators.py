@@ -155,3 +155,129 @@ def test_volunteer_admin_patch_rejects_unknown_status():
 def test_volunteer_admin_patch_passes_other_fields_through():
     cleaned = validate_volunteer_admin_patch({"id": "v1", "biography": "x", "checkedIn": True})
     assert cleaned == {"id": "v1", "biography": "x", "checkedIn": True}
+
+
+# ---------------------------------------------------------------------------
+# sanitize_markdown / validate_https_url — project story/tagline defence-in-depth.
+# ---------------------------------------------------------------------------
+from common.utils.validators import (  # noqa: E402
+    sanitize_markdown,
+    validate_https_url,
+)
+
+
+def test_sanitize_markdown_strips_script_tag():
+    cleaned = sanitize_markdown("Hello <script>alert(1)</script> world", 1000)
+    assert "<script" not in cleaned
+    assert "alert(1)" not in cleaned or "</script>" not in cleaned
+    assert "Hello" in cleaned and "world" in cleaned
+
+
+def test_sanitize_markdown_strips_onerror_attribute():
+    cleaned = sanitize_markdown('<img src=x onerror="alert(1)">', 1000)
+    assert "onerror" not in cleaned
+
+
+def test_sanitize_markdown_neutralizes_javascript_href():
+    cleaned = sanitize_markdown('<a href="javascript:alert(1)">click</a>', 1000)
+    assert "javascript:" not in cleaned
+
+
+def test_sanitize_markdown_preserves_generic_angle_brackets():
+    cleaned = sanitize_markdown("We used List<String> and Map<K, V> internally.", 1000)
+    assert "List<String>" in cleaned
+    assert "Map<K, V>" in cleaned
+
+
+def test_sanitize_markdown_truncates_to_max_length():
+    cleaned = sanitize_markdown("x" * 50, 10)
+    assert len(cleaned) == 10
+
+
+def test_sanitize_markdown_none_passthrough():
+    assert sanitize_markdown(None, 100) is None
+
+
+def test_validate_https_url_accepts_https():
+    assert validate_https_url("https://example.com/path") is True
+
+
+def test_validate_https_url_rejects_http_and_non_url():
+    assert validate_https_url("http://example.com") is False
+    assert validate_https_url("not a url") is False
+    assert validate_https_url("") is False
+    assert validate_https_url(None) is False
+
+
+def test_validate_https_url_enforces_max_length():
+    long_url = "https://example.com/" + ("a" * 2100)
+    assert validate_https_url(long_url, max_length=2048) is False
+
+
+# ---------------------------------------------------------------------------
+# peer_vote_* constraints wired into validate_hackathon_data_partial.
+# ---------------------------------------------------------------------------
+
+def test_partial_accepts_valid_peer_vote_constraints():
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({
+            "peer_vote_enabled": True,
+            "peer_vote_slate_size": 5,
+            "peer_vote_max_picks": 2,
+            "peer_vote_requires_submission": True,
+        })
+    )
+    assert skipped == []
+    assert cleaned["constraints"]["peer_vote_enabled"] is True
+    assert cleaned["constraints"]["peer_vote_slate_size"] == 5
+    assert cleaned["constraints"]["peer_vote_max_picks"] == 2
+
+
+def test_partial_rejects_slate_size_out_of_range():
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({"peer_vote_slate_size": 20})
+    )
+    assert any(s["field"] == "constraints.peer_vote_slate_size" for s in skipped)
+    assert "peer_vote_slate_size" not in cleaned["constraints"]
+
+
+def test_partial_rejects_max_picks_not_below_slate_size():
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({"peer_vote_slate_size": 3, "peer_vote_max_picks": 3})
+    )
+    assert any(s["field"] == "constraints.peer_vote_max_picks" for s in skipped)
+    assert "peer_vote_max_picks" not in cleaned["constraints"]
+
+
+def test_partial_rejects_non_bool_peer_vote_enabled():
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({"peer_vote_enabled": "yes"})
+    )
+    assert any(s["field"] == "constraints.peer_vote_enabled" for s in skipped)
+    assert "peer_vote_enabled" not in cleaned["constraints"]
+
+
+# ---------------------------------------------------------------------------
+# deadlines wired into validate_hackathon_data_partial (uses the hackathon's
+# own timezone, defaulting to America/Phoenix).
+# ---------------------------------------------------------------------------
+
+def test_partial_normalizes_deadlines_with_event_timezone():
+    data = _hackathon_data()
+    data["timezone"] = "America/New_York"
+    data["deadlines"] = {"submission": "2026-10-10T15:00:00"}
+    cleaned, skipped = validate_hackathon_data_partial(data)
+    assert skipped == []
+    assert cleaned["deadlines"]["submission"] == "2026-10-10T15:00:00-04:00"
+
+
+def test_partial_skips_deadlines_with_bad_ordering_but_keeps_other_fields():
+    data = _hackathon_data()
+    data["deadlines"] = {
+        "submission": "2026-10-10T15:00:00",
+        "late_submission_until": "2026-10-10T10:00:00",
+    }
+    cleaned, skipped = validate_hackathon_data_partial(data)
+    assert any(s["field"] == "deadlines" for s in skipped)
+    assert "deadlines" not in cleaned
+    assert cleaned["title"] == "Test Hackathon"

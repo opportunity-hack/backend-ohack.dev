@@ -1,4 +1,5 @@
 import re
+import unicodedata
 from copy import deepcopy
 from urllib.parse import urlparse
 import logging
@@ -14,6 +15,16 @@ JUDGE_TIME_CONSTRAINT_KEYS = (
     "judge_judging_start_time",
     "judge_judging_end_time",
 )
+
+# Hackathon `deadlines` object (Sep 2026 — team dashboard / Hackers' Choice).
+# Unknown keys are a validation error (see validate_deadlines) rather than a
+# silent skip, so a mistyped key doesn't quietly leave a deadline unset.
+DEADLINE_KEYS = {"submission", "late_submission_until", "voting_opens", "voting_closes"}
+
+# constraints.peer_vote_slate_size / peer_vote_max_picks bounds. Kept in sync
+# with DEFAULT_SLATE_SIZE/DEFAULT_MAX_PICKS in api/peer_votes/peer_votes_service.py.
+PEER_VOTE_SLATE_SIZE_RANGE = (3, 10)
+PEER_VOTE_MAX_PICKS_RANGE = (1, 5)
 
 # Regular expression for email validation
 # This regex follows the RFC 5322 standard for email addresses
@@ -88,6 +99,129 @@ def sanitize_string(input_string, max_length=None):
         logger.info(f"String truncated to {max_length} characters")
 
     return sanitized
+
+def validate_https_url(url, max_length=2048):
+    """Return True if `url` is an https:// URL no longer than max_length.
+
+    Used for team project_links[].url and (indirectly, via CDN prefix checks
+    elsewhere) project image URLs. Deliberately stricter than validate_url,
+    which also allows http.
+    """
+    if not isinstance(url, str) or not url:
+        return False
+    if len(url) > max_length:
+        return False
+    try:
+        parsed = urlparse(url)
+    except ValueError:
+        return False
+    return parsed.scheme == "https" and bool(parsed.netloc)
+
+
+# Tags stripped wholesale (open and close) by sanitize_markdown. Generic `<`
+# usage (e.g. "List<String>" in a project story) is intentionally preserved —
+# only these specific tag names are removed.
+_MARKDOWN_STRIP_TAG_NAMES = r"script|iframe|object|embed|style|link|meta|form|base"
+_MARKDOWN_TAG_RE = re.compile(rf"</?\s*(?:{_MARKDOWN_STRIP_TAG_NAMES})\b[^>]*>", re.IGNORECASE)
+_MARKDOWN_ON_ATTR_RE = re.compile(r"""\son\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)""", re.IGNORECASE)
+_MARKDOWN_DANGEROUS_HREF_RE = re.compile(
+    r"""(href|src)\s*=\s*("|')\s*(?:javascript|vbscript|data):[^"']*\2""", re.IGNORECASE
+)
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def sanitize_markdown(text, max_length):
+    """Defence-in-depth sanitizer for user-authored markdown (project tagline/story).
+
+    The frontend renders this via react-markdown WITHOUT rehype-raw, so raw
+    HTML is already inert on read. This still strips a denylist of dangerous
+    tags/attributes server-side in case the content is ever rendered
+    elsewhere: script|iframe|object|embed|style|link|meta|form|base tags
+    (open and close), `on*=` attributes, and javascript:/vbscript:/data:
+    link or image targets (rewritten to "#"). Generic `<` (e.g. "List<String>")
+    is preserved. Control characters (except \\n and \\t) are stripped and the
+    result is NFC-normalized, then truncated to max_length.
+    """
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        raise ValueError("value must be a string")
+    cleaned = _CONTROL_CHARS_RE.sub("", text)
+    cleaned = unicodedata.normalize("NFC", cleaned)
+    cleaned = _MARKDOWN_TAG_RE.sub("", cleaned)
+    cleaned = _MARKDOWN_ON_ATTR_RE.sub("", cleaned)
+    cleaned = _MARKDOWN_DANGEROUS_HREF_RE.sub(lambda m: f'{m.group(1)}="#"', cleaned)
+    if max_length is not None and len(cleaned) > max_length:
+        cleaned = cleaned[:max_length]
+    return cleaned
+
+
+def normalize_deadline_iso(value, tz_name="America/Phoenix"):
+    """Normalize one `deadlines` value to a timezone-aware ISO 8601 string.
+
+    - None or "" -> None (an explicit clear).
+    - A trailing "Z" is rewritten to "+00:00" so fromisoformat() accepts it
+      (Python's fromisoformat only started accepting "Z" itself in 3.11; this
+      backend targets 3.9).
+    - A naive datetime string is localized to tz_name (the event's timezone).
+    - An already offset-aware string is returned as-is (re-serialized).
+
+    Raises ValueError on unparseable input or an unknown tz_name.
+    """
+    if value is None or value == "":
+        return None
+    if not isinstance(value, str):
+        raise ValueError("deadline value must be a string")
+    raw = value.strip()
+    if raw.endswith("Z") or raw.endswith("z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(raw)
+    except ValueError:
+        raise ValueError(f"Invalid ISO 8601 datetime: {value!r}")
+    if dt.tzinfo is None:
+        try:
+            dt = dt.replace(tzinfo=ZoneInfo(tz_name or "America/Phoenix"))
+        except (ZoneInfoNotFoundError, KeyError):
+            raise ValueError(f"Invalid timezone: {tz_name!r}")
+    return dt.isoformat()
+
+
+def validate_deadlines(deadlines, tz_name="America/Phoenix"):
+    """Validate + normalize the hackathon `deadlines` object (Part 3 shape).
+
+    Keys: submission, late_submission_until, voting_opens, voting_closes.
+    An unknown key raises ValueError (hard fail for this sub-object — the
+    caller in validate_hackathon_data_partial catches it and skips the whole
+    `deadlines` field rather than silently dropping just the unknown key).
+    Each present value runs through normalize_deadline_iso; None/"" is kept
+    as None (explicit-clear intent is preserved for the service layer, which
+    turns None into a Firestore DELETE_FIELD on update or omits it on create).
+    Ordering is enforced only when both sides of a pair are present in this
+    same payload: submission <= late_submission_until, voting_opens < voting_closes.
+
+    Returns the normalized dict.
+    """
+    if not isinstance(deadlines, dict):
+        raise ValueError("deadlines must be an object")
+    unknown = set(deadlines.keys()) - DEADLINE_KEYS
+    if unknown:
+        raise ValueError(f"Unknown deadlines key(s): {sorted(unknown)}")
+
+    normalized = {key: normalize_deadline_iso(value, tz_name) for key, value in deadlines.items()}
+
+    submission = normalized.get("submission")
+    late_until = normalized.get("late_submission_until")
+    if submission and late_until and datetime.fromisoformat(late_until) < datetime.fromisoformat(submission):
+        raise ValueError("late_submission_until must be on or after submission")
+
+    voting_opens = normalized.get("voting_opens")
+    voting_closes = normalized.get("voting_closes")
+    if voting_opens and voting_closes and datetime.fromisoformat(voting_closes) <= datetime.fromisoformat(voting_opens):
+        raise ValueError("voting_closes must be after voting_opens")
+
+    return normalized
+
 
 # You can add more validator functions as needed
 
@@ -309,6 +443,37 @@ def validate_hackathon_data_partial(data):
                     _skip("constraints.meals_note", f"must be a string <= {MAX_MEALS_NOTE_LENGTH} chars")
                     c.pop("meals_note")
 
+            # peer_vote_* — Hackers' Choice settings (Sep 2026). Slate size and
+            # max picks have independent ranges, plus max_picks must stay below
+            # whatever slate size ends up in the cleaned constraints (falling
+            # back to the service-layer default of 5 when unset here).
+            if "peer_vote_enabled" in c and c["peer_vote_enabled"] is not None:
+                if not isinstance(c["peer_vote_enabled"], bool):
+                    _skip("constraints.peer_vote_enabled", "must be a boolean")
+                    c.pop("peer_vote_enabled")
+
+            if "peer_vote_slate_size" in c and c["peer_vote_slate_size"] is not None:
+                size = c["peer_vote_slate_size"]
+                lo, hi = PEER_VOTE_SLATE_SIZE_RANGE
+                if not isinstance(size, int) or isinstance(size, bool) or not (lo <= size <= hi):
+                    _skip("constraints.peer_vote_slate_size", f"must be an integer between {lo} and {hi}")
+                    c.pop("peer_vote_slate_size")
+
+            if "peer_vote_max_picks" in c and c["peer_vote_max_picks"] is not None:
+                picks = c["peer_vote_max_picks"]
+                lo, hi = PEER_VOTE_MAX_PICKS_RANGE
+                slate_size = c.get("peer_vote_slate_size", 5)
+                in_range = isinstance(picks, int) and not isinstance(picks, bool) and lo <= picks <= hi
+                below_slate = isinstance(slate_size, int) and picks < slate_size if in_range else False
+                if not (in_range and below_slate):
+                    _skip("constraints.peer_vote_max_picks", f"must be an integer between {lo} and {hi}, and less than the slate size")
+                    c.pop("peer_vote_max_picks")
+
+            if "peer_vote_requires_submission" in c and c["peer_vote_requires_submission"] is not None:
+                if not isinstance(c["peer_vote_requires_submission"], bool):
+                    _skip("constraints.peer_vote_requires_submission", "must be a boolean")
+                    c.pop("peer_vote_requires_submission")
+
             cleaned["constraints"] = c
 
     # event_photos
@@ -352,6 +517,19 @@ def validate_hackathon_data_partial(data):
         if not isinstance(go, str) or len(go) > 100:
             _skip("github_org", "must be a string <= 100 chars (GitHub org slug)")
             cleaned.pop("github_org")
+
+    # deadlines — submission/late/voting windows for the team dashboard +
+    # Hackers' Choice (Sep 2026). A None value inside the dict means "clear
+    # this key"; save_hackathon turns that into a Firestore DELETE_FIELD on
+    # update, or drops it entirely on create. An invalid `deadlines` object
+    # (unknown key, bad ISO string, bad ordering) skips the whole field rather
+    # than partially applying it.
+    if "deadlines" in cleaned and cleaned["deadlines"] is not None:
+        try:
+            cleaned["deadlines"] = validate_deadlines(cleaned["deadlines"], cleaned.get("timezone") or "America/Phoenix")
+        except ValueError as e:
+            _skip("deadlines", str(e))
+            cleaned.pop("deadlines")
 
     return cleaned, skipped
 
