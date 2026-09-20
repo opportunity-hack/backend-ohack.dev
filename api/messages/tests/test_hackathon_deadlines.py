@@ -179,3 +179,46 @@ def test_save_hackathon_skips_deadlines_with_unknown_key_but_keeps_rest(mock_get
     assert "deadlines" not in written
     assert getattr(result, "skipped_fields", None)
     assert any(s["field"] == "deadlines" for s in result.skipped_fields)
+
+
+# ---------------------------------------------------------------------------
+# LOW finding #13: `deadlines: {}` (and `deadlines: null`) on an UPDATE write
+# an empty map under set(merge=True) — Firestore's merge semantics only
+# touch the sub-fields actually present in the map you send, so an empty map
+# merges zero keys into the existing `deadlines` map and leaves it entirely
+# untouched (a no-op), rather than clearing it. This locks in that actual
+# behavior with a test and documents it (see api/submissions/README.md and
+# this repo's CLAUDE.md) so "to clear a single deadline send {key: null};
+# sending {} is a no-op" isn't just tribal knowledge.
+# ---------------------------------------------------------------------------
+
+@patch("services.hackathons_service.clear_cache")
+@patch("services.hackathons_service._get_db")
+def test_save_hackathon_update_empty_deadlines_dict_is_noop(mock_get_db, mock_clear_cache):
+    mock_db_instance, mock_transaction = _mock_db()
+    mock_get_db.return_value = mock_db_instance
+
+    save_hackathon(_base_json(id="abc123", deadlines={}), "user123")
+
+    written = mock_transaction.set.call_args[0][1]
+    # An empty map is what gets sent to Firestore; under merge=True this
+    # merges zero sub-fields into the existing `deadlines` map, so nothing on
+    # the stored doc actually changes.
+    assert written["deadlines"] == {}
+    assert mock_transaction.set.call_args.kwargs.get("merge") is True
+
+
+@patch("services.hackathons_service.clear_cache")
+@patch("services.hackathons_service._get_db")
+def test_save_hackathon_update_top_level_null_deadlines_is_also_a_noop(mock_get_db, mock_clear_cache):
+    """A top-level `deadlines: null` (as opposed to a specific key inside the
+    object being null) behaves identically to `deadlines: {}` — both end up
+    writing an empty map under merge, since save_hackathon does
+    `data["deadlines"] or {}` before building the DELETE_FIELD map."""
+    mock_db_instance, mock_transaction = _mock_db()
+    mock_get_db.return_value = mock_db_instance
+
+    save_hackathon(_base_json(id="abc123", deadlines=None), "user123")
+
+    written = mock_transaction.set.call_args[0][1]
+    assert written["deadlines"] == {}

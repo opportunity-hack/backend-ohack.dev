@@ -85,23 +85,19 @@ class TestCacheInvalidation:
 
     @patch('services.hackathons_service.clear_cache')
     @patch('services.hackathons_service._get_db')
-    @patch('services.hackathons_service.validate_hackathon_data')
+    @patch('services.hackathons_service.validate_hackathon_data_partial')
     def test_save_hackathon_clears_cache(self, mock_validate, mock_db, mock_clear_cache):
-        """Test that saving a hackathon clears the cache."""
+        """Test that saving a hackathon clears the cache.
+
+        LOW finding #14 / Part 9 bug #16: this used to patch
+        'validate_hackathon_data', which was renamed
+        'validate_hackathon_data_partial' — the patch silently no-op'd
+        (AttributeError on entering the context manager) because
+        hackathons_service no longer imports the old name at all.
+        """
         # Setup
         mock_db_instance = MagicMock()
         mock_db.return_value = mock_db_instance
-        mock_validate.return_value = None
-
-        # Mock transaction
-        mock_transaction = MagicMock()
-        mock_db_instance.transaction.return_value = mock_transaction
-
-        # Mock collection and document
-        mock_hackathon_ref = MagicMock()
-        mock_collection = MagicMock()
-        mock_collection.document.return_value = mock_hackathon_ref
-        mock_db_instance.collection.return_value = mock_collection
 
         json_data = {
             "title": "Test Hackathon",
@@ -113,6 +109,18 @@ class TestCacheInvalidation:
             "image_url": "https://example.com/image.png",
             "event_id": "event123"
         }
+        # validate_hackathon_data_partial returns (cleaned_data, skipped_fields)
+        mock_validate.return_value = (json_data, [])
+
+        # Mock transaction
+        mock_transaction = MagicMock()
+        mock_db_instance.transaction.return_value = mock_transaction
+
+        # Mock collection and document
+        mock_hackathon_ref = MagicMock()
+        mock_collection = MagicMock()
+        mock_collection.document.return_value = mock_hackathon_ref
+        mock_db_instance.collection.return_value = mock_collection
 
         # Execute
         result = save_hackathon(json_data, "user123")

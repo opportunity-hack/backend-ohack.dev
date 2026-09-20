@@ -12,11 +12,19 @@ mechanics (judging itself is unchanged — see `api/judging/`).
 - `api.submissions.submissions_service` owns SELF-SERVE, deadline-aware
   writes to a team's `project_*` fields (and now also the pre-existing
   `/team/<id>/devpost` and `/team/<id>/demo-video` routes, via
-  `self_serve_team_edit`).
+  `self_serve_team_edit`). `self_serve_team_edit` also busts the
+  `services.hackathons_service` event cache (via this module's `clear_cache`)
+  after delegating to `edit_team`, which on its own only clears the generic
+  per-function caches — without this the event page kept showing a stale
+  DevPost link / demo video for up to 10 minutes after a self-serve save.
 - `api.teams.teams_service.edit_team` remains the ADMIN write path (no
   deadline gate, no membership check — gated at the route by
-  `volunteer.admin`). An admin can still override `project_*` fields
-  (including `project_submission_status`) through `PATCH /api/team/edit`.
+  `volunteer.admin`). An admin can override `project_*` fields through
+  `PATCH /api/team/edit`, including `project_submission_status` — validated
+  against `draft|submitted|late` (400 on anything else, no write);
+  `project_tagline`/`project_story` get the same `sanitize_markdown`
+  treatment as the self-serve `save_project` path; a status *change* stamps
+  `project_updated_at`.
 
 Every write here goes through `_authorize_team_write`, which:
 1. 404s if the team doesn't exist.
@@ -39,7 +47,22 @@ UI implied): `project_tagline`, `project_story`, `project_built_with`,
 New optional key on `hackathons/{id}`: `deadlines` — see
 `common.utils.validators.validate_deadlines` for the shape and
 `services.hackathons_service.save_hackathon` for how a `None` value becomes a
-Firestore `DELETE_FIELD` on update (or is simply omitted on create).
+Firestore `DELETE_FIELD` on update (or is simply omitted on create). **To
+clear a single deadline, send `{"deadlines": {"<key>": null}}`; sending
+`{"deadlines": {}}` (or a top-level `"deadlines": null`) is a no-op** — an
+empty map merges zero sub-fields into the stored `deadlines` map under
+`set(merge=True)`, leaving whatever was already there untouched.
+
+`compute_submission_window` (here) and `compute_voting_window`
+(`api/peer_votes/`) both re-parse stored deadline strings through
+`normalize_deadline_iso` before comparing them against `now`, rather than
+calling `datetime.fromisoformat` on the raw stored value directly — a naive
+or `"Z"`-suffixed stored string used to raise (TypeError comparing
+naive-vs-aware; `"Z"` isn't accepted by `fromisoformat` until Python 3.11,
+and this backend targets 3.9) and surface as an unhandled 500 across
+`/project`, `/submit`, `/devpost`, `/demo-video`, `/window`, `/slate`, and
+`/ballot`. An unparseable stored value is now logged and treated as absent
+(`no_deadline` for submissions, `closed` for voting) instead.
 
 ## Endpoints
 
@@ -55,7 +78,12 @@ by a hacker's own write afterward). Returns
 Member (or admin) only. Requires `project_tagline` and `project_story` to
 already be saved (400 `{"error": "incomplete", "missing": [...]}` otherwise).
 Idempotent — resubmitting returns `{"success": true, "already_submitted":
-true, "team": ...}`. Sets `project_submission_status` to `"submitted"` (window
+true, "team": ...}` **even after the submission window has fully closed**:
+the already-submitted check runs before the deadline gate, not after, so a
+team that submitted on time never gets a spurious 409 just by revisiting the
+dashboard past close. A team that has *not yet* submitted is still blocked
+with 409 `submissions_closed` once the window is fully closed, unless the
+caller is an admin. Sets `project_submission_status` to `"submitted"` (window
 open/no-deadline) or `"late"` (window in its late-grace period, or an admin
 forcing a submission through after full close).
 
@@ -86,9 +114,15 @@ renders them with `react-markdown` **without** `rehype-raw`, so any HTML tag
 in the stored text is already inert on read — `sanitize_markdown` (in
 `common.utils.validators`) is defence-in-depth only: it strips a small
 denylist of tags (`script|iframe|object|embed|style|link|meta|form|base`),
-`on*=` attributes, and neutralizes `javascript:`/`vbscript:`/`data:` link
-targets. It deliberately preserves generic `<` — e.g. `List<String>` in a
-project story survives untouched.
+`on*=` attributes (whitespace- **or** slash-preceded, so `<img/onerror=...>`
+is caught too), and neutralizes `javascript:`/`vbscript:`/`data:` targets in
+HTML attributes (quoted **or** unquoted) as well as in markdown link/image
+syntax (`[text](javascript:...)` → `[text](#)`). The tag-strip pass loops to
+a fixpoint so a nested bypass like `<scr<script>ipt>` — where a single strip
+pass removes the inner `<script>` and the leftover pieces concatenate right
+back into a live `<script>` tag — can't survive. It deliberately preserves
+generic `<` — e.g. `List<String>`/`Map<K,V>` in a project story survives
+untouched.
 
 ## Images
 
