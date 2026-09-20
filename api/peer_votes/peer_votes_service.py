@@ -85,14 +85,42 @@ def _settings(event):
     """{"enabled", "slate_size", "max_picks", "requires_submission"} — reads
     constraints.peer_vote_* off the hackathon doc with the Part 3 defaults.
     MUST read peer_vote_enabled (a disabled event returns status:"disabled"
-    from every voter-facing route regardless of anything else)."""
+    from every voter-facing route regardless of anything else).
+
+    LOW finding #12: common.utils.validators.validate_hackathon_data_partial
+    only enforces max_picks < slate_size when BOTH are present in the SAME
+    PATCH payload — it has no access to the stored doc, so an earlier save
+    that raised max_picks followed by a later save that lowers slate_size can
+    leave an inconsistent pair on the hackathon doc. Re-clamp at read time,
+    here, so every voter-facing route (slate/ballot) sees a consistent pair
+    regardless of how the doc got there.
+    """
     constraints = (event or {}).get("constraints") or {}
+    slate_size = constraints.get("peer_vote_slate_size") or DEFAULT_SLATE_SIZE
+    max_picks = constraints.get("peer_vote_max_picks") or DEFAULT_MAX_PICKS
+    max_picks = max(1, min(max_picks, slate_size - 1))
     return {
         "enabled": bool(constraints.get("peer_vote_enabled", False)),
-        "slate_size": constraints.get("peer_vote_slate_size") or DEFAULT_SLATE_SIZE,
-        "max_picks": constraints.get("peer_vote_max_picks") or DEFAULT_MAX_PICKS,
+        "slate_size": slate_size,
+        "max_picks": max_picks,
         "requires_submission": bool(constraints.get("peer_vote_requires_submission", False)),
     }
+
+
+def _safe_normalize_deadline(value, tz_name, label):
+    """None/"" -> None; normalizes a naive or "Z"-suffixed value to an aware
+    ISO string; an unparseable value is logged and treated as absent rather
+    than raising (HIGH finding #5 — datetime.fromisoformat on a naive stored
+    string, compared against an aware `now`, raises TypeError; a
+    "Z"-suffixed string raises ValueError on Python 3.9/3.10 — either way an
+    unhandled crash used to reach the caller as a 500)."""
+    if not value:
+        return None
+    try:
+        return normalize_deadline_iso(value, tz_name)
+    except ValueError as e:
+        logger.warning("compute_voting_window: unparseable %s %r: %s", label, value, e)
+        return None
 
 
 def compute_voting_window(event, now=None):
@@ -103,21 +131,30 @@ def compute_voting_window(event, now=None):
     deadlines.voting_closes, falling back to the event's end_date at
     23:59:59 in the event timezone. No usable opens_at/closes_at at all
     (a brand new event with no deadlines configured) -> closed, never open.
+
+    LOW finding #6: the end_date fallback used to blindly append
+    "T23:59:59" to end_date before normalizing. If end_date already carries a
+    time component (or an offset), that produced an invalid, double-timed
+    string ("...T18:00:00T23:59:59"), which failed to parse and silently
+    fell back to permanently "closed". end_date is now normalized as-is when
+    it already looks like it has a time, and only gets "T23:59:59" appended
+    when it's a bare date.
     """
     event = event or {}
     tz_name = event.get("timezone") or "America/Phoenix"
     now_dt = now or datetime.now(timezone.utc)
     deadlines = event.get("deadlines") or {}
 
-    opens_at = deadlines.get("voting_opens") or deadlines.get("late_submission_until") or deadlines.get("submission")
-    closes_at = deadlines.get("voting_closes")
+    opens_raw = deadlines.get("voting_opens") or deadlines.get("late_submission_until") or deadlines.get("submission")
+    opens_at = _safe_normalize_deadline(opens_raw, tz_name, "voting_opens")
+
+    closes_at = _safe_normalize_deadline(deadlines.get("voting_closes"), tz_name, "voting_closes")
     if not closes_at:
         end_date = event.get("end_date")
         if end_date:
-            try:
-                closes_at = normalize_deadline_iso(f"{end_date}T23:59:59", tz_name)
-            except ValueError:
-                closes_at = None
+            has_time = "T" in end_date or " " in end_date.strip()
+            raw = end_date if has_time else f"{end_date}T23:59:59"
+            closes_at = _safe_normalize_deadline(raw, tz_name, "end_date-derived voting_closes")
 
     if not opens_at or not closes_at:
         return {"state": "closed", "opens_at": opens_at, "closes_at": closes_at}
@@ -240,8 +277,15 @@ def _hydrate_slate(team_ids, candidates_by_id=None):
 
 
 def _slate_response_from_ballot(ballot, window, settings, own_team_ids, candidates_by_id=None):
-    picks = ballot.get("picks")
-    status = "voted" if picks else window["state"]
+    """LOW finding #11: a voided ballot must render status "voided" (with
+    picks nulled out), never "voted" — an admin voiding a ballot shouldn't
+    leave the voter's own slate page still showing their old picks as live."""
+    if ballot.get("voided"):
+        status = "voided"
+        picks = None
+    else:
+        picks = ballot.get("picks")
+        status = "voted" if picks else window["state"]
     return {
         "status": status,
         "opens_at": window["opens_at"],
@@ -365,11 +409,19 @@ def submit_ballot(propel_id, event_id, picks):
     ):
         return {"error": "invalid_picks"}, 400
 
+    # LOW finding #8: the spec calls for a full set() (not a partial
+    # set(merge=True)) on every ballot write, so the persisted doc is always
+    # a complete, self-describing record rather than relying on merge
+    # semantics to preserve fields this write doesn't mention. Build the full
+    # doc from the existing one (carrying event_id/voter_propel_id/slate/
+    # shown_at/created_at forward) and only overwrite the fields that change.
     now_iso = datetime.now(timezone.utc).isoformat()
-    update = {"picks": picks, "updated_at": now_iso}
+    full_doc = dict(ballot)
+    full_doc["picks"] = picks
+    full_doc["updated_at"] = now_iso
     if not ballot.get("voted_at"):
-        update["voted_at"] = now_iso
-    ballot_ref.set(update, merge=True)
+        full_doc["voted_at"] = now_iso
+    ballot_ref.set(full_doc)
 
     send_slack_audit(
         action="peer_vote_ballot",
@@ -396,23 +448,43 @@ def wilson_lower_bound(approvals, shown, z=1.96):
 def compute_results(ballots, teams_by_id, exposure):
     """Pure. Ranks by Wilson lower bound desc, then raw approvals desc, then
     name — so a tie only ever breaks toward the more-approved, then
-    alphabetically (stable, no hidden randomness in the admin view)."""
-    approvals = Counter()
-    for ballot in ballots:
-        if ballot.get("voided"):
-            continue
-        for team_id in (ballot.get("picks") or []):
-            approvals[team_id] += 1
+    alphabetically (stable, no hidden randomness in the admin view).
+
+    HIGH finding #2: `shown` used to be read straight off the exposure doc,
+    which counts every slate the team was PERSISTED into (i.e. every voter
+    who ever opened the vote page), not every ballot that was actually CAST.
+    A team could be exposure-shown to 10 people but only have 2 real ballots
+    (both approving), and would still be scored against a denominator of 10
+    — badly under-stating its Wilson lower bound relative to a team that
+    happened to get fewer opens but a higher cast-ballot rate. `shown` is now
+    computed from non-voided ballots that actually have picks (i.e. were
+    cast), which also means voiding a ballot removes it from both `shown`
+    and `approvals`. `exposure_shown` keeps the raw persisted-slate count
+    as a separate, purely informational field.
+    """
+    active = [b for b in ballots if not b.get("voided")]
+    shown_counts = Counter(
+        team_id
+        for ballot in active
+        if ballot.get("picks")
+        for team_id in ballot.get("slate", [])
+    )
+    approvals = Counter(
+        team_id
+        for ballot in active
+        for team_id in (ballot.get("picks") or [])
+    )
 
     results = []
     for team_id, team in teams_by_id.items():
-        shown = exposure.get(team_id, 0)
+        shown = shown_counts.get(team_id, 0)
+        exposure_shown = exposure.get(team_id, 0)
         approved = approvals.get(team_id, 0)
         results.append({
             "team_id": team_id,
             "name": team.get("name"),
             "shown": shown,
-            "exposure_shown": shown,
+            "exposure_shown": exposure_shown,
             "approvals": approved,
             "approval_rate": (approved / shown) if shown else 0.0,
             "wilson_lower_bound": wilson_lower_bound(approved, shown),
@@ -454,6 +526,20 @@ def get_results(event_id):
 
     summary_exists = _peer_vote_subdoc(db, event_doc_id, "summary").get().exists
 
+    # LOW finding #11: the admin UI needs a per-voter list to drive `void`,
+    # but must never see WHO voted for WHAT — no names, no emails, and no
+    # `picks` (only how many). voter_propel_id is already an opaque id, not a
+    # name/email, so it's safe to surface for the void action's own use.
+    ballots_detail = [
+        {
+            "voter_propel_id": b.get("voter_propel_id"),
+            "voted_at": b.get("voted_at"),
+            "voided": bool(b.get("voided")),
+            "picks_count": len(b.get("picks") or []),
+        }
+        for b in all_ballots
+    ]
+
     return {
         "ballots": len(active_ballots),
         "voided": len(voided_ballots),
@@ -462,6 +548,7 @@ def get_results(event_id):
         "settings": settings,
         "published": summary_exists,
         "teams": results,
+        "ballots_detail": ballots_detail,
     }, 200
 
 
@@ -473,8 +560,15 @@ def void_ballot(event_id, voter_propel_id, actor):
     if not snap.exists:
         return {"error": "Ballot not found"}, 404
 
+    # LOW finding #8: full set(), not a partial merge — see submit_ballot's
+    # comment for why.
+    ballot = snap.to_dict() or {}
     now_iso = datetime.now(timezone.utc).isoformat()
-    ref.set({"voided": True, "voided_at": now_iso, "voided_by": actor}, merge=True)
+    full_doc = dict(ballot)
+    full_doc["voided"] = True
+    full_doc["voided_at"] = now_iso
+    full_doc["voided_by"] = actor
+    ref.set(full_doc)
     send_slack_audit(
         action="peer_vote_void",
         message=f"Hackers' Choice ballot voided for event {event_id}",
@@ -496,8 +590,16 @@ def publish_results(event_id, actor, team_id=None):
     if status != 200:
         return results_payload, status
 
+    # HIGH finding #1: compute_results emits a row for every SUBMITTED team
+    # regardless of ballot count, so with zero ballots cast the sort key
+    # (wilson_lower_bound, approvals) is 0 for every team and the sort falls
+    # through to team NAME — crowning an alphabetically-first team as the
+    # "winner" of a vote nobody voted in. Refuse to publish when there were
+    # no ballots at all, OR when the computed rank-1 team has zero approvals
+    # (covers the case where slates were opened/persisted but nobody
+    # actually cast a ballot).
     ranked = results_payload.get("teams") or []
-    if not ranked:
+    if not ranked or results_payload.get("ballots", 0) == 0 or ranked[0].get("approvals", 0) == 0:
         return {"error": "no_ballots"}, 409
 
     winner_id = team_id or ranked[0]["team_id"]

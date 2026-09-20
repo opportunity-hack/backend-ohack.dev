@@ -9,6 +9,7 @@ one test, the same way real Firestore would behave.
 """
 import os
 from datetime import datetime, timedelta, timezone
+from unittest.mock import MagicMock
 
 import pytest
 from google.cloud.firestore_v1.transforms import Increment
@@ -176,6 +177,87 @@ def _own_teams(monkeypatch, team_ids):
 
 
 # ---------------------------------------------------------------------------
+# compute_voting_window — HIGH finding #5 (naive/"Z"/garbage stored deadline
+# strings must not crash) and LOW finding #6 (end_date fallback must not
+# double-append a time onto an end_date that already has one).
+# ---------------------------------------------------------------------------
+
+def test_compute_voting_window_naive_voting_opens_is_localized():
+    now = datetime(2026, 10, 10, 10, 0, tzinfo=timezone.utc)
+    event = _seed_hackathon(timezone="UTC", deadlines={
+        "voting_opens": "2026-10-10T05:00:00",  # naive, no offset
+        "voting_closes": "2026-10-12T00:00:00+00:00",
+    })
+    window = svc.compute_voting_window(event, now=now)
+    assert window["state"] == "open"
+    assert window["opens_at"] == "2026-10-10T05:00:00+00:00"
+
+
+def test_compute_voting_window_z_suffixed_voting_closes_is_normalized():
+    now = datetime(2026, 10, 10, 10, 0, tzinfo=timezone.utc)
+    event = _seed_hackathon(timezone="UTC", deadlines={
+        "voting_opens": "2026-10-09T00:00:00+00:00",
+        "voting_closes": "2026-10-11T00:00:00Z",
+    })
+    window = svc.compute_voting_window(event, now=now)
+    assert window["state"] == "open"
+    assert window["closes_at"] == "2026-10-11T00:00:00+00:00"
+
+
+def test_compute_voting_window_garbage_deadline_treated_as_closed():
+    event = _seed_hackathon(timezone="UTC", deadlines={
+        "voting_opens": "not-a-date",
+        "voting_closes": "2026-10-12T00:00:00+00:00",
+    })
+    window = svc.compute_voting_window(event)
+    assert window["state"] == "closed"
+    assert window["opens_at"] is None
+
+
+def test_compute_voting_window_end_date_only_date_appends_end_of_day():
+    now = datetime(2026, 10, 11, 20, 0, tzinfo=timezone.utc)
+    event = _seed_hackathon(timezone="UTC", end_date="2026-10-11", deadlines={
+        "voting_opens": "2026-10-09T00:00:00+00:00",
+    })
+    window = svc.compute_voting_window(event, now=now)
+    assert window["closes_at"] == "2026-10-11T23:59:59+00:00"
+    assert window["state"] == "open"
+
+
+def test_compute_voting_window_end_date_with_existing_time_is_not_double_appended():
+    """LOW finding #6 regression: end_date already carrying a time used to
+    get "T23:59:59" appended anyway ("...T18:00:00T23:59:59"), which failed
+    to parse and silently fell back to permanently closed."""
+    now = datetime(2026, 10, 11, 10, 0, tzinfo=timezone.utc)
+    event = _seed_hackathon(timezone="UTC", end_date="2026-10-11T18:00:00", deadlines={
+        "voting_opens": "2026-10-09T00:00:00+00:00",
+    })
+    window = svc.compute_voting_window(event, now=now)
+    assert window["closes_at"] == "2026-10-11T18:00:00+00:00"
+    assert window["state"] == "open"
+
+
+# ---------------------------------------------------------------------------
+# _settings — LOW finding #12: max_picks must never reach a voter-facing
+# route >= slate_size, even if the stored doc has an inconsistent pair (the
+# validator only checks the relationship when both fields are in the SAME
+# PATCH payload).
+# ---------------------------------------------------------------------------
+
+def test_settings_clamps_max_picks_below_stored_slate_size():
+    event = _seed_hackathon(constraints={"peer_vote_slate_size": 3, "peer_vote_max_picks": 5})
+    settings = svc._settings(event)
+    assert settings["slate_size"] == 3
+    assert settings["max_picks"] == 2
+
+
+def test_settings_leaves_consistent_pair_untouched():
+    event = _seed_hackathon(constraints={"peer_vote_slate_size": 5, "peer_vote_max_picks": 2})
+    settings = svc._settings(event)
+    assert settings["max_picks"] == 2
+
+
+# ---------------------------------------------------------------------------
 # wilson_lower_bound — spec values
 # ---------------------------------------------------------------------------
 
@@ -290,6 +372,24 @@ def test_get_slate_second_call_returns_identical_slate_and_increments_exposure_o
     exposure = wire[("hackathons", "evtdoc-1", "peer_vote", "exposure")]["counts"]
     for team in first["slate"]:
         assert exposure[team["team_id"]] == 1
+
+
+def test_get_slate_renders_voided_status_not_voted(wire, monkeypatch):
+    """LOW finding #11 regression: an admin voiding a ballot must not leave
+    the voter's own slate page still rendering "voted" with their old picks
+    — it must show status "voided" and null out picks."""
+    event = _seed_hackathon(constraints={"peer_vote_enabled": True}, deadlines=OPEN_WINDOW)
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: event)
+    _eligible(monkeypatch)
+    _own_teams(monkeypatch, [])
+    wire[("peer_votes", "event-1__propel-1")] = {
+        "event_id": "event-1", "voter_propel_id": "propel-1", "slate": ["t1", "t2"],
+        "picks": ["t1"], "voted_at": "2026-01-01T00:00:00+00:00", "voided": True,
+    }
+
+    result = svc.get_slate("propel-1", "event-1")
+    assert result["status"] == "voided"
+    assert result["picks"] is None
 
 
 def test_get_slate_upcoming_and_closed_states(wire, monkeypatch):
@@ -427,6 +527,66 @@ def test_submit_ballot_re_vote_keeps_original_voted_at(wire, monkeypatch):
     assert wire[("peer_votes", "event-1__propel-1")]["picks"] == ["t2"]
 
 
+def test_submit_ballot_writes_full_doc_without_merge(wire, monkeypatch):
+    """LOW finding #8: the spec calls for a full set() (no merge=True) on
+    every ballot write. Spy on FakeDocRef.set to assert both that merge is
+    never passed as True AND that the written doc still carries every field
+    from the original ballot (event_id/slate/created_at) — a bug that
+    resurrected the old partial-set behavior would either flip merge back to
+    True, or write a doc missing these fields since a non-merge set() with a
+    partial dict would have silently dropped them."""
+    event = _open_event()
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: event)
+    _eligible(monkeypatch)
+    wire[("peer_votes", "event-1__propel-1")] = {
+        "event_id": "event-1", "voter_propel_id": "propel-1", "slate": ["t1", "t2", "t3"],
+        "shown_at": "2026-01-01T00:00:00+00:00", "created_at": "2026-01-01T00:00:00+00:00",
+        "picks": None, "voted_at": None, "voided": False,
+    }
+
+    calls = []
+    original_set = FakeDocRef.set
+
+    def spy_set(self, data, merge=False):
+        calls.append((dict(data), merge))
+        return original_set(self, data, merge=merge)
+
+    monkeypatch.setattr(FakeDocRef, "set", spy_set)
+
+    svc.submit_ballot("propel-1", "event-1", ["t1"])
+
+    data, merge = calls[-1]
+    assert merge is False
+    assert data["slate"] == ["t1", "t2", "t3"]
+    assert data["event_id"] == "event-1"
+    assert data["created_at"] == "2026-01-01T00:00:00+00:00"
+    assert data["picks"] == ["t1"]
+
+
+def test_void_ballot_writes_full_doc_without_merge(wire, monkeypatch):
+    wire[("peer_votes", "event-1__u1")] = {
+        "event_id": "event-1", "voter_propel_id": "u1", "slate": ["t1"],
+        "picks": ["t1"], "created_at": "2026-01-01T00:00:00+00:00", "voided": False,
+    }
+
+    calls = []
+    original_set = FakeDocRef.set
+
+    def spy_set(self, data, merge=False):
+        calls.append((dict(data), merge))
+        return original_set(self, data, merge=merge)
+
+    monkeypatch.setattr(FakeDocRef, "set", spy_set)
+
+    svc.void_ballot("event-1", "u1", "admin-1")
+
+    data, merge = calls[-1]
+    assert merge is False
+    assert data["slate"] == ["t1"]
+    assert data["created_at"] == "2026-01-01T00:00:00+00:00"
+    assert data["voided"] is True
+
+
 # ---------------------------------------------------------------------------
 # compute_results / get_results — voided exclusion
 # ---------------------------------------------------------------------------
@@ -444,6 +604,50 @@ def test_compute_results_excludes_voided_ballots():
     assert by_id["t2"]["approvals"] == 0
 
 
+def test_compute_results_shown_reflects_cast_ballots_not_raw_exposure():
+    """HIGH finding #2 — the reviewer's scenario: team A was persisted into
+    10 slates (exposure) but only 2 ballots were actually cast, both
+    approving it; team B was persisted into only 3 slates but got 1 approving
+    ballot. Scoring on raw exposure would badly under-rate A's 100%-of-2
+    approval rate against a denominator of 10; scoring on cast ballots (as
+    fixed) ranks A above B. exposure_shown keeps the raw count separately."""
+    ballots = [
+        {"slate": ["a", "x"], "picks": ["a"], "voided": False},
+        {"slate": ["a", "y"], "picks": ["a"], "voided": False},
+        {"slate": ["b", "z"], "picks": ["b"], "voided": False},
+    ]
+    teams_by_id = {"a": {"name": "Team A"}, "b": {"name": "Team B"}}
+    exposure = {"a": 10, "b": 3}
+    results = svc.compute_results(ballots, teams_by_id, exposure)
+    by_id = {r["team_id"]: r for r in results}
+
+    assert by_id["a"]["shown"] == 2
+    assert by_id["a"]["exposure_shown"] == 10
+    assert by_id["b"]["shown"] == 1
+    assert by_id["b"]["exposure_shown"] == 3
+    # A's rank must beat B's after the fix.
+    assert by_id["a"]["rank"] < by_id["b"]["rank"]
+
+
+def test_compute_results_voiding_a_ballot_removes_it_from_shown_and_approvals():
+    ballots_before = [
+        {"slate": ["a"], "picks": ["a"], "voided": False},
+        {"slate": ["a"], "picks": ["a"], "voided": False},
+    ]
+    ballots_after_void = [
+        {"slate": ["a"], "picks": ["a"], "voided": False},
+        {"slate": ["a"], "picks": ["a"], "voided": True},  # this one got voided
+    ]
+    teams_by_id = {"a": {"name": "Team A"}}
+    exposure = {"a": 2}
+
+    before = svc.compute_results(ballots_before, teams_by_id, exposure)[0]
+    after = svc.compute_results(ballots_after_void, teams_by_id, exposure)[0]
+
+    assert before["shown"] == 2 and before["approvals"] == 2
+    assert after["shown"] == 1 and after["approvals"] == 1
+
+
 def test_get_results_reports_voided_count_separately(wire, monkeypatch):
     event = _seed_hackathon(constraints={"peer_vote_enabled": True})
     monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: event)
@@ -456,6 +660,38 @@ def test_get_results_reports_voided_count_separately(wire, monkeypatch):
     assert status == 200
     assert result["ballots"] == 1
     assert result["voided"] == 1
+
+
+def test_get_results_includes_ballots_detail_with_no_names_or_picks(wire, monkeypatch):
+    """LOW finding #11: the admin UI needs a per-voter list to drive `void`
+    — voter_propel_id (an opaque id, not PII) + voted_at + voided + a COUNT
+    of picks, but never the picks themselves or any name/email."""
+    event = _seed_hackathon(constraints={"peer_vote_enabled": True})
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: event)
+    monkeypatch.setattr("services.volunteers_service.get_all_hackers_by_event_id", lambda eid: [])
+    _seed_team(wire, "t1", project_submission_status="submitted")
+    wire[("peer_votes", "event-1__u1")] = {
+        "event_id": "event-1", "voter_propel_id": "u1", "picks": ["t1"],
+        "voted_at": "2026-01-01T00:00:00+00:00", "voided": False,
+    }
+    wire[("peer_votes", "event-1__u2")] = {
+        "event_id": "event-1", "voter_propel_id": "u2", "picks": None,
+        "voted_at": None, "voided": True,
+    }
+
+    result, status = svc.get_results("event-1")
+    assert status == 200
+    detail_by_voter = {d["voter_propel_id"]: d for d in result["ballots_detail"]}
+    assert detail_by_voter["u1"] == {
+        "voter_propel_id": "u1", "voted_at": "2026-01-01T00:00:00+00:00",
+        "voided": False, "picks_count": 1,
+    }
+    assert detail_by_voter["u2"]["voided"] is True
+    assert detail_by_voter["u2"]["picks_count"] == 0
+    for detail in result["ballots_detail"]:
+        assert "picks" not in detail
+        assert "name" not in detail
+        assert "email" not in detail
 
 
 # ---------------------------------------------------------------------------
@@ -482,6 +718,50 @@ def test_publish_results_409_with_no_ballots(wire, monkeypatch):
     monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: event)
     monkeypatch.setattr("services.volunteers_service.get_all_hackers_by_event_id", lambda eid: [])
     result, status = svc.publish_results("event-1", "admin-1")
+    assert status == 409
+    assert result["error"] == "no_ballots"
+
+
+def test_publish_results_409_with_submitted_teams_but_zero_ballots(wire, monkeypatch):
+    """HIGH finding #1 — the actual reviewer scenario: compute_results emits
+    a row for every SUBMITTED team regardless of ballot count, so with 3
+    submitted teams and 0 ballots, every row's wilson_lower_bound/approvals
+    tie at 0 and the sort falls through to team NAME, crowning an arbitrary
+    "winner". Must 409 instead, and must not write an award or a summary
+    doc."""
+    event = _seed_hackathon(constraints={"peer_vote_enabled": True})
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: event)
+    monkeypatch.setattr("services.volunteers_service.get_all_hackers_by_event_id", lambda eid: [])
+    _seed_team(wire, "aaa-team", project_submission_status="submitted")
+    _seed_team(wire, "bbb-team", project_submission_status="submitted")
+    _seed_team(wire, "ccc-team", project_submission_status="submitted")
+    # No peer_votes docs seeded at all — zero ballots cast.
+
+    result, status = svc.publish_results("event-1", "admin-1")
+
+    assert status == 409
+    assert result["error"] == "no_ballots"
+    assert "awards" not in wire.get(("teams", "aaa-team"), {})
+    assert ("hackathons", "evtdoc-1", "peer_vote", "summary") not in wire
+
+
+def test_publish_results_409_when_slates_opened_but_nobody_voted(wire, monkeypatch):
+    """Ballots exist (slates were persisted — people opened the vote page)
+    but nobody actually cast a pick. results["ballots"] is non-zero here, so
+    this exercises the SECOND half of the HIGH-1 fix: the rank-1 team having
+    zero approvals."""
+    event = _seed_hackathon(constraints={"peer_vote_enabled": True})
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: event)
+    monkeypatch.setattr("services.volunteers_service.get_all_hackers_by_event_id", lambda eid: [])
+    _seed_team(wire, "t1", project_submission_status="submitted")
+    _seed_team(wire, "t2", project_submission_status="submitted")
+    wire[("peer_votes", "event-1__u1")] = {
+        "event_id": "event-1", "voter_propel_id": "u1", "slate": ["t1", "t2"],
+        "picks": None, "voided": False,
+    }
+
+    result, status = svc.publish_results("event-1", "admin-1")
+
     assert status == 409
     assert result["error"] == "no_ballots"
 
