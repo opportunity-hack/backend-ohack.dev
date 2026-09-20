@@ -598,6 +598,12 @@ def get_single_hackathon_event(hackathon_id):
         if "teams" in result and result["teams"]:
             teams = [t for t in (doc_to_json(doc=team, docid=team.id) for team in result["teams"]) if t is not None]
             result["teams"] = _enrich_teams_users_batch(teams, _get_db())
+            # project_story can run to ~20k chars per team; the event payload
+            # already fan-outs to every team on the event so it's dropped here
+            # (payload-size guard). The dashboard/team page fetch it via the
+            # per-team routes instead.
+            for t in result["teams"]:
+                t.pop("project_story", None)
         else:
             result["teams"] = []
 
@@ -1216,6 +1222,18 @@ def save_hackathon(json_data, propel_id):
         for optional_key in ("github_org", "mentor_slack_channel"):
             if optional_key in data:
                 hackathon_data[optional_key] = data[optional_key]
+
+        # deadlines: a None value means "explicitly clear this key". On an
+        # update that must be a Firestore DELETE_FIELD sentinel (set(merge=True)
+        # otherwise leaves the old value in place); on create there's nothing
+        # to delete yet, so None entries are simply dropped.
+        if "deadlines" in data:
+            dl = data["deadlines"] or {}
+            hackathon_data["deadlines"] = (
+                {k: (firestore.DELETE_FIELD if v is None else v) for k, v in dl.items()}
+                if is_update
+                else {k: v for k, v in dl.items() if v is not None}
+            )
 
         @firestore.transactional
         def update_hackathon(transaction):

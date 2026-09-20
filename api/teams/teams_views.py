@@ -78,19 +78,25 @@ def edit_team_api():
 @auth.require_user
 def add_devpost_to_team_api(teamid):
     """
-    Add a Devpost link to a team.
-    Requires user to be authenticated.
+    Add a Devpost link to a team. Self-serve — the caller must be on the team
+    (or an admin). Part 9 bug #1 fix: this used to call edit_team directly
+    with NO membership check, so any logged-in user could overwrite any
+    team's Devpost link. Routed through submissions.self_serve_team_edit,
+    which also 409s once the event's submission window has closed for a
+    non-admin caller. Lazy import: api.teams.teams_service must never import
+    api.submissions (one-directional dependency).
     """
     logger.info(f"POST /team/{teamid}/devpost called")
     if auth_user and auth_user.user_id:
-        # Get the Devpost link from the request
         logger.info(f"Adding Devpost link to team {teamid}")
-        devpost_link = request.get_json().get("devpost_link")
+        devpost_link = (request.get_json() or {}).get("devpost_link")
         logger.info(f"Devpost link: {devpost_link}")
         if not devpost_link:
             return {"error": "Devpost link is required"}, 400
 
-        return edit_team({"id": teamid, "devpost_link": devpost_link})
+        from services.hackathon_planning_service import is_admin
+        from api.submissions.submissions_service import self_serve_team_edit
+        return self_serve_team_edit(auth_user.user_id, teamid, {"devpost_link": devpost_link}, admin=is_admin(auth_user))
 
     logger.error("Could not obtain user details for POST /team/<teamid>/devpost")
     return {"error": "Unauthorized"}, 401
@@ -99,8 +105,9 @@ def add_devpost_to_team_api(teamid):
 @auth.require_user
 def add_demo_video_to_team_api(teamid):
     """
-    Add or clear a demo video URL for a team.
-    Requires user to be authenticated (team self-serve, mirrors devpost endpoint).
+    Add or clear a demo video URL for a team. Self-serve — the caller must be
+    on the team (or an admin); see add_devpost_to_team_api's docstring for the
+    Part 9 bug #1 context this fixes too.
     Pass demo_video_url as empty string or null to clear.
     """
     logger.info(f"POST /team/{teamid}/demo-video called")
@@ -108,7 +115,10 @@ def add_demo_video_to_team_api(teamid):
         body = request.get_json() or {}
         demo_video_url = body.get("demo_video_url", "")
         # Allow empty string to clear the field; edit_team normalizes to None
-        return edit_team({"id": teamid, "demo_video_url": demo_video_url})
+
+        from services.hackathon_planning_service import is_admin
+        from api.submissions.submissions_service import self_serve_team_edit
+        return self_serve_team_edit(auth_user.user_id, teamid, {"demo_video_url": demo_video_url}, admin=is_admin(auth_user))
 
     logger.error("Could not obtain user details for POST /team/<teamid>/demo-video")
     return {"error": "Unauthorized"}, 401

@@ -1,5 +1,7 @@
 
 import os
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from github import Github
 from dotenv import load_dotenv
 from github import GithubException
@@ -8,6 +10,10 @@ import logging
 logger = logging.getLogger("common.utils.github")
 logger.setLevel(logging.DEBUG)
 load_dotenv()
+
+# Contributor list is capped to keep the team-dashboard "Code activity" card
+# small; it's a snapshot of the most recent commit page, not a full history.
+MAX_ACTIVITY_CONTRIBUTORS = 8
 
 def create_github_repo(
         repository_name,
@@ -192,7 +198,98 @@ def validate_github_username(github_username):
     
 
 
-def get_all_repos(org_name):    
+def get_repo_activity(org_name, repo_name):
+    """
+    A team's "Code activity" card (team dashboard, Sep 2026): last commit,
+    commits in the last 24h, top contributors, open PR count. Deliberately
+    exactly 3 GitHub API calls (rate-limit budget matters more here than
+    completeness — this is a live-ish snapshot, not a full history):
+      1. g.get_repo(f"{org}/{repo}")
+      2. repo.get_commits().get_page(0)   (first page only, <=100 commits)
+      3. repo.get_pulls(state="open").totalCount
+
+    Contributors are derived from that single commit page (a Counter over
+    each commit's author), not a separate contributors-stats call.
+
+    Raises UnknownObjectException (repo doesn't exist) and
+    RateLimitExceededException to the caller — api.github.github_service
+    translates those into 404/503. An empty repository (GitHub returns 409
+    for get_commits on one) is NOT an error here — it's a valid all-zeros
+    result for a freshly created team repo.
+    """
+    g = Github(os.getenv('GITHUB_TOKEN'), per_page=100)
+    repo = g.get_repo(f"{org_name}/{repo_name}")
+
+    try:
+        commits = list(repo.get_commits().get_page(0))
+    except GithubException as e:
+        if e.status == 409:
+            commits = []
+        else:
+            raise
+
+    open_prs = repo.get_pulls(state="open").totalCount
+
+    now = datetime.now(timezone.utc)
+    last_24h = 0
+    last_commit_at = None
+    last_commit_message = None
+    last_author = None
+    contributor_counts = Counter()
+    contributor_avatars = {}
+
+    for i, commit in enumerate(commits):
+        git_commit = getattr(commit, "commit", None)
+        git_author = getattr(git_commit, "author", None) if git_commit else None
+        commit_date = getattr(git_author, "date", None) if git_author else None
+        if commit_date and commit_date.tzinfo is None:
+            commit_date = commit_date.replace(tzinfo=timezone.utc)
+
+        if i == 0:
+            last_commit_at = commit_date
+            last_commit_message = getattr(git_commit, "message", None) if git_commit else None
+            last_author = (
+                (commit.author.login if commit.author else None)
+                or (getattr(git_author, "name", None) if git_author else None)
+            )
+
+        if commit_date and (now - commit_date) <= timedelta(hours=24):
+            last_24h += 1
+
+        login = commit.author.login if commit.author else None
+        name = login or (getattr(git_author, "name", None) if git_author else None) or "Unknown"
+        avatar = commit.author.avatar_url if commit.author else None
+        contributor_counts[name] += 1
+        if avatar:
+            contributor_avatars[name] = avatar
+
+    contributors = [
+        {"login": name, "avatar_url": contributor_avatars.get(name), "contributions": count}
+        for name, count in contributor_counts.most_common(MAX_ACTIVITY_CONTRIBUTORS)
+    ]
+
+    return {
+        "success": True,
+        "repo": {
+            "html_url": repo.html_url,
+            "default_branch": repo.default_branch,
+            "pushed_at": repo.pushed_at.isoformat() if getattr(repo, "pushed_at", None) else None,
+            "open_issues_count": repo.open_issues_count,
+            "stargazers_count": repo.stargazers_count,
+        },
+        "commits": {
+            "total_recent": len(commits),
+            "last_24h": last_24h,
+            "last_commit_at": last_commit_at.isoformat() if last_commit_at else None,
+            "last_commit_message": last_commit_message,
+            "last_author": last_author,
+        },
+        "contributors": contributors,
+        "open_prs": open_prs,
+    }
+
+
+def get_all_repos(org_name):
     g = Github(os.getenv('GITHUB_TOKEN'))
     org = g.get_organization(org_name)
     repos = org.get_repos()

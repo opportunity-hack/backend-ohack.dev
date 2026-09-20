@@ -672,3 +672,37 @@ def test_generate_qr_code_special_characters():
     assert qr_image_bytes is not None
     assert isinstance(qr_image_bytes, bytes)
     assert len(qr_image_bytes) > 0
+
+# ---------------------------------------------------------------------------
+# get_volunteer_self_status — generic self-check (type=hacker etc.)
+# ---------------------------------------------------------------------------
+from services.volunteers_service import get_volunteer_self_status  # noqa: E402
+
+
+@patch('services.volunteers_service.find_volunteer_by_caller_identity')
+def test_get_volunteer_self_status_selected_hacker(mock_find):
+    mock_find.return_value = {"name": "Jamie Hacker", "isSelected": True}
+    result = get_volunteer_self_status(MOCK_USER_ID, MOCK_EVENT_ID, "hacker")
+    assert result == {"is_hacker": True, "volunteer": {"name": "Jamie Hacker", "isSelected": True}}
+    mock_find.assert_called_once_with(MOCK_USER_ID, MOCK_EVENT_ID, "hacker")
+
+
+@patch('services.volunteers_service.find_volunteer_by_caller_identity')
+def test_get_volunteer_self_status_not_selected_returns_null_volunteer(mock_find):
+    mock_find.return_value = {"name": "Jamie Hacker", "isSelected": False}
+    result = get_volunteer_self_status(MOCK_USER_ID, MOCK_EVENT_ID, "hacker")
+    assert result == {"is_hacker": False, "volunteer": None}
+
+
+@patch('services.volunteers_service.find_volunteer_by_caller_identity')
+def test_get_volunteer_self_status_no_doc_returns_false(mock_find):
+    mock_find.return_value = None
+    result = get_volunteer_self_status(MOCK_USER_ID, MOCK_EVENT_ID, "hacker")
+    assert result == {"is_hacker": False, "volunteer": None}
+
+
+@patch('services.volunteers_service.find_volunteer_by_caller_identity')
+def test_get_volunteer_self_status_leaks_no_pii_beyond_name(mock_find):
+    mock_find.return_value = {"name": "Jamie", "isSelected": True, "email": "jamie@example.com", "phone": "555-1234"}
+    result = get_volunteer_self_status(MOCK_USER_ID, MOCK_EVENT_ID, "hacker")
+    assert set(result["volunteer"].keys()) == {"name", "isSelected"}
