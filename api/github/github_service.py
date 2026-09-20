@@ -1,8 +1,9 @@
+import re
 import logging
 from typing import Dict, Any, List
 from cachetools import TTLCache
 from db.db import get_db
-from common.utils.github import create_issue, get_issues
+from common.utils.github import create_issue, get_issues, get_repo_activity
 
 logger = logging.getLogger("api.github.github_service")
 logger.setLevel(logging.DEBUG)
@@ -12,6 +13,62 @@ logger.setLevel(logging.DEBUG)
 # Only successful responses are cached — errors stay uncached so transient
 # GitHub failures retry on the next request.
 _ISSUES_CACHE = TTLCache(maxsize=512, ttl=600)
+
+# Team dashboard "Code activity" card (GET /api/github/activity). Separate,
+# shorter-TTL cache from _ISSUES_CACHE since this is meant to feel live-ish.
+_ACTIVITY_CACHE = TTLCache(maxsize=512, ttl=300)
+
+# GitHub org/repo name charset. Loose but enough to reject path-injection-ish
+# input before it reaches PyGithub.
+_GITHUB_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
+
+
+def get_github_activity(org_name: str, repo_name: str) -> Dict[str, Any]:
+    """
+    GET /api/github/activity backing service. Success-only cache (mirrors
+    get_github_issues): a rate-limit or repo-not-found response is never
+    cached, so the next request retries against GitHub instead of pinning a
+    transient failure for the TTL window.
+
+    Returns (payload, status):
+      200 {success, repo, commits, contributors, open_prs}
+      400 {"error": "invalid_repo"}       — org/repo fails the name regex
+      404 {"error": "repo_not_found"}
+      503 {"error": "github_rate_limited", "reset_at"}
+      502 {"error": "github_unavailable"} — anything else from PyGithub
+    """
+    if not org_name or not repo_name or not _GITHUB_NAME_RE.match(org_name) or not _GITHUB_NAME_RE.match(repo_name):
+        return {"error": "invalid_repo"}, 400
+
+    cache_key = (org_name, repo_name)
+    cached = _ACTIVITY_CACHE.get(cache_key)
+    if cached is not None:
+        return cached, 200
+
+    from github import UnknownObjectException, RateLimitExceededException, GithubException
+
+    try:
+        result = get_repo_activity(org_name, repo_name)
+    except UnknownObjectException:
+        logger.info("get_github_activity: repo not found org=%s repo=%s", org_name, repo_name)
+        return {"error": "repo_not_found"}, 404
+    except RateLimitExceededException as e:
+        reset_at = None
+        try:
+            reset_at = e.headers.get("x-ratelimit-reset") if e.headers else None
+        except Exception:
+            reset_at = None
+        logger.warning("get_github_activity: rate limited org=%s repo=%s", org_name, repo_name)
+        return {"error": "github_rate_limited", "reset_at": reset_at}, 503
+    except GithubException as e:
+        logger.error("get_github_activity: GitHub error org=%s repo=%s: %s", org_name, repo_name, e)
+        return {"error": "github_unavailable"}, 502
+    except Exception as e:
+        logger.error("get_github_activity: unexpected error org=%s repo=%s: %s", org_name, repo_name, e)
+        return {"error": "github_unavailable"}, 502
+
+    _ACTIVITY_CACHE[cache_key] = result
+    return result, 200
 
 def get_github_organization_data(org_name: str) -> Dict[str, Any]:
     """

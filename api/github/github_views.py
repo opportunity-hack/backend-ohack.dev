@@ -6,7 +6,8 @@ from api.github.github_service import (
     get_github_contributors_by_org,
     get_github_contributors_by_repo,
     create_github_issue,
-    get_github_issues
+    get_github_issues,
+    get_github_activity,
 )
 from common.auth import auth, auth_user, getOrgId
 
@@ -180,7 +181,9 @@ def get_issues_api():
 
     Query Parameters:
         repo: Required. The repository name.
-        org: Optional. The organization name.
+        org: Required. The organization name (the service 400s without it
+            anyway — this used to let a missing org through to a 200 error
+            body instead of a real 400).
         state: Optional. The state of the issues ('open', 'closed', 'all'). Defaults to 'open'.
 
     Returns:
@@ -193,13 +196,39 @@ def get_issues_api():
 
         if not repo_name:
             return jsonify({"error": "repo parameter is required"}), 400
+        if not org_name:
+            return jsonify({"error": "org parameter is required"}), 400
 
         logger.info("Getting issues for repo: %s, org: %s, state: %s", repo_name, org_name, state)
         issues = get_github_issues(repo_name=repo_name, org_name=org_name, state=state)
-        logger.info("Retrieved %d issues for repo: %s", len(issues), repo_name)
+        # `issues` is the service's response dict ({"success", "issues": [...]}
+        # or {"error": ...}) — logging len(issues) here was logging the dict's
+        # KEY COUNT, not the issue count.
+        issue_count = len(issues.get("issues", [])) if isinstance(issues, dict) else 0
+        logger.info("Retrieved %d issues for repo: %s", issue_count, repo_name)
 
         return jsonify(issues)
 
     except Exception as e:
         logger.error("Error getting issues: %s", str(e))
         return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/activity", methods=["GET"])
+def get_activity_api():
+    """
+    Team dashboard "Code activity" card: last commit, commits in the last
+    24h, top contributors, open PR count. Public (same trust level as
+    /issues — no team-membership check; the payload has nothing private).
+
+    Query Parameters:
+        org: Required. The GitHub organization name.
+        repo: Required. The repository name.
+    """
+    org_name = request.args.get('org')
+    repo_name = request.args.get('repo')
+    if not org_name or not repo_name:
+        return jsonify({"error": "org and repo parameters are required"}), 400
+
+    payload, status = get_github_activity(org_name, repo_name)
+    return jsonify(payload), status
