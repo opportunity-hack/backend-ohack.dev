@@ -241,11 +241,12 @@ def remove_team(team_id):
     if hackathon_event_id:
         hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
         event_collection = db.collection("hackathons").document(hackathon_db_id)
-        event_collection_dict = event_collection.get().to_dict()
-        
-        # Remove the team from the hackathon event
+        event_collection_dict = event_collection.get().to_dict() or {}
+
+        # Remove the team from the hackathon event (tolerate docs with no
+        # `teams` key — same KeyError class as the queue_team linking bug)
         new_teams = []
-        for t in event_collection_dict["teams"]:
+        for t in event_collection_dict.get("teams") or []:
             if t != team_doc:
                 new_teams.append(t)
         
@@ -380,6 +381,25 @@ def edit_team(json):
             "success": True,
             "team_id": team_id
         }
+
+
+def _append_team_to_hackathon(db, hackathon_db_id, team_ref):
+    """Link a team DocumentReference into hackathons/{id}.teams[].
+
+    Hackathon docs created through the admin UI may have no ``teams`` key at
+    all (not even an empty list); indexing it directly raised KeyError after
+    the team doc was already inserted, leaving the team orphaned from its
+    event (Sep 2026, test event fall-2026). Idempotent: an already-linked
+    team is not appended twice.
+    """
+    event_ref = db.collection("hackathons").document(hackathon_db_id)
+    event_dict = event_ref.get().to_dict() or {}
+    teams = list(event_dict.get("teams") or [])
+    existing_ids = {getattr(t, "id", None) for t in teams}
+    if getattr(team_ref, "id", None) not in existing_ids:
+        teams.append(team_ref)
+        event_ref.set({"teams": teams}, merge=True)
+    return teams
 
 def queue_team(propel_user_id, json):
     """
@@ -539,17 +559,7 @@ Let's make a difference! :muscle: :heart:
 
     # Link the team to the hackathon event
     hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
-    event_collection = db.collection("hackathons").document(hackathon_db_id)
-    event_collection_dict = event_collection.get().to_dict()
-
-    new_teams = []
-    for t in event_collection_dict["teams"]:
-        new_teams.append(t)
-    new_teams.append(new_team_doc)
-
-    event_collection.set({
-        "teams": new_teams
-    }, merge=True)
+    _append_team_to_hackathon(db, hackathon_db_id, new_team_doc)
 
     # Clear the cache
     logger.info("Clearing cache for event_id=%s doc_id=%s",
