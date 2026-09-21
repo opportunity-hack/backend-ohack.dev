@@ -171,6 +171,64 @@ def test_get_repo_activity_falls_back_to_commit_author_name_without_github_login
     assert result["contributors"][0]["login"] == "Jane Doe"
 
 
+def test_get_repo_activity_excludes_repo_bootstrap_account(monkeypatch):
+    """create_github_repo seeds LICENSE + README as the GITHUB_TOKEN owner
+    (gregv). Those two commits must not count as team activity."""
+    calls = []
+    now = datetime.now(timezone.utc)
+    commits = [
+        FakeCommit("Add README.md", now - timedelta(minutes=5), login="gregv"),
+        FakeCommit("Add MIT License", now - timedelta(minutes=6), login="GregV"),
+    ]
+    repo = FakeRepo(calls, commits, open_prs=0)
+    _patch_github(monkeypatch, FakeGithubClient(calls, repo=repo))
+
+    result = github_utils.get_repo_activity("org", "repo")
+
+    assert result["commits"]["total_recent"] == 0
+    assert result["commits"]["last_24h"] == 0
+    assert result["commits"]["last_commit_at"] is None
+    assert result["commits"]["last_author"] is None
+    assert result["contributors"] == []
+
+
+def test_get_repo_activity_last_commit_is_first_non_excluded(monkeypatch):
+    calls = []
+    now = datetime.now(timezone.utc)
+    commits = [
+        FakeCommit("Bootstrap tweak", now - timedelta(minutes=1), login="gregv"),
+        FakeCommit("Real work", now - timedelta(hours=2), login="alice"),
+        FakeCommit("Add README.md", now - timedelta(days=2), login=None, git_author_name="gregv"),
+    ]
+    repo = FakeRepo(calls, commits, open_prs=0)
+    _patch_github(monkeypatch, FakeGithubClient(calls, repo=repo))
+
+    result = github_utils.get_repo_activity("org", "repo")
+
+    assert result["commits"]["total_recent"] == 1
+    assert result["commits"]["last_author"] == "alice"
+    assert result["commits"]["last_commit_message"] == "Real work"
+    assert [c["login"] for c in result["contributors"]] == ["alice"]
+
+
+def test_get_repo_activity_excluded_logins_env_override(monkeypatch):
+    calls = []
+    now = datetime.now(timezone.utc)
+    monkeypatch.setenv("GITHUB_ACTIVITY_EXCLUDED_LOGINS", "bot-a, Bot-B")
+    commits = [
+        FakeCommit("a", now, login="bot-a"),
+        FakeCommit("b", now, login="bot-b"),
+        FakeCommit("c", now, login="gregv"),
+    ]
+    repo = FakeRepo(calls, commits, open_prs=0)
+    _patch_github(monkeypatch, FakeGithubClient(calls, repo=repo))
+
+    result = github_utils.get_repo_activity("org", "repo")
+
+    assert result["commits"]["total_recent"] == 1
+    assert result["commits"]["last_author"] == "gregv"
+
+
 def test_get_repo_activity_empty_repo_returns_zeros_not_an_error(monkeypatch):
     calls = []
     repo = FakeRepo(calls, [], raise_empty_409=True)

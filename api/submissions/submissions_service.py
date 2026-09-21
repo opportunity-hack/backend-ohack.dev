@@ -99,7 +99,10 @@ def _notifications_disabled() -> bool:
 
 
 def _cdn_server() -> str:
-    return os.getenv("CDN_SERVER", "https://cdn.ohack.dev").rstrip("/")
+    # Same helper upload_to_cdn() builds URLs with, so the prefix check below
+    # can never disagree with the URL the upload route just returned.
+    from common.utils.cdn import cdn_server
+    return cdn_server()
 
 
 def _safe_normalize_deadline(value, tz_name, label):
@@ -225,6 +228,9 @@ def _validate_own_cdn_image(url, team_id, existing_urls):
     image, and be under the size cap."""
     prefix = f"{_cdn_server()}/teams/{team_id}/"
     if not isinstance(url, str) or not url.startswith(prefix):
+        logger.warning(
+            "_validate_own_cdn_image: rejected url=%r expected prefix=%r", url, prefix
+        )
         return False, f"must be an ohack CDN URL under teams/{team_id}/"
     if url in existing_urls:
         return True, None

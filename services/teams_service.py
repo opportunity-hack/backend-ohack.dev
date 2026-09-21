@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from cachetools import cached, TTLCache
+from cachetools import TTLCache
 from ratelimit import limits
 from firebase_admin import firestore
 
@@ -59,6 +59,17 @@ def get_teams_list(id=None):
             return { "teams": results }
 
 
+# get_team used to be @cached whole (10-min TTL). That cache is per gunicorn
+# worker (--workers 2) and a project/mentor/completion write can only bust it
+# in the worker that handled the write, so the public team page (which
+# refetches GET /api/messages/team/<id> on load) kept showing a stale story
+# for up to 10 min about half the time. The team doc itself is ONE Firestore
+# get, so it is now read fresh on every call; only the member-profile fan-out
+# (db.get_all over users) is cached, keyed by the tuple of member ids.
+_TEAM_USERS_CACHE = TTLCache(maxsize=500, ttl=600)
+register_cache(_TEAM_USERS_CACHE)
+
+
 def _enrich_team_users(team_data, db):
     """
     Replace team_data["users"] (list of user doc-id strings, as flattened by
@@ -72,8 +83,15 @@ def _enrich_team_users(team_data, db):
     if not user_ids or not isinstance(user_ids, list):
         return team_data
 
-    user_refs = [db.collection("users").document(uid) for uid in user_ids if isinstance(uid, str)]
+    clean_ids = [uid for uid in user_ids if isinstance(uid, str)]
+    user_refs = [db.collection("users").document(uid) for uid in clean_ids]
     if not user_refs:
+        return team_data
+
+    cache_key = tuple(clean_ids)
+    cached_users = _TEAM_USERS_CACHE.get(cache_key)
+    if cached_users is not None:
+        team_data["users"] = [dict(u) for u in cached_users]
         return team_data
 
     try:
@@ -100,16 +118,12 @@ def _enrich_team_users(team_data, db):
             logger.warning(f"_enrich_team_users per-user failure ({snap.id}): {e}")
             enriched.append({"id": snap.id, "name": None, "nickname": None, "profile_image": None, "user_id": None})
 
+    _TEAM_USERS_CACHE[cache_key] = [dict(u) for u in enriched]
     team_data["users"] = enriched
     return team_data
 
 
-_GET_TEAM_CACHE = TTLCache(maxsize=100, ttl=600)
-register_cache(_GET_TEAM_CACHE)
-
-
 @limits(calls=2000, period=THIRTY_SECONDS)
-@cached(cache=_GET_TEAM_CACHE, key=lambda id: id)
 @log_execution_time
 def get_team(id):
     if id is None:

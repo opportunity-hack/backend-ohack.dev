@@ -268,6 +268,41 @@ def test_validate_project_payload_verifies_new_own_cdn_thumbnail(monkeypatch):
     assert clean["project_thumbnail_url"] == url
 
 
+def test_validate_project_payload_accepts_upload_url_with_trailing_slash_env(monkeypatch):
+    """upload_to_cdn() and the validator share cdn_server(); a CDN_SERVER env
+    value with a trailing slash (or unset) must not make them disagree."""
+    from common.utils import cdn as cdn_utils
+
+    monkeypatch.setenv("CDN_SERVER", "https://cdn.ohack.dev/")
+    assert cdn_utils.cdn_server() == "https://cdn.ohack.dev"
+
+    class FakeBlob:
+        def exists(self):
+            return False
+
+        def upload_from_filename(self, _name):
+            return None
+
+    class FakeBucket:
+        def blob(self, path):
+            return FakeBlob()
+
+    monkeypatch.setattr(cdn_utils, "_get_bucket", lambda: FakeBucket())
+    url = cdn_utils.upload_to_cdn("teams/team-1/project", "/tmp/x.png", "x.png")
+    assert url == "https://cdn.ohack.dev/teams/team-1/project/x.png"
+
+    monkeypatch.setattr(
+        "common.utils.cdn.get_blob_metadata",
+        lambda path: {"exists": True, "size": 1000, "content_type": "image/png"},
+    )
+    clean, errors = svc.validate_project_payload({"project_thumbnail_url": url}, "team-1")
+    assert errors == []
+    assert clean["project_thumbnail_url"] == url
+
+    monkeypatch.delenv("CDN_SERVER")
+    assert cdn_utils.cdn_server() == "https://cdn.ohack.dev"
+
+
 def test_validate_project_payload_rejects_missing_upload(monkeypatch):
     url = f"{svc._cdn_server()}/teams/team-1/project/thumb.png"
     monkeypatch.setattr(

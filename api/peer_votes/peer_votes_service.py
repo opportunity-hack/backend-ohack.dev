@@ -61,7 +61,7 @@ SUBMITTED_STATUSES = {"submitted", "late"}
 
 def clear_cache() -> None:
     """Mirrors api/mentors/mentors_service.py's clear_cache(): bust every
-    registered cache (including services.teams_service._GET_TEAM_CACHE) plus
+    registered cache (including services.teams_service._TEAM_USERS_CACHE) plus
     the hackathon event cache, since publish_results changes a team's
     `awards` array that the event page also renders."""
     clear_all_caches()
