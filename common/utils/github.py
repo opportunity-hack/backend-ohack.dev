@@ -15,6 +15,28 @@ load_dotenv()
 # small; it's a snapshot of the most recent commit page, not a full history.
 MAX_ACTIVITY_CONTRIBUTORS = 8
 
+def get_github_organization(g, org_name):
+    """Resolve a GitHub org by login, raising ValueError with a readable
+    message instead of letting PyGithub's exception bubble up as a 500.
+
+    A 404 here almost always means the hackathon's ``github_org`` isn't a bare
+    slug (e.g. a pasted ``https://github.com/...`` URL) or the org doesn't
+    exist; 401/403 means GITHUB_TOKEN can't see it.
+    """
+    try:
+        return g.get_organization(org_name)
+    except GithubException as e:
+        status = getattr(e, "status", None)
+        if status == 404:
+            detail = "not found on GitHub — check the event's GitHub organization is just the org name (e.g. Opportunity-Hack-2026), not a URL"
+        elif status in (401, 403):
+            detail = "not accessible with the configured GITHUB_TOKEN"
+        else:
+            detail = f"lookup failed (GitHub returned {status})"
+        logger.error("GitHub org %r %s: %s", org_name, detail, e)
+        raise ValueError(f"GitHub organization '{org_name}' {detail}") from e
+
+
 def create_github_repo(
         repository_name,
         hackathon_event_id,
@@ -28,9 +50,9 @@ def create_github_repo(
         devpost_url
         ):        
     g = Github(os.getenv('GITHUB_TOKEN'))
-    org = g.get_organization(org_name)
+    org = get_github_organization(g, org_name)
     
-    repo_exists = does_repo_exist(repository_name, hackathon_event_id, org_name)
+    repo_exists = does_repo_exist(repository_name, hackathon_event_id, org_name, org=org)
     
     repo = None
     if repo_exists['exists']: 
@@ -170,9 +192,10 @@ Examples of winning DevPost submissions:
     }
 
 
-def does_repo_exist(repo_name, hackathon_event_id, org_name):       
-    g = Github(os.getenv('GITHUB_TOKEN'))
-    org = g.get_organization(org_name)
+def does_repo_exist(repo_name, hackathon_event_id, org_name, org=None):
+    if org is None:
+        g = Github(os.getenv('GITHUB_TOKEN'))
+        org = get_github_organization(g, org_name)
     try:
         repo = org.get_repo(repo_name)
         return {

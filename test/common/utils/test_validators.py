@@ -314,3 +314,53 @@ def test_partial_skips_deadlines_with_bad_ordering_but_keeps_other_fields():
     assert any(s["field"] == "deadlines" for s in skipped)
     assert "deadlines" not in cleaned
     assert cleaned["title"] == "Test Hackathon"
+
+
+# --- github_org normalization -------------------------------------------------
+# A pasted URL used to be stored verbatim and then handed to PyGithub's
+# get_organization on team approval → 404 → 500 (Sep 2026).
+
+from common.utils.validators import normalize_github_org
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("Opportunity-Hack-2026", "Opportunity-Hack-2026"),
+        ("  Opportunity-Hack-2026  ", "Opportunity-Hack-2026"),
+        ("https://github.com/Opportunity-Hack-2026", "Opportunity-Hack-2026"),
+        ("https://github.com/Opportunity-Hack-2026/", "Opportunity-Hack-2026"),
+        ("http://www.github.com/Opportunity-Hack-2026/some-repo", "Opportunity-Hack-2026"),
+        ("HTTPS://GitHub.com/Opportunity-Hack-2026", "Opportunity-Hack-2026"),
+        ("@Opportunity-Hack-2026", "Opportunity-Hack-2026"),
+        ("", ""),
+        ("   ", ""),
+        (None, ""),
+        ("https://github.com/", ""),
+    ],
+)
+def test_normalize_github_org(raw, expected):
+    assert normalize_github_org(raw) == expected
+
+
+def test_validate_hackathon_data_partial_normalizes_github_org_url():
+    data = _hackathon_data()
+    data["github_org"] = "https://github.com/Opportunity-Hack-2026/"
+    cleaned, skipped = validate_hackathon_data_partial(data)
+    assert cleaned["github_org"] == "Opportunity-Hack-2026"
+    assert not [s for s in skipped if s["field"] == "github_org"]
+
+
+def test_validate_hackathon_data_partial_keeps_plain_github_org_slug():
+    data = _hackathon_data()
+    data["github_org"] = "2025-Arizona-Opportunity-Hack"
+    cleaned, _ = validate_hackathon_data_partial(data)
+    assert cleaned["github_org"] == "2025-Arizona-Opportunity-Hack"
+
+
+def test_validate_hackathon_data_partial_still_skips_non_string_github_org():
+    data = _hackathon_data()
+    data["github_org"] = 123
+    cleaned, skipped = validate_hackathon_data_partial(data)
+    assert "github_org" not in cleaned
+    assert any(s["field"] == "github_org" for s in skipped)

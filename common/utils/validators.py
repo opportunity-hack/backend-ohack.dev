@@ -249,6 +249,33 @@ def validate_deadlines(deadlines, tz_name="America/Phoenix"):
 
 # You can add more validator functions as needed
 
+_GITHUB_ORG_URL_PREFIX = re.compile(r"^https?://(www\.)?github\.com/", re.IGNORECASE)
+
+
+def normalize_github_org(raw):
+    """Reduce whatever an admin typed for a GitHub org to the bare org slug.
+
+    Accepts the slug itself, an ``@org`` handle, or a full URL such as
+    ``https://github.com/Opportunity-Hack-2026/`` (with or without a trailing
+    path). Mirrors ``githubOrgSlug`` in the frontend's ``src/lib/githubLinks.js``.
+
+    Returns ``""`` for ``None``/blank input. Never raises.
+
+    Why: the stored value is passed verbatim to PyGithub's
+    ``get_organization`` (team approval → repo creation) and used as a
+    Firestore document id (leaderboard). A pasted URL made both fail with an
+    opaque 404 / invalid-path error (Sep 2026).
+    """
+    if raw is None:
+        return ""
+    s = str(raw).strip()
+    s = _GITHUB_ORG_URL_PREFIX.sub("", s)
+    if s.startswith("@"):
+        s = s[1:]
+    s = s.split("/", 1)[0].strip()
+    return s
+
+
 def validate_hackathon_data(data):
     required_fields = ["title", "description", "location", "start_date", "end_date", "type", "image_url", "event_id"]
     for field in required_fields:
@@ -534,13 +561,18 @@ def validate_hackathon_data_partial(data):
             cleaned.pop("mentor_slack_channel")
 
     # github_org — optional GitHub organization slug used to link to the org's
-    # GitHub page and to scope team repo lookups. Loose validation: a string
-    # within GitHub's org-name length bounds.
+    # GitHub page, to create team repos on approval, and to scope repo lookups.
+    # Normalized to the bare slug (a pasted github.com URL or @handle is
+    # trimmed) so downstream GitHub / Firestore lookups get a valid login.
+    # Loose validation otherwise: a string within GitHub's org-name length
+    # bounds.
     if "github_org" in cleaned and cleaned["github_org"] is not None:
         go = cleaned["github_org"]
         if not isinstance(go, str) or len(go) > 100:
             _skip("github_org", "must be a string <= 100 chars (GitHub org slug)")
             cleaned.pop("github_org")
+        else:
+            cleaned["github_org"] = normalize_github_org(go)
 
     # deadlines — submission/late/voting windows for the team dashboard +
     # Hackers' Choice (Sep 2026). A None value inside the dict means "clear
