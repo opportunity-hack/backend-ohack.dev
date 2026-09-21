@@ -198,6 +198,21 @@ def validate_github_username(github_username):
     
 
 
+# Commits authored by these GitHub logins are ignored by get_repo_activity.
+# The GITHUB_TOKEN owner bootstraps every team repo with two commits (LICENSE
+# + README in create_github_repo), so without this a brand-new repo already
+# reads "2 commits, last commit by gregv" and the dashboard's "Push code to
+# your repo" checklist row is done before the team has pushed anything.
+# Comma-separated, case-insensitive; override via env when the token owner
+# changes.
+DEFAULT_ACTIVITY_EXCLUDED_LOGINS = "gregv"
+
+
+def activity_excluded_logins():
+    raw = os.getenv("GITHUB_ACTIVITY_EXCLUDED_LOGINS", DEFAULT_ACTIVITY_EXCLUDED_LOGINS)
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
 def get_repo_activity(org_name, repo_name):
     """
     A team's "Code activity" card (team dashboard, Sep 2026): last commit,
@@ -210,6 +225,10 @@ def get_repo_activity(org_name, repo_name):
 
     Contributors are derived from that single commit page (a Counter over
     each commit's author), not a separate contributors-stats call.
+
+    Commits by `activity_excluded_logins()` (the repo-bootstrap account) are
+    dropped BEFORE any counting, so total_recent / last_24h / last commit /
+    contributors all reflect the team's own work only.
 
     Raises UnknownObjectException (repo doesn't exist) and
     RateLimitExceededException to the caller — api.github.github_service
@@ -231,6 +250,8 @@ def get_repo_activity(org_name, repo_name):
     open_prs = repo.get_pulls(state="open").totalCount
 
     now = datetime.now(timezone.utc)
+    excluded = activity_excluded_logins()
+    kept_commits = 0
     last_24h = 0
     last_commit_at = None
     last_commit_message = None
@@ -238,26 +259,31 @@ def get_repo_activity(org_name, repo_name):
     contributor_counts = Counter()
     contributor_avatars = {}
 
-    for i, commit in enumerate(commits):
+    for commit in commits:
         git_commit = getattr(commit, "commit", None)
         git_author = getattr(git_commit, "author", None) if git_commit else None
         commit_date = getattr(git_author, "date", None) if git_author else None
         if commit_date and commit_date.tzinfo is None:
             commit_date = commit_date.replace(tzinfo=timezone.utc)
 
-        if i == 0:
+        login = commit.author.login if commit.author else None
+        git_name = getattr(git_author, "name", None) if git_author else None
+        # Bootstrap commits: match the GitHub login when the commit is linked
+        # to an account, else the raw git author name (same account, unlinked
+        # email).
+        if (login or git_name or "").lower() in excluded:
+            continue
+
+        kept_commits += 1
+        if kept_commits == 1:
             last_commit_at = commit_date
             last_commit_message = getattr(git_commit, "message", None) if git_commit else None
-            last_author = (
-                (commit.author.login if commit.author else None)
-                or (getattr(git_author, "name", None) if git_author else None)
-            )
+            last_author = login or git_name
 
         if commit_date and (now - commit_date) <= timedelta(hours=24):
             last_24h += 1
 
-        login = commit.author.login if commit.author else None
-        name = login or (getattr(git_author, "name", None) if git_author else None) or "Unknown"
+        name = login or git_name or "Unknown"
         avatar = commit.author.avatar_url if commit.author else None
         contributor_counts[name] += 1
         if avatar:
@@ -278,7 +304,7 @@ def get_repo_activity(org_name, repo_name):
             "stargazers_count": repo.stargazers_count,
         },
         "commits": {
-            "total_recent": len(commits),
+            "total_recent": kept_commits,
             "last_24h": last_24h,
             "last_commit_at": last_commit_at.isoformat() if last_commit_at else None,
             "last_commit_message": last_commit_message,
