@@ -15,7 +15,7 @@ from common.utils.github import create_github_repo, validate_github_username
 from common.utils.slack import create_slack_channel, invite_user_to_channel, send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
 from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id, normalize_slack_user_id
-from common.utils.validators import sanitize_markdown
+from common.utils.validators import sanitize_markdown, normalize_github_org
 
 from common.utils.slack import add_bot_to_channel
 
@@ -950,13 +950,19 @@ def approve_team(admin_user_id, json):
             "success": False
         }
     
-    # Make sure that github_org is set within the event
-    if not hackathon_event.get("github_org"):
+    # Make sure that github_org is set within the event. Older events may
+    # still carry a pasted URL / @handle from before the validator normalized
+    # it, so reduce it to the bare slug here too.
+    github_org = normalize_github_org(hackathon_event.get("github_org"))
+    if not github_org:
         return {
-            "message": "Error: GitHub organization not found for the event",
+            "message": (
+                "Error: this event has no GitHub organization set. "
+                "Add it under Admin → Hackathon → Overview → GitHub organization "
+                "(just the org name, e.g. Opportunity-Hack-2026), then approve again."
+            ),
             "success": False
         }
-    github_org = hackathon_event["github_org"]
     logger.info("GitHub organization: %s", github_org)
 
     # Look through the "links" within the hackathon event to find any url that contains "devpost"
