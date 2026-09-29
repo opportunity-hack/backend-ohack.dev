@@ -250,6 +250,36 @@ def _validate_own_cdn_image(url, team_id, existing_urls):
     return True, None
 
 
+def authorize_team_upload_directory(propel_user_id, directory, admin=False):
+    """Gate for POST /api/messages/upload-image's multipart `directory` field.
+
+    Returns None when the upload may proceed, else a ready-to-return
+    (payload, status). Only `teams/...` directories are gated:
+      - 400 {"error": "invalid_directory"} — bare `teams`, or any `..` segment
+      - 403 {"error": "not_team_member"}   — caller isn't on teams/<team_id> (admins bypass)
+
+    Why this exists: _validate_own_cdn_image trusts any URL under
+    `<cdn>/teams/<team_id>/` (and never re-verifies one already on the doc).
+    That prefix only means something if nobody but the team's members can write
+    under it; the upload route used to accept any `directory` from any
+    logged-in user, so a stranger could overwrite another team's public
+    project thumbnail by re-uploading the same filename.
+    """
+    if not directory:
+        return None
+    parts = [p for p in str(directory).replace("\\", "/").split("/") if p not in ("", ".")]
+    if not parts or parts[0] != "teams":
+        return None
+    if ".." in parts or len(parts) < 2:
+        return {"error": "invalid_directory"}, 400
+    if not admin:
+        from api.teams.teams_service import user_is_on_team
+
+        if not user_is_on_team(propel_user_id, parts[1]):
+            return {"error": "not_team_member"}, 403
+    return None
+
+
 def validate_project_payload(payload, team_id, existing=None):
     """(clean, errors[{field, reason}]) — a partial update: only keys present
     in `payload` are validated/returned. `existing` is the team's current doc
@@ -377,17 +407,25 @@ def save_project(propel_user_id, team_id, payload, admin=False):
 
     update = dict(clean)
     update["project_updated_at"] = datetime.now(timezone.utc).isoformat()
-    if not team.get("project_submission_status"):
+    first_save = not team.get("project_submission_status")
+    if first_save:
         update["project_submission_status"] = "draft"
 
     db = get_db()
     db.collection("teams").document(team_id).set(update, merge=True)
-    clear_cache()
-    send_slack_audit(
-        action="project_save",
-        message=f"Team {team_id} saved project fields: {sorted(clean.keys())}",
-        payload={"team_id": team_id},
-    )
+
+    # This is the AUTOSAVE hot path (the dashboard debounces at ~1.5s while a
+    # hacker types), so it must stay cheap and quiet: no Slack audit post (a
+    # blocking HTTP call per save = a flood in the audit channel and a request
+    # thread stuck whenever Slack is slow; submit_project audits the moments
+    # that matter) and no global cache flush. Only the first save busts the
+    # hackathon caches, because that flips the team from legacy to draft and
+    # the cached event page renders the submission tag. Later draft edits show
+    # on the event-page gallery within that cache's TTL; the team page and the
+    # dashboard read the team doc fresh, so authors always see their own edits.
+    if first_save:
+        clear_cache()
+    logger.info("project_save team=%s fields=%s", team_id, sorted(clean.keys()))
 
     fresh = (get_team(team_id) or {}).get("team") or {}
     return {"success": True, "team": fresh, "window": window}, 200
@@ -594,9 +632,17 @@ def send_deadline_reminders(event_id, kind, hours_before, *, only_if_due=False, 
     if not event:
         return {"error": "Event not found"}, 404
 
-    deadline_iso = (event.get("deadlines") or {}).get("submission")
-    if not deadline_iso:
+    raw_deadline = (event.get("deadlines") or {}).get("submission")
+    if not raw_deadline:
         return {"error": "no_deadline"}, 409
+    # Normalize like compute_submission_window does: a naive or "Z"-suffixed
+    # value in a hand-edited doc would otherwise raise TypeError/ValueError
+    # below (comparing naive vs aware datetimes) and 500 the whole cron run.
+    deadline_iso = _safe_normalize_deadline(
+        raw_deadline, event.get("timezone") or "America/Phoenix", "submission"
+    )
+    if not deadline_iso:
+        return {"error": "invalid_deadline"}, 409
 
     reminder_key = f"{kind}_{hours_before}h"
     already = (event.get("reminders_sent") or {}).get(reminder_key)
@@ -637,17 +683,25 @@ def send_deadline_reminders(event_id, kind, hours_before, *, only_if_due=False, 
                 continue
         notified.append(team_id)
 
-    event_doc_id = event.get("id") or event_id
-    db.collection("hackathons").document(event_doc_id).set(
-        {"reminders_sent": {reminder_key: {
-            "sent_at": now_dt.isoformat(),
-            "deadline": deadline_iso,
-            "teams_notified": notified,
-            "by": actor,
-        }}},
-        merge=True,
-    )
-    clear_cache()
+    # If Slack was down and NOTHING was delivered, don't record the idempotency
+    # key — it would turn every retry into a 409 `already_sent` until someone
+    # passes force.
+    delivered_nothing = not notified and any(s["reason"] == "send_failed" for s in skipped)
+    if not delivered_nothing:
+        event_doc_id = event.get("id") or event_id
+        # `by` is deliberately NOT the caller's PropelAuth id: the hackathon doc
+        # is served verbatim by public endpoints, and that id is PII. The
+        # private Slack audit below still records who triggered it.
+        db.collection("hackathons").document(event_doc_id).set(
+            {"reminders_sent": {reminder_key: {
+                "sent_at": now_dt.isoformat(),
+                "deadline": deadline_iso,
+                "teams_notified": notified,
+                "by": "cron" if actor == "cron" else "admin",
+            }}},
+            merge=True,
+        )
+        clear_cache()
     send_slack_audit(
         action="deadline_reminder",
         message=f"Sent {kind} {hours_before}h reminders for {event_id}: {len(notified)} teams notified, {len(skipped)} skipped",
@@ -678,6 +732,16 @@ def send_due_reminders_for_current_events():
         if not event_id:
             continue
         for hours_before in sorted(REMINDER_HOURS, reverse=True):
-            payload, status = send_deadline_reminders(event_id, "submission", hours_before, only_if_due=True, actor="cron")
+            # One event with a bad doc / a Firestore hiccup must not stop the
+            # other events' reminders from going out.
+            try:
+                payload, status = send_deadline_reminders(event_id, "submission", hours_before, only_if_due=True, actor="cron")
+            except Exception:
+                logger.exception("send_due_reminders: event %s (%sh) failed", event_id, hours_before)
+                payload, status = {"error": "reminder_failed"}, 500
             results.append({"event_id": event_id, "hours_before": hours_before, "status": status, "result": payload})
-    return {"success": True, "results": results}, 200
+
+    # Still answer 500 when anything blew up so the hourly GitHub Actions job
+    # goes red (curl -f) instead of silently swallowing the failure.
+    failed = sum(1 for r in results if r["status"] >= 500)
+    return {"success": failed == 0, "failed": failed, "results": results}, (500 if failed else 200)

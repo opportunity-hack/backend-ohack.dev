@@ -138,6 +138,18 @@ _MARKDOWN_DANGEROUS_MD_LINK_RE = re.compile(
     r"""\]\(\s*(?:javascript|vbscript|data):[^)]*\)""", re.IGNORECASE
 )
 _CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+# An HTML-tag-shaped span: `<` + letter, then anything up to the closing `>`
+# (quoted attribute values may themselves contain `>`). The on*=/href=/src=
+# scrubbing runs ONLY inside these spans — applied to the whole string it
+# rewrote ordinary prose and code, e.g. `const onSubmit = () => save()` became
+# `const => save()`, and "online = true" lost words (project stories are full
+# of both).
+_MARKDOWN_HTML_TAG_RE = re.compile(r"""<[a-zA-Z](?:[^<>"']|"[^"]*"|'[^']*')*>""")
+
+
+def _scrub_tag_attributes(match):
+    tag = _MARKDOWN_ON_ATTR_RE.sub("", match.group(0))
+    return _MARKDOWN_DANGEROUS_HREF_RE.sub(lambda m: f'{m.group(1)}="#"', tag)
 
 
 def sanitize_markdown(text, max_length):
@@ -149,7 +161,9 @@ def sanitize_markdown(text, max_length):
     elsewhere: script|iframe|object|embed|style|link|meta|form|base tags
     (open and close), `on*=` attributes (whitespace- or slash-preceded),
     javascript:/vbscript:/data: link or image targets in HTML attributes
-    (quoted or unquoted) rewritten to "#", and the same targets in markdown
+    (quoted or unquoted) rewritten to "#" — both of those only INSIDE an
+    HTML-tag-shaped span, so prose/code like `const onSubmit = ...` survives —
+    and the same targets in markdown
     link/image syntax (`[text](javascript:...)`) rewritten to `](#)`.
     Generic `<` (e.g. "List<String>", "Map<K, V>") is preserved. The tag-strip
     pass is looped to a fixpoint so a nested bypass like
@@ -172,8 +186,7 @@ def sanitize_markdown(text, max_length):
         previous = cleaned
         cleaned = _MARKDOWN_TAG_RE.sub("", cleaned)
 
-    cleaned = _MARKDOWN_ON_ATTR_RE.sub("", cleaned)
-    cleaned = _MARKDOWN_DANGEROUS_HREF_RE.sub(lambda m: f'{m.group(1)}="#"', cleaned)
+    cleaned = _MARKDOWN_HTML_TAG_RE.sub(_scrub_tag_attributes, cleaned)
     cleaned = _MARKDOWN_DANGEROUS_MD_LINK_RE.sub("](#)", cleaned)
     if max_length is not None and len(cleaned) > max_length:
         cleaned = cleaned[:max_length]

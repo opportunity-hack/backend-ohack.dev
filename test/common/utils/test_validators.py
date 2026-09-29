@@ -222,6 +222,32 @@ def test_sanitize_markdown_neutralizes_markdown_image_target():
     assert "![alt](#)" in cleaned
 
 
+@pytest.mark.parametrize("text", [
+    "const onSubmit = () => save()",
+    "Our app is online = true for demo day",
+    "we did it once = success",
+    "img.src = \"data:image/png;base64,AAAA\"",
+    "el.href = javascript:void(0)  // demo of what NOT to do",
+    "Stack: List<String> then onChange = handler",
+])
+def test_sanitize_markdown_leaves_prose_and_code_outside_html_tags_alone(text):
+    """Project stories are prose + code snippets. The on*=/href= scrubbing must
+    only touch attributes inside an HTML tag, or `const onSubmit = ...` silently
+    becomes `const => ...` on save (verified data loss before the fix)."""
+    assert sanitize_markdown(text, 1000) == text
+
+
+@pytest.mark.parametrize("text, banned", [
+    ('<img alt="a>b" onerror=alert(1)>', "onerror"),
+    ('<a href="javascript:alert(1)" onclick="steal()">x</a>', "onclick"),
+    ("<div\nonmouseover=alert(1)>hover</div>", "onmouseover"),
+    ("<svg/onload=alert(1)>", "onload"),
+    ("<a href=\"vbscript:x\">x</a>", "vbscript:"),
+])
+def test_sanitize_markdown_still_scrubs_dangerous_attributes_inside_tags(text, banned):
+    assert banned not in sanitize_markdown(text, 1000)
+
+
 def test_sanitize_markdown_truncates_to_max_length():
     cleaned = sanitize_markdown("x" * 50, 10)
     assert len(cleaned) == 10

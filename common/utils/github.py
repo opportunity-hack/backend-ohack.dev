@@ -15,6 +15,12 @@ load_dotenv()
 # small; it's a snapshot of the most recent commit page, not a full history.
 MAX_ACTIVITY_CONTRIBUTORS = 8
 
+class PrivateRepoError(Exception):
+    """The repo exists but is private. GET /api/github/activity is
+    unauthenticated and GITHUB_TOKEN can see private repos, so private repos
+    are refused (the service maps this to the same 404 as "doesn't exist")."""
+
+
 def get_github_organization(g, org_name):
     """Resolve a GitHub org by login, raising ValueError with a readable
     message instead of letting PyGithub's exception bubble up as a 500.
@@ -253,14 +259,20 @@ def get_repo_activity(org_name, repo_name):
     dropped BEFORE any counting, so total_recent / last_24h / last commit /
     contributors all reflect the team's own work only.
 
-    Raises UnknownObjectException (repo doesn't exist) and
-    RateLimitExceededException to the caller — api.github.github_service
-    translates those into 404/503. An empty repository (GitHub returns 409
+    Raises UnknownObjectException (repo doesn't exist), PrivateRepoError
+    (repo is private — the endpoint is public) and RateLimitExceededException
+    to the caller — api.github.github_service translates those into
+    404/404/503. An empty repository (GitHub returns 409
     for get_commits on one) is NOT an error here — it's a valid all-zeros
     result for a freshly created team repo.
     """
     g = Github(os.getenv('GITHUB_TOKEN'), per_page=100)
     repo = g.get_repo(f"{org_name}/{repo_name}")
+
+    # Checked before any commit/PR call so nothing about a private repo (commit
+    # messages, author logins, PR counts) is ever read. `is True`, not truthiness.
+    if repo.private is True:
+        raise PrivateRepoError(f"{org_name}/{repo_name}")
 
     try:
         commits = list(repo.get_commits().get_page(0))
