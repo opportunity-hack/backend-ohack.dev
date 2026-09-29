@@ -817,6 +817,17 @@ def upload_image():
     from api.messages.messages_service import upload_image_to_cdn
     
     if auth_user and auth_user.user_id:
+        # teams/<id>/... directories are only writable by that team's members
+        # (or an admin) — the team-project thumbnail validator trusts that
+        # prefix. Everything else is unchanged.
+        from services.hackathon_planning_service import is_admin
+        from api.submissions.submissions_service import authorize_team_upload_directory
+
+        blocked = authorize_team_upload_directory(
+            auth_user.user_id, request.form.get("directory"), admin=is_admin(auth_user)
+        )
+        if blocked:
+            return blocked
         return upload_image_to_cdn(request)
     else:
         error(logger, "Could not obtain user details for POST /upload-image")

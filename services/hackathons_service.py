@@ -581,6 +581,12 @@ def _enrich_teams_users_batch(teams, db):
     return teams
 
 
+# Operational bookkeeping that lives on the hackathon doc but must never be
+# served by the public event / list endpoints, which return (almost) the whole
+# doc. `reminders_sent` = deadline-reminder idempotency records (team ids etc.).
+_PRIVATE_HACKATHON_FIELDS = ("reminders_sent",)
+
+
 @cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
@@ -591,6 +597,8 @@ def get_single_hackathon_event(hackathon_id):
         logger.warning("get_single_hackathon_event end (no results)")
         return {}
     else:
+        for private_key in _PRIVATE_HACKATHON_FIELDS:
+            result.pop(private_key, None)
         if "nonprofits" in result and result["nonprofits"]:
             result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]
         else:
@@ -667,6 +675,8 @@ def _process_hackathon_docs(docs):
     for doc in docs:
         try:
             d = doc_to_json(doc.id, doc)
+            for private_key in _PRIVATE_HACKATHON_FIELDS:
+                d.pop(private_key, None)
 
             for key, value in d.items():
                 if isinstance(value, list):

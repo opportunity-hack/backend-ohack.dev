@@ -80,6 +80,7 @@ class FakeRepo:
         self.pushed_at = attrs.get("pushed_at")
         self.open_issues_count = attrs.get("open_issues_count", 0)
         self.stargazers_count = attrs.get("stargazers_count", 0)
+        self.private = attrs.get("private", False)
 
     def get_commits(self):
         return FakeCommitsPaginator(self._calls, self._commits, raise_empty_409=self._raise_empty_409)
@@ -331,3 +332,34 @@ def test_get_github_activity_does_not_cache_errors(monkeypatch):
     github_service.get_github_activity("org", "repo")
 
     assert call_count["n"] == 2  # never cached, so it's retried
+
+
+# ---------------------------------------------------------------------------
+# Private repos must never be readable through this unauthenticated endpoint
+# ---------------------------------------------------------------------------
+
+def test_get_repo_activity_refuses_private_repo_before_reading_commits(monkeypatch):
+    calls = []
+    repo = FakeRepo(calls, [FakeCommit("secret roadmap", datetime.now(timezone.utc), login="alice")], private=True)
+    _patch_github(monkeypatch, FakeGithubClient(calls, repo=repo))
+
+    with pytest.raises(github_utils.PrivateRepoError):
+        github_utils.get_repo_activity("opportunity-hack", "internal-repo")
+
+    # Only the repo lookup happened: no commit messages / PR counts were fetched.
+    assert calls == ["get_repo(opportunity-hack/internal-repo)"]
+
+
+def test_get_github_activity_private_repo_looks_exactly_like_not_found(monkeypatch):
+    github_service._ACTIVITY_CACHE.clear()
+    calls = []
+    repo = FakeRepo(calls, [], private=True)
+    _patch_github(monkeypatch, FakeGithubClient(calls, repo=repo))
+
+    private_payload, private_status = github_service.get_github_activity("opportunity-hack", "internal-repo")
+
+    _patch_github(monkeypatch, FakeGithubClient([], unknown=True))
+    missing_payload, missing_status = github_service.get_github_activity("opportunity-hack", "does-not-exist")
+
+    assert (private_payload, private_status) == (missing_payload, missing_status) == ({"error": "repo_not_found"}, 404)
+    assert ("opportunity-hack", "internal-repo") not in github_service._ACTIVITY_CACHE

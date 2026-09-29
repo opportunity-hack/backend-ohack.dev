@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Any, List
 from cachetools import TTLCache
 from db.db import get_db
-from common.utils.github import create_issue, get_issues, get_repo_activity
+from common.utils.github import create_issue, get_issues, get_repo_activity, PrivateRepoError
 
 logger = logging.getLogger("api.github.github_service")
 logger.setLevel(logging.DEBUG)
@@ -51,6 +51,11 @@ def get_github_activity(org_name: str, repo_name: str) -> Dict[str, Any]:
         result = get_repo_activity(org_name, repo_name)
     except UnknownObjectException:
         logger.info("get_github_activity: repo not found org=%s repo=%s", org_name, repo_name)
+        return {"error": "repo_not_found"}, 404
+    except PrivateRepoError:
+        # Same body + status as "not found" so the endpoint can't be used to
+        # probe which private repos exist.
+        logger.info("get_github_activity: refusing private repo org=%s repo=%s", org_name, repo_name)
         return {"error": "repo_not_found"}, 404
     except RateLimitExceededException as e:
         reset_at = None

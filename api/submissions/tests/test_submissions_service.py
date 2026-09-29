@@ -841,3 +841,214 @@ def test_send_due_reminders_for_current_events_iterates_hours_and_events(reminde
     # Only the 24h reminder was due (deadline is ~23h30m away); confirm it fired.
     fired = [r for r in result["results"] if r["hours_before"] == 24][0]
     assert fired["result"]["notified"] == ["team-1"]
+
+
+# ---------------------------------------------------------------------------
+# PR #288 review fixes — regression tests
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def recording_wire(monkeypatch, team_store):
+    """Like `wire`, but records audit posts + cache flushes instead of no-op'ing
+    them, so tests can assert the autosave hot path stays quiet."""
+    audits, flushes = [], []
+    monkeypatch.setattr(svc, "get_db", lambda: FakeDb(team_store))
+    monkeypatch.setattr(svc, "clear_cache", lambda: flushes.append(1))
+    monkeypatch.setattr(svc, "send_slack_audit", lambda **kwargs: audits.append(kwargs))
+    monkeypatch.setattr(svc, "send_slack", lambda **kwargs: None)
+    monkeypatch.setattr(
+        svc, "get_team", lambda team_id: {"team": {**team_store.get(team_id, {}), "id": team_id}}
+    )
+    return {"store": team_store, "audits": audits, "flushes": flushes}
+
+
+def test_save_project_autosave_does_not_post_slack_audit_or_flush_caches(recording_wire, monkeypatch):
+    """The dashboard autosaves every ~1.5s while typing. Each save used to post a
+    blocking Slack audit and flush every hackathon/event cache — a per-keystroke
+    Slack flood and a permanently cold event page during the final hours."""
+    _seed_team(recording_wire["store"], project_submission_status="draft")
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+
+    for i in range(3):
+        _result, status = svc.save_project("propel-1", "team-1", {"project_tagline": f"Draft {i}"})
+        assert status == 200
+
+    assert recording_wire["audits"] == []
+    assert recording_wire["flushes"] == []
+    assert recording_wire["store"]["team-1"]["project_tagline"] == "Draft 2"
+
+
+def test_save_project_first_save_flushes_caches_once_without_audit(recording_wire, monkeypatch):
+    """The first save flips the team from legacy -> draft, which the cached event
+    page renders (submission tag), so that one save does bust the caches."""
+    _seed_team(recording_wire["store"])
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+
+    svc.save_project("propel-1", "team-1", {"project_tagline": "Hello"})
+    svc.save_project("propel-1", "team-1", {"project_tagline": "Hello again"})
+
+    assert recording_wire["store"]["team-1"]["project_submission_status"] == "draft"
+    assert len(recording_wire["flushes"]) == 1
+    assert recording_wire["audits"] == []
+
+
+def test_submit_project_still_posts_audit_and_flushes_caches(recording_wire, monkeypatch):
+    _seed_team(recording_wire["store"], project_tagline="Hi", project_story="Story", project_submission_status="draft")
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+
+    _result, status = svc.submit_project("propel-1", "team-1")
+
+    assert status == 200
+    assert [a["action"] for a in recording_wire["audits"]] == ["project_submit"]
+    assert len(recording_wire["flushes"]) == 1
+
+
+# --- reminders: admin identity must not land on the (publicly served) hackathon doc
+
+def test_send_deadline_reminders_does_not_store_admin_identity_on_hackathon_doc(reminder_wire, monkeypatch):
+    audits = []
+    monkeypatch.setattr(svc, "send_slack_audit", lambda **kwargs: audits.append(kwargs))
+    deadline = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": deadline}})
+    reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
+
+    _result, status = svc.send_deadline_reminders("event-1", "submission", 24, actor="propel-admin-uuid-123")
+
+    assert status == 200
+    stored = reminder_wire["hackathons"]["evtdoc-1"]["reminders_sent"]["submission_24h"]
+    assert stored["by"] == "admin"
+    assert "propel-admin-uuid-123" not in repr(reminder_wire["hackathons"])
+    # The private audit trail still records who did it.
+    assert audits and audits[0]["payload"]["by"] == "propel-admin-uuid-123"
+
+
+def test_send_deadline_reminders_cron_actor_is_recorded_as_cron(reminder_wire, monkeypatch):
+    deadline = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": deadline}})
+    reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
+
+    svc.send_deadline_reminders("event-1", "submission", 24, actor="cron")
+
+    assert reminder_wire["hackathons"]["evtdoc-1"]["reminders_sent"]["submission_24h"]["by"] == "cron"
+
+
+# --- reminders: robustness
+
+def test_send_deadline_reminders_naive_stored_deadline_is_localized_not_a_crash(reminder_wire, monkeypatch):
+    """A hand-edited / legacy doc can hold a naive deadline; comparing it to an
+    aware `now` used to raise TypeError -> 500."""
+    naive = (datetime.now() + timedelta(hours=24)).replace(microsecond=0).isoformat()
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "timezone": "UTC", "deadlines": {"submission": naive}})
+    reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
+
+    _result, status = svc.send_deadline_reminders("event-1", "submission", 24, only_if_due=True)
+
+    assert status == 200
+
+
+def test_send_deadline_reminders_unparseable_stored_deadline_is_a_409(reminder_wire, monkeypatch):
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": "next friday-ish"}})
+
+    result, status = svc.send_deadline_reminders("event-1", "submission", 24)
+
+    assert status == 409
+    assert result["error"] == "invalid_deadline"
+
+
+def test_send_deadline_reminders_total_send_failure_does_not_record_idempotency_key(reminder_wire, monkeypatch):
+    """If Slack is down and NOTHING was delivered, recording `reminders_sent`
+    would make every retry 409 `already_sent` until someone passes force."""
+    deadline = (datetime.now(timezone.utc) + timedelta(hours=24)).isoformat()
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": deadline}})
+    monkeypatch.setattr(svc, "_notifications_disabled", lambda: False)
+
+    def boom(message, channel):
+        raise RuntimeError("slack down")
+
+    monkeypatch.setattr(svc, "send_slack", boom)
+    reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
+
+    result, status = svc.send_deadline_reminders("event-1", "submission", 24)
+
+    assert status == 200
+    assert result["notified"] == []
+    assert result["skipped"] == [{"team_id": "team-1", "reason": "send_failed"}]
+    assert "evtdoc-1" not in reminder_wire["hackathons"]
+
+
+def test_send_due_reminders_one_bad_event_does_not_abort_the_rest(reminder_wire, monkeypatch):
+    deadline = (datetime.now(timezone.utc) + timedelta(hours=23, minutes=30)).isoformat()
+    monkeypatch.setattr(
+        "services.hackathons_service.get_hackathon_list",
+        lambda kind: {"hackathons": [{"event_id": "bad-event"}, {"event_id": "event-1"}]},
+    )
+
+    def fake_get(eid):
+        if eid == "bad-event":
+            raise RuntimeError("firestore hiccup")
+        return {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": deadline}}
+
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", fake_get)
+    reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
+
+    result, status = svc.send_due_reminders_for_current_events()
+
+    # The healthy event still got its reminder, but the run reports failure so
+    # the hourly GitHub Actions job goes red instead of silently passing.
+    assert status == 500
+    assert result["success"] is False
+    assert result["failed"] == 3
+    bad = [r for r in result["results"] if r["event_id"] == "bad-event"]
+    assert bad and all(r["status"] == 500 for r in bad)
+    good_24h = [r for r in result["results"] if r["event_id"] == "event-1" and r["hours_before"] == 24][0]
+    assert good_24h["result"]["notified"] == ["team-1"]
+
+
+# --- upload directory gate (the teams/<id>/ CDN prefix is only meaningful if
+#     nobody but that team's members can write under it)
+
+def test_upload_directory_non_team_paths_are_not_gated():
+    assert svc.authorize_team_upload_directory("propel-1", "nonprofits") is None
+    assert svc.authorize_team_upload_directory("propel-1", "hackathons/e1/photos") is None
+    assert svc.authorize_team_upload_directory("propel-1", None) is None
+    assert svc.authorize_team_upload_directory("propel-1", "") is None
+
+
+def test_upload_directory_team_member_allowed(monkeypatch):
+    _member(monkeypatch, is_member=True)
+    assert svc.authorize_team_upload_directory("propel-1", "teams/team-1/project") is None
+
+
+def test_upload_directory_non_member_forbidden(monkeypatch):
+    _member(monkeypatch, is_member=False)
+    payload, status = svc.authorize_team_upload_directory("propel-1", "teams/team-1/project")
+    assert status == 403
+    assert payload["error"] == "not_team_member"
+
+
+def test_upload_directory_admin_bypasses_membership(monkeypatch):
+    _member(monkeypatch, is_member=False)
+    assert svc.authorize_team_upload_directory("propel-1", "teams/team-1/project", admin=True) is None
+
+
+@pytest.mark.parametrize("directory", [
+    "teams/team-1/../team-2/project",
+    "teams/../team-2",
+    "teams",
+    "teams/",
+    "/teams//team-1/project/..",
+])
+def test_upload_directory_traversal_and_bare_teams_root_rejected(monkeypatch, directory):
+    _member(monkeypatch, is_member=True)
+    payload, status = svc.authorize_team_upload_directory("propel-1", directory)
+    assert status == 400
+    assert payload["error"] == "invalid_directory"
+
+
+def test_upload_directory_leading_slash_cannot_dodge_the_gate(monkeypatch):
+    _member(monkeypatch, is_member=False)
+    _payload, status = svc.authorize_team_upload_directory("propel-1", "/teams/team-1/project")
+    assert status == 403
