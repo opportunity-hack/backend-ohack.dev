@@ -581,6 +581,12 @@ def _enrich_teams_users_batch(teams, db):
     return teams
 
 
+# Operational bookkeeping that lives on the hackathon doc but must never be
+# served by the public event / list endpoints, which return (almost) the whole
+# doc. `reminders_sent` = deadline-reminder idempotency records (team ids etc.).
+_PRIVATE_HACKATHON_FIELDS = ("reminders_sent",)
+
+
 @cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
@@ -591,6 +597,8 @@ def get_single_hackathon_event(hackathon_id):
         logger.warning("get_single_hackathon_event end (no results)")
         return {}
     else:
+        for private_key in _PRIVATE_HACKATHON_FIELDS:
+            result.pop(private_key, None)
         if "nonprofits" in result and result["nonprofits"]:
             result["nonprofits"] = [doc_to_json(doc=npo, docid=npo.id) for npo in result["nonprofits"]]
         else:
@@ -598,6 +606,12 @@ def get_single_hackathon_event(hackathon_id):
         if "teams" in result and result["teams"]:
             teams = [t for t in (doc_to_json(doc=team, docid=team.id) for team in result["teams"]) if t is not None]
             result["teams"] = _enrich_teams_users_batch(teams, _get_db())
+            # project_story can run to ~20k chars per team; the event payload
+            # already fan-outs to every team on the event so it's dropped here
+            # (payload-size guard). The dashboard/team page fetch it via the
+            # per-team routes instead.
+            for t in result["teams"]:
+                t.pop("project_story", None)
         else:
             result["teams"] = []
 
@@ -661,6 +675,8 @@ def _process_hackathon_docs(docs):
     for doc in docs:
         try:
             d = doc_to_json(doc.id, doc)
+            for private_key in _PRIVATE_HACKATHON_FIELDS:
+                d.pop(private_key, None)
 
             for key, value in d.items():
                 if isinstance(value, list):
@@ -1216,6 +1232,18 @@ def save_hackathon(json_data, propel_id):
         for optional_key in ("github_org", "mentor_slack_channel"):
             if optional_key in data:
                 hackathon_data[optional_key] = data[optional_key]
+
+        # deadlines: a None value means "explicitly clear this key". On an
+        # update that must be a Firestore DELETE_FIELD sentinel (set(merge=True)
+        # otherwise leaves the old value in place); on create there's nothing
+        # to delete yet, so None entries are simply dropped.
+        if "deadlines" in data:
+            dl = data["deadlines"] or {}
+            hackathon_data["deadlines"] = (
+                {k: (firestore.DELETE_FIELD if v is None else v) for k, v in dl.items()}
+                if is_update
+                else {k: v for k, v in dl.items() if v is not None}
+            )
 
         @firestore.transactional
         def update_hackathon(transaction):

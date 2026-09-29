@@ -23,6 +23,20 @@ load_dotenv()
 
 CDN_SERVER = os.getenv("CDN_SERVER")
 GCLOUD_CDN_BUCKET = os.getenv("GCLOUD_CDN_BUCKET")
+DEFAULT_CDN_SERVER = "https://cdn.ohack.dev"
+
+
+def cdn_server():
+    """Public CDN origin, normalized (no trailing slash), read at CALL time.
+
+    Every URL this module hands out AND every "is this one of our CDN URLs?"
+    check (api/submissions, api/jobs, users bio-video) must agree on the
+    prefix. Reading the env at import time pinned None when load_dotenv ran
+    late, and a trailing slash in the env value produced `host//teams/...`
+    URLs that then failed the validators' startswith() check — the
+    "Thumbnail: must be an ohack CDN URL under teams/<id>/" bug (Sep 2026).
+    """
+    return (os.getenv("CDN_SERVER") or DEFAULT_CDN_SERVER).rstrip("/")
 GOOGLE_APPLICATION_CREDENTIALS = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
 
 def _get_bucket():
@@ -58,7 +72,7 @@ def generate_signed_upload_url(directory, filename, content_type, max_bytes, exp
     return {
         "upload_url": signed_url,
         "blob_path": f"{directory}/{filename}",
-        "final_url": f"{CDN_SERVER}/{directory}/{filename}",
+        "final_url": f"{cdn_server()}/{directory}/{filename}",
         "required_headers": {
             "Content-Type": content_type,
             "x-goog-content-length-range": f"0,{max_bytes}",
@@ -118,4 +132,4 @@ def upload_to_cdn(directory, source_file_name, destination_file_name=None):
         f"File {source_file_name} uploaded to {directory}/{blob_filename}."
     )
 
-    return f"{CDN_SERVER}/{directory}/{blob_filename}"
+    return f"{cdn_server()}/{directory}/{blob_filename}"

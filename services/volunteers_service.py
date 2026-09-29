@@ -163,6 +163,23 @@ def find_volunteer_by_caller_identity(propel_user_id: str, event_id: str, volunt
         volunteer = get_volunteer_by_user_id(oauth_user_id, event_id, volunteer_type)
     return volunteer
 
+
+def get_volunteer_self_status(propel_user_id: str, event_id: str, volunteer_type: str) -> Dict[str, Any]:
+    """
+    Generic lightweight self-check, keyed by volunteer_type, for
+    GET /api/volunteer/<event_id>/me. Mirrors api.mentors.mentors_service.
+    get_mentor_self_status's shape/leanness but works for any volunteer_type
+    (introduced for type=hacker, used by the team dashboard + Hackers' Choice
+    eligibility gate). The volunteer subset returned is intentionally lean —
+    only what the caller already knows about themselves.
+    """
+    doc = find_volunteer_by_caller_identity(propel_user_id, event_id, volunteer_type)
+    is_selected = bool(doc and doc.get("isSelected"))
+    return {
+        f"is_{volunteer_type}": is_selected,
+        "volunteer": {"name": doc.get("name"), "isSelected": True} if is_selected else None,
+    }
+
 # Function to clear all caches related to a volunteer
 def _clear_volunteer_caches(user_id: str, email: str, event_id: str, volunteer_type: str):
     """Clear all caches related to a specific volunteer."""

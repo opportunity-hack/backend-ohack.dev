@@ -894,6 +894,19 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             assignments.append(JudgeAssignment.deserialize(d))
         return assignments
 
+    def fetch_judge_assignment_by_id(self, assignment_id):
+        """Direct doc-get by id (Part 9 bug #4: update_judge_assignment_details
+        used to look assignments up via fetch_judge_assignments_by_judge_id("")
+        — an empty judge_id — which can never match a real assignment, so the
+        route always 400'd 'Assignment not found')."""
+        db = self.get_db()
+        doc = db.collection('judge_assignments').document(assignment_id).get()
+        if not doc.exists:
+            return None
+        d = doc.to_dict()
+        d['id'] = doc.id
+        return JudgeAssignment.deserialize(d)
+
     def fetch_judge_assignments_by_event_and_judge(self, event_id, judge_id):
         db = self.get_db()
         assignments = []

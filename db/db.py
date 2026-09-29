@@ -159,6 +159,9 @@ def get_user_doc_reference(user_id):
 def fetch_judge_assignments_by_judge_id(judge_id):
     return db.fetch_judge_assignments_by_judge_id(judge_id)
 
+def fetch_judge_assignment_by_id(assignment_id):
+    return db.fetch_judge_assignment_by_id(assignment_id)
+
 def fetch_judge_assignments_by_event_and_judge(event_id, judge_id):
     return db.fetch_judge_assignments_by_event_and_judge(event_id, judge_id)
 

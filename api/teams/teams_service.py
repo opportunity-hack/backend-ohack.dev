@@ -15,10 +15,23 @@ from common.utils.github import create_github_repo, validate_github_username
 from common.utils.slack import create_slack_channel, invite_user_to_channel, send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
 from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id, normalize_slack_user_id
+from common.utils.validators import sanitize_markdown, normalize_github_org
 
-from common.utils.slack import add_bot_to_channel    
+from common.utils.slack import add_bot_to_channel
 
 logger = logging.getLogger("myapp")
+
+# Admin override of a team's project_* write-up fields via PATCH
+# /api/team/edit (MEDIUM finding #3 — documented in api/submissions/README.md
+# "Ownership" as always having been the intended admin path, but edit_team's
+# field_mappings never actually carried these fields). Limits/catalog are
+# duplicated from api.submissions.submissions_service's PROJECT_LIMITS /
+# SUBMITTED_STATUSES (not imported — teams_service must never import
+# api.submissions, a one-directional dependency documented in that module's
+# docstring).
+PROJECT_TAGLINE_MAX_LEN = 140
+PROJECT_STORY_MAX_LEN = 20000
+PROJECT_SUBMISSION_STATUSES = {"draft", "submitted", "late"}
 
 # Slack user IDs for OHack admins who are auto-invited to every team channel
 # and CCed on completion broadcasts. Single source of truth for both call sites.
@@ -228,11 +241,12 @@ def remove_team(team_id):
     if hackathon_event_id:
         hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
         event_collection = db.collection("hackathons").document(hackathon_db_id)
-        event_collection_dict = event_collection.get().to_dict()
-        
-        # Remove the team from the hackathon event
+        event_collection_dict = event_collection.get().to_dict() or {}
+
+        # Remove the team from the hackathon event (tolerate docs with no
+        # `teams` key — same KeyError class as the queue_team linking bug)
         new_teams = []
-        for t in event_collection_dict["teams"]:
+        for t in event_collection_dict.get("teams") or []:
             if t != team_doc:
                 new_teams.append(t)
         
@@ -294,6 +308,13 @@ def edit_team(json):
         "admin_notes": "admin_notes",
         "devpost_link": "devpost_link",
         "demo_video_url": "demo_video_url",
+        "project_tagline": "project_tagline",
+        "project_story": "project_story",
+        "project_built_with": "project_built_with",
+        "project_links": "project_links",
+        "project_thumbnail_url": "project_thumbnail_url",
+        "project_images": "project_images",
+        "project_submission_status": "project_submission_status",
     }
 
     # Normalize demo_video_url: trim, cap at 500 chars, empty string => clear
@@ -302,6 +323,29 @@ def edit_team(json):
         if isinstance(raw, str):
             trimmed = raw.strip()[:500]
             json["demo_video_url"] = trimmed if trimmed else None
+
+    # project_submission_status must be one of the catalog values — a bad
+    # value 400s rather than writing a status the dashboard/gallery/funnel
+    # don't know how to render.
+    if "project_submission_status" in json:
+        status_val = json.get("project_submission_status")
+        if status_val not in PROJECT_SUBMISSION_STATUSES:
+            return {
+                "message": f"Error: project_submission_status must be one of {sorted(PROJECT_SUBMISSION_STATUSES)}",
+                "success": False,
+            }, 400
+        if status_val != team_data.get("project_submission_status"):
+            update_data["project_updated_at"] = datetime.now().isoformat()
+
+    # project_tagline / project_story get the same defence-in-depth
+    # sanitize_markdown treatment as the self-serve save_project path.
+    if "project_tagline" in json:
+        val = json.get("project_tagline")
+        json["project_tagline"] = sanitize_markdown(val, PROJECT_TAGLINE_MAX_LEN) if isinstance(val, str) and val else None
+
+    if "project_story" in json:
+        val = json.get("project_story")
+        json["project_story"] = sanitize_markdown(val, PROJECT_STORY_MAX_LEN) if isinstance(val, str) and val else None
 
     # If this is the first time setting devpost_link, set devpost_link_submitted date
     if "devpost_link" in json and "devpost_link" not in team_data:
@@ -337,6 +381,25 @@ def edit_team(json):
             "success": True,
             "team_id": team_id
         }
+
+
+def _append_team_to_hackathon(db, hackathon_db_id, team_ref):
+    """Link a team DocumentReference into hackathons/{id}.teams[].
+
+    Hackathon docs created through the admin UI may have no ``teams`` key at
+    all (not even an empty list); indexing it directly raised KeyError after
+    the team doc was already inserted, leaving the team orphaned from its
+    event (Sep 2026, test event fall-2026). Idempotent: an already-linked
+    team is not appended twice.
+    """
+    event_ref = db.collection("hackathons").document(hackathon_db_id)
+    event_dict = event_ref.get().to_dict() or {}
+    teams = list(event_dict.get("teams") or [])
+    existing_ids = {getattr(t, "id", None) for t in teams}
+    if getattr(team_ref, "id", None) not in existing_ids:
+        teams.append(team_ref)
+        event_ref.set({"teams": teams}, merge=True)
+    return teams
 
 def queue_team(propel_user_id, json):
     """
@@ -496,17 +559,7 @@ Let's make a difference! :muscle: :heart:
 
     # Link the team to the hackathon event
     hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
-    event_collection = db.collection("hackathons").document(hackathon_db_id)
-    event_collection_dict = event_collection.get().to_dict()
-
-    new_teams = []
-    for t in event_collection_dict["teams"]:
-        new_teams.append(t)
-    new_teams.append(new_team_doc)
-
-    event_collection.set({
-        "teams": new_teams
-    }, merge=True)
+    _append_team_to_hackathon(db, hackathon_db_id, new_team_doc)
 
     # Clear the cache
     logger.info("Clearing cache for event_id=%s doc_id=%s",
@@ -897,13 +950,19 @@ def approve_team(admin_user_id, json):
             "success": False
         }
     
-    # Make sure that github_org is set within the event
-    if not hackathon_event.get("github_org"):
+    # Make sure that github_org is set within the event. Older events may
+    # still carry a pasted URL / @handle from before the validator normalized
+    # it, so reduce it to the bare slug here too.
+    github_org = normalize_github_org(hackathon_event.get("github_org"))
+    if not github_org:
         return {
-            "message": "Error: GitHub organization not found for the event",
+            "message": (
+                "Error: this event has no GitHub organization set. "
+                "Add it under Admin → Hackathon → Overview → GitHub organization "
+                "(just the org name, e.g. Opportunity-Hack-2026), then approve again."
+            ),
             "success": False
         }
-    github_org = hackathon_event["github_org"]
     logger.info("GitHub organization: %s", github_org)
 
     # Look through the "links" within the hackathon event to find any url that contains "devpost"

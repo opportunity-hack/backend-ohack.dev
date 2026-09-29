@@ -37,7 +37,7 @@ def clear_cache():
     Mentor writes change fields the CACHED event page (#teams) renders via
     get_single_hackathon_event: coverage X/6, mentor_open_flag_count, the judging
     consensus dots, last-touched. clear_all_caches() only clears the *registered*
-    caches (e.g. teams' _GET_TEAM_CACHE), NOT get_single_hackathon_event's cache,
+    caches (e.g. teams' _TEAM_USERS_CACHE), NOT get_single_hackathon_event's cache,
     so without this the event page lagged up to 10 min behind the always-fresh
     team page. Mirrors teams_service._clear_cache(). Lazy import avoids a circular
     import at module load."""

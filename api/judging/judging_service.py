@@ -4,6 +4,7 @@ from datetime import datetime
 from common.log import get_logger, debug, warning, error
 from db.db import (
     fetch_judge_assignments_by_judge_id,
+    fetch_judge_assignment_by_id,
     fetch_judge_assignments_by_event_and_judge,
     fetch_judge_scores_by_judge_and_event,
     fetch_judge_score,
@@ -257,12 +258,15 @@ def get_team_details(team_id: str) -> Dict:
             "members": members,  # Now populated with actual member data
             "github_url": github_url,
             "devpost_url": team_data.get('devpost_link', ''),
-            "slack_channel": team_data.get('slack_channel', ''),            
-            
-            
-            
-            # Not used
-            "video_url": team_data.get('video_url', ''),
+            "slack_channel": team_data.get('slack_channel', ''),
+            # demo_video_url is the real field written by the team dashboard's
+            # DemoVideoEditor / TeamStatusPanel; video_url is filled from it
+            # too so judge-side consumers reading either name keep working
+            # (Part 9 bug #2 — judges never received the team's demo video
+            # because this used to read a phantom `video_url` key that
+            # save/edit_team never writes).
+            "demo_video_url": team_data.get('demo_video_url', ''),
+            "video_url": team_data.get('demo_video_url') or team_data.get('video_url', ''),
             "demo_url": team_data.get('demo_url', ''),
             "technologies": team_data.get('technologies', []),
             "features": team_data.get('features', [])
@@ -507,7 +511,10 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: s
         "github_url": github_url,
         "devpost_url": team.get('devpost_link', ''),
         "slack_channel": team.get('slack_channel', ''),
-        "video_url": team.get('video_url', ''),
+        # See get_team_details' matching comment (Part 9 bug #2): demo_video_url
+        # is the real field; video_url is filled from it for legacy readers.
+        "demo_video_url": team.get('demo_video_url', ''),
+        "video_url": team.get('demo_video_url') or team.get('video_url', ''),
         "demo_time": None,  # Will be overridden for round2
         "judged": score_obj is not None,
         "score": score_obj.total_score if score_obj else None,
@@ -579,14 +586,12 @@ def update_judge_assignment_details(assignment_id: str, demo_time: str = None,
     try:
         debug(logger, "Updating judge assignment", assignment_id=assignment_id)
 
-        # First fetch the existing assignment
-        # This is inefficient but works with current db interface
-        assignments = fetch_judge_assignments_by_judge_id("")
-        assignment = None
-        for a in assignments:
-            if a.id == assignment_id:
-                assignment = a
-                break
+        # First fetch the existing assignment. (Part 9 bug #4: this used to
+        # call fetch_judge_assignments_by_judge_id("") — an empty judge_id
+        # matches no real assignment — so `assignment` was always None and
+        # every call 400'd "Assignment not found". fetch_judge_assignment_by_id
+        # is a direct doc-get.)
+        assignment = fetch_judge_assignment_by_id(assignment_id)
 
         if not assignment:
             return {"success": False, "error": "Assignment not found"}
@@ -954,8 +959,12 @@ def get_bulk_judge_details(event_id: str) -> Dict:
         # Get all assignments for the event
         assignments = fetch_judge_assignments_by_event_id(event_id)
 
-        # Get all of the scores for the event
-        scores = fetch_judge_scores_by_event(event_id)
+        # Get all of the scores for the event. (Part 9 bug #3: this called an
+        # undefined name, fetch_judge_scores_by_event — the correctly-named
+        # fetch_judge_scores_by_event_id was imported but never used here —
+        # so every call silently NameError'd into the outer except and this
+        # function always returned an empty judges list.)
+        scores = fetch_judge_scores_by_event_id(event_id)
         
 
         if "error" in judges_result:

@@ -1,5 +1,7 @@
 
 import os
+from collections import Counter
+from datetime import datetime, timedelta, timezone
 from github import Github
 from dotenv import load_dotenv
 from github import GithubException
@@ -8,6 +10,38 @@ import logging
 logger = logging.getLogger("common.utils.github")
 logger.setLevel(logging.DEBUG)
 load_dotenv()
+
+# Contributor list is capped to keep the team-dashboard "Code activity" card
+# small; it's a snapshot of the most recent commit page, not a full history.
+MAX_ACTIVITY_CONTRIBUTORS = 8
+
+class PrivateRepoError(Exception):
+    """The repo exists but is private. GET /api/github/activity is
+    unauthenticated and GITHUB_TOKEN can see private repos, so private repos
+    are refused (the service maps this to the same 404 as "doesn't exist")."""
+
+
+def get_github_organization(g, org_name):
+    """Resolve a GitHub org by login, raising ValueError with a readable
+    message instead of letting PyGithub's exception bubble up as a 500.
+
+    A 404 here almost always means the hackathon's ``github_org`` isn't a bare
+    slug (e.g. a pasted ``https://github.com/...`` URL) or the org doesn't
+    exist; 401/403 means GITHUB_TOKEN can't see it.
+    """
+    try:
+        return g.get_organization(org_name)
+    except GithubException as e:
+        status = getattr(e, "status", None)
+        if status == 404:
+            detail = "not found on GitHub — check the event's GitHub organization is just the org name (e.g. Opportunity-Hack-2026), not a URL"
+        elif status in (401, 403):
+            detail = "not accessible with the configured GITHUB_TOKEN"
+        else:
+            detail = f"lookup failed (GitHub returned {status})"
+        logger.error("GitHub org %r %s: %s", org_name, detail, e)
+        raise ValueError(f"GitHub organization '{org_name}' {detail}") from e
+
 
 def create_github_repo(
         repository_name,
@@ -22,9 +56,9 @@ def create_github_repo(
         devpost_url
         ):        
     g = Github(os.getenv('GITHUB_TOKEN'))
-    org = g.get_organization(org_name)
+    org = get_github_organization(g, org_name)
     
-    repo_exists = does_repo_exist(repository_name, hackathon_event_id, org_name)
+    repo_exists = does_repo_exist(repository_name, hackathon_event_id, org_name, org=org)
     
     repo = None
     if repo_exists['exists']: 
@@ -164,9 +198,10 @@ Examples of winning DevPost submissions:
     }
 
 
-def does_repo_exist(repo_name, hackathon_event_id, org_name):       
-    g = Github(os.getenv('GITHUB_TOKEN'))
-    org = g.get_organization(org_name)
+def does_repo_exist(repo_name, hackathon_event_id, org_name, org=None):
+    if org is None:
+        g = Github(os.getenv('GITHUB_TOKEN'))
+        org = get_github_organization(g, org_name)
     try:
         repo = org.get_repo(repo_name)
         return {
@@ -192,7 +227,130 @@ def validate_github_username(github_username):
     
 
 
-def get_all_repos(org_name):    
+# Commits authored by these GitHub logins are ignored by get_repo_activity.
+# The GITHUB_TOKEN owner bootstraps every team repo with two commits (LICENSE
+# + README in create_github_repo), so without this a brand-new repo already
+# reads "2 commits, last commit by gregv" and the dashboard's "Push code to
+# your repo" checklist row is done before the team has pushed anything.
+# Comma-separated, case-insensitive; override via env when the token owner
+# changes.
+DEFAULT_ACTIVITY_EXCLUDED_LOGINS = "gregv"
+
+
+def activity_excluded_logins():
+    raw = os.getenv("GITHUB_ACTIVITY_EXCLUDED_LOGINS", DEFAULT_ACTIVITY_EXCLUDED_LOGINS)
+    return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def get_repo_activity(org_name, repo_name):
+    """
+    A team's "Code activity" card (team dashboard, Sep 2026): last commit,
+    commits in the last 24h, top contributors, open PR count. Deliberately
+    exactly 3 GitHub API calls (rate-limit budget matters more here than
+    completeness — this is a live-ish snapshot, not a full history):
+      1. g.get_repo(f"{org}/{repo}")
+      2. repo.get_commits().get_page(0)   (first page only, <=100 commits)
+      3. repo.get_pulls(state="open").totalCount
+
+    Contributors are derived from that single commit page (a Counter over
+    each commit's author), not a separate contributors-stats call.
+
+    Commits by `activity_excluded_logins()` (the repo-bootstrap account) are
+    dropped BEFORE any counting, so total_recent / last_24h / last commit /
+    contributors all reflect the team's own work only.
+
+    Raises UnknownObjectException (repo doesn't exist), PrivateRepoError
+    (repo is private — the endpoint is public) and RateLimitExceededException
+    to the caller — api.github.github_service translates those into
+    404/404/503. An empty repository (GitHub returns 409
+    for get_commits on one) is NOT an error here — it's a valid all-zeros
+    result for a freshly created team repo.
+    """
+    g = Github(os.getenv('GITHUB_TOKEN'), per_page=100)
+    repo = g.get_repo(f"{org_name}/{repo_name}")
+
+    # Checked before any commit/PR call so nothing about a private repo (commit
+    # messages, author logins, PR counts) is ever read. `is True`, not truthiness.
+    if repo.private is True:
+        raise PrivateRepoError(f"{org_name}/{repo_name}")
+
+    try:
+        commits = list(repo.get_commits().get_page(0))
+    except GithubException as e:
+        if e.status == 409:
+            commits = []
+        else:
+            raise
+
+    open_prs = repo.get_pulls(state="open").totalCount
+
+    now = datetime.now(timezone.utc)
+    excluded = activity_excluded_logins()
+    kept_commits = 0
+    last_24h = 0
+    last_commit_at = None
+    last_commit_message = None
+    last_author = None
+    contributor_counts = Counter()
+    contributor_avatars = {}
+
+    for commit in commits:
+        git_commit = getattr(commit, "commit", None)
+        git_author = getattr(git_commit, "author", None) if git_commit else None
+        commit_date = getattr(git_author, "date", None) if git_author else None
+        if commit_date and commit_date.tzinfo is None:
+            commit_date = commit_date.replace(tzinfo=timezone.utc)
+
+        login = commit.author.login if commit.author else None
+        git_name = getattr(git_author, "name", None) if git_author else None
+        # Bootstrap commits: match the GitHub login when the commit is linked
+        # to an account, else the raw git author name (same account, unlinked
+        # email).
+        if (login or git_name or "").lower() in excluded:
+            continue
+
+        kept_commits += 1
+        if kept_commits == 1:
+            last_commit_at = commit_date
+            last_commit_message = getattr(git_commit, "message", None) if git_commit else None
+            last_author = login or git_name
+
+        if commit_date and (now - commit_date) <= timedelta(hours=24):
+            last_24h += 1
+
+        name = login or git_name or "Unknown"
+        avatar = commit.author.avatar_url if commit.author else None
+        contributor_counts[name] += 1
+        if avatar:
+            contributor_avatars[name] = avatar
+
+    contributors = [
+        {"login": name, "avatar_url": contributor_avatars.get(name), "contributions": count}
+        for name, count in contributor_counts.most_common(MAX_ACTIVITY_CONTRIBUTORS)
+    ]
+
+    return {
+        "success": True,
+        "repo": {
+            "html_url": repo.html_url,
+            "default_branch": repo.default_branch,
+            "pushed_at": repo.pushed_at.isoformat() if getattr(repo, "pushed_at", None) else None,
+            "open_issues_count": repo.open_issues_count,
+            "stargazers_count": repo.stargazers_count,
+        },
+        "commits": {
+            "total_recent": kept_commits,
+            "last_24h": last_24h,
+            "last_commit_at": last_commit_at.isoformat() if last_commit_at else None,
+            "last_commit_message": last_commit_message,
+            "last_author": last_author,
+        },
+        "contributors": contributors,
+        "open_prs": open_prs,
+    }
+
+
+def get_all_repos(org_name):
     g = Github(os.getenv('GITHUB_TOKEN'))
     org = g.get_organization(org_name)
     repos = org.get_repos()

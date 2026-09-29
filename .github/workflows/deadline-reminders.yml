@@ -1,0 +1,28 @@
+name: ⏰ Submission deadline reminders
+
+# Hourly cron that pings POST /api/hackathons/deadlines/remind-due. The
+# route itself iterates every currently-running event x {24,6,1} hour
+# thresholds and no-ops (`only_if_due=True`) outside each due window, so
+# calling it once an hour never double-sends reminders. Requires the
+# BACKEND_CRON_TOKEN repo secret to match the backend's own
+# BACKEND_CRON_TOKEN env var (checked via common.utils.api_key.check_api_key).
+
+on:
+  schedule:
+    - cron: "7 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  remind:
+    name: 🔔 Send due reminders
+    runs-on: ubuntu-latest
+    steps:
+      - name: 📣 POST remind-due
+        run: |
+          curl -fsS -X POST "${BACKEND_URL:-https://api.ohack.dev}/api/hackathons/deadlines/remind-due" \
+            -H "X-Api-Key: ${{ secrets.BACKEND_CRON_TOKEN }}"
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL }}
