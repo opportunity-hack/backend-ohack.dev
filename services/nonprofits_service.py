@@ -123,7 +123,9 @@ def get_single_npo(npo_id):
         logger.warning("get_npo end (no results)")
         return {}
     else:
-        result = doc_to_json(docid=doc.id, doc=doc)
+        # Snapshot, not reference: bypasses doc_to_json's reference cache so
+        # nonprofit edits are visible immediately.
+        result = doc_to_json(docid=doc.id, doc=doc.get())
 
         logger.info(f"get_npo end (with result id={doc.id})")
         return {
