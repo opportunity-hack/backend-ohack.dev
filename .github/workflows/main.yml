@@ -139,7 +139,10 @@ jobs:
           SLACK_BOT_TOKEN: ""
           SLACK_USER_TOKEN: ""
           RESEND_API_KEY: ""
-          OPENAI_API_KEY: ""
+          # NOT empty: common/utils/openai_api.py, services/hearts_service.py and
+          # services/llm_service.py construct OpenAI(...) at import and the client
+          # refuses an empty key. No test calls OpenAI, so a dummy is safe.
+          OPENAI_API_KEY: "sk-test-dummy-not-a-real-key"
           PROPEL_AUTH_URL: ""
 
       #- name: 📊 Upload test results
