@@ -98,6 +98,10 @@ def create_app():
     ##########################################
 
     app = Flask(__name__, instance_relative_config=True)
+    # Hard cap on request bodies (the largest legitimate upload is a 10 MB
+    # planning attachment; videos go straight to GCS via signed URLs).
+    # Over-limit requests get the JSON 413 from api/exception_views.py.
+    app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
     logger.info("Started Flask")
 
 
