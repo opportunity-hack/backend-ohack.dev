@@ -612,6 +612,11 @@ def get_single_hackathon_event(hackathon_id):
             # per-team routes instead.
             for t in result["teams"]:
                 t.pop("project_story", None)
+            # Staff-only team internals (admin_notes, nonprofit_rankings, ...)
+            # never ship on this unauthenticated payload. Imported here:
+            # services.teams_service imports this module lazily too.
+            from services.teams_service import public_team_view
+            result["teams"] = [public_team_view(t) for t in result["teams"]]
         else:
             result["teams"] = []
 

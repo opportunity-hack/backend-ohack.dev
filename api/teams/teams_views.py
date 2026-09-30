@@ -13,6 +13,7 @@ from api.teams.teams_service import (
     remove_team_member,
     remove_team,
     get_teams_by_hackathon_id,
+    public_hackathon_teams_view,
     get_my_teams_by_event_id,
     send_team_message,
     toggle_completion_item,
@@ -38,7 +39,13 @@ def get_teams_by_hackathon_id_api(hackathon_id):
     """
     logger.info(f"GET /team/{hackathon_id} called")
     if auth_user and auth_user.user_id:
-        return get_teams_by_hackathon_id(hackathon_id)
+        payload = get_teams_by_hackathon_id(hackathon_id)
+        # Admins (TeamManagement, judging admin) keep the full payload; anyone
+        # else gets team internals stripped and slim member profiles.
+        from services import hackathon_planning_service
+        if hackathon_planning_service.is_admin(auth_user):
+            return payload
+        return public_hackathon_teams_view(payload)
     
     logger.error("Could not obtain user details for GET /team/<hackathon_id>")
     return {"error": "Unauthorized"}, 401
@@ -236,6 +243,18 @@ def approve_team_assignment():
     
     logger.error("Could not obtain user details for POST /team/approve")
     return {"error": "Unauthorized"}, 401
+
+@bp.route("/admin/<teamid>", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_team_admin_api(teamid):
+    """Admin-only full team doc (admin_notes, nonprofit_rankings, comments,
+    communication_history) — the public team routes strip those."""
+    from services import teams_service as services_teams
+    team = services_teams.get_team_admin(teamid)
+    if not team:
+        return {"error": "not_found"}, 404
+    return {"team": team}
 
 @bp.route("/admin/<teamid>/message", methods=["POST"])
 @auth.require_user
