@@ -68,6 +68,17 @@ def can_write_plan(propel_user, hackathon_doc) -> bool:
     return propel_user.user_id in editors
 
 
+def can_write_plan_for_event(propel_user, event_id) -> bool:
+    """can_write_plan() resolved by event_id; False on any lookup problem.
+    Used by the upload-image directory gate for hackathons/<event>/planning/..."""
+    try:
+        if not isinstance(event_id, str) or not event_id.strip():
+            return False
+        return can_write_plan(propel_user, get_hackathon_by_event_id(event_id))
+    except Exception:
+        return False
+
+
 def can_comment(propel_user) -> bool:
     """Any logged-in user can comment on an enabled plan."""
     return bool(propel_user and getattr(propel_user, "user_id", None))

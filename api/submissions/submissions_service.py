@@ -25,6 +25,7 @@ targets. It deliberately does NOT strip generic "<" — code like
 """
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 from db.db import get_db
@@ -278,6 +279,45 @@ def authorize_team_upload_directory(propel_user_id, directory, admin=False):
         if not user_is_on_team(propel_user_id, parts[1]):
             return {"error": "not_team_member"}, 403
     return None
+
+
+# Single-segment directories any logged-in user may upload into (the
+# application-form photo pickers + generic images). Everything else — site
+# assets, event galleries, nonprofit logos, blog/planning media — is
+# admin-only; teams/<id>/... keeps its own membership gate.
+USER_UPLOAD_DIRECTORIES = frozenset({"images", "hackers", "volunteers", "mentors", "judges", "sponsors", "uploads"})
+_UPLOAD_DIRECTORY_RE = re.compile(r"^[A-Za-z0-9_.\-/]+$")  # "." for ohack.dev/...; ".." rejected separately
+
+
+def authorize_upload_directory(propel_user_id, directory, admin=False, plan_editor_check=None):
+    """Gate for every POST /api/messages/upload-image `directory`.
+
+    None = proceed, else a ready-to-return (payload, status):
+      - 400 invalid_directory      — characters outside [A-Za-z0-9_.-/] or a `..`
+      - 403 not_team_member        — teams/<id>/... (see authorize_team_upload_directory)
+      - 403 directory_not_allowed  — non-admin writing outside USER_UPLOAD_DIRECTORIES
+    Empty/None means the service default, `images`.
+    `plan_editor_check(event_id) -> bool` (optional) lets a non-admin planning
+    editor write under hackathons/<event_id>/planning/... (card attachments).
+    """
+    raw = str(directory).replace("\\", "/") if directory else "images"
+    if ".." in raw or not _UPLOAD_DIRECTORY_RE.match(raw):
+        return {"error": "invalid_directory"}, 400
+    parts = [p for p in raw.split("/") if p not in ("", ".")]
+    if not parts:
+        return {"error": "invalid_directory"}, 400
+    if parts[0] == "teams":
+        return authorize_team_upload_directory(propel_user_id, directory, admin=admin)
+    if admin:
+        return None
+    if len(parts) == 1 and parts[0] in USER_UPLOAD_DIRECTORIES:
+        return None
+    if (
+        parts[0] == "hackathons" and len(parts) >= 3 and parts[2] == "planning"
+        and callable(plan_editor_check) and plan_editor_check(parts[1])
+    ):
+        return None
+    return {"error": "directory_not_allowed"}, 403
 
 
 def validate_project_payload(payload, team_id, existing=None):
