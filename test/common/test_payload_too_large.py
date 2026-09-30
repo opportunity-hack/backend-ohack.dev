@@ -16,7 +16,11 @@ def test_413_is_json():
 
     @app.route("/api/x", methods=["POST"])
     def _x():
-        return {"keys": list(request.form)}
+        # Werkzeug enforces MAX_CONTENT_LENGTH when the body is READ, so the
+        # route must touch request.form; the response stays constant (echoing
+        # the form keys here tripped CodeQL's reflected-XSS check).
+        request.form  # noqa: B018 — forces body parsing -> 413
+        return {"ok": True}
 
     resp = app.test_client().post("/api/x", data={"f": "x" * 100})
     assert resp.status_code == 413

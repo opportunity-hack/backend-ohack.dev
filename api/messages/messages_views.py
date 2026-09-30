@@ -7,7 +7,8 @@ from common.auth import auth, auth_user
 from flask import (
     Blueprint,
     request,
-    g
+    g,
+    jsonify
 )
 
 from api.messages.messages_service import (
@@ -849,7 +850,11 @@ def upload_image():
             plan_editor_check=lambda event_id: planning.can_write_plan_for_event(auth_user, event_id),
         )
         if blocked:
-            return blocked
+            # Explicit JSON so the (constant) error payload is never mistaken
+            # for reflected request input (CodeQL) — Flask would jsonify the
+            # dict anyway.
+            payload, status = blocked
+            return jsonify(payload), status
         return upload_image_to_cdn(request, allow_overwrite=admin)
     else:
         error(logger, "Could not obtain user details for POST /upload-image")
