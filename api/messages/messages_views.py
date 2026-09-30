@@ -95,6 +95,15 @@ def getOrgId(req):
 
 NEWS_LIMIT_MAX = 200
 
+# Constant responses for POST /upload-image directory denials (see
+# api/submissions/submissions_service.py::authorize_upload_directory).
+UPLOAD_DENIAL_RESPONSES = {
+    "invalid_directory": ({"error": "invalid_directory"}, 400),
+    "not_team_member": ({"error": "not_team_member"}, 403),
+    "directory_not_allowed": ({"error": "directory_not_allowed"}, 403),
+    "forbidden": ({"error": "forbidden"}, 403),
+}
+
 
 def _api_key_matches(provided, expected):
     """Constant-time X-Api-Key check; an unset env secret never matches."""
@@ -850,10 +859,12 @@ def upload_image():
             plan_editor_check=lambda event_id: planning.can_write_plan_for_event(auth_user, event_id),
         )
         if blocked:
-            # Explicit JSON so the (constant) error payload is never mistaken
-            # for reflected request input (CodeQL) — Flask would jsonify the
-            # dict anyway.
-            payload, status = blocked
+            # The gate's payloads are constant, but static analysis follows the
+            # `directory` argument into its return value — answer from a module
+            # constant keyed by the error code so no request data can reach the
+            # response.
+            code = (blocked[0] or {}).get("error")
+            payload, status = UPLOAD_DENIAL_RESPONSES.get(code, UPLOAD_DENIAL_RESPONSES["forbidden"])
             return jsonify(payload), status
         return upload_image_to_cdn(request, allow_overwrite=admin)
     else:
