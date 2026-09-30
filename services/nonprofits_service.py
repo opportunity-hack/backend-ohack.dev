@@ -190,15 +190,19 @@ def get_npo_by_hackathon_id(id):
         logger.warning("get_npo_by_hackathon_id end (no results)")
         return {}
     else:
-        result = doc_to_json(docid=doc.id, doc=doc)
+        # Snapshot, not reference (see get_single_npo).
+        result = doc_to_json(docid=doc.id, doc=doc.get())
 
         logger.info(f"get_npo_by_hackathon_id end (with result id={doc.id})")
         return result
     return {}
 
 
-@limits(calls=20, period=ONE_MINUTE)
+# @cached is OUTERMOST so cache hits don't count against the (process-global,
+# all-clients-combined) rate limit — the reverse order 500'd everyone after
+# 20 requests/min to /api/messages/npos.
 @cached(cache=_npo_list_cache)
+@limits(calls=20, period=ONE_MINUTE)
 def get_npo_list():
     logger.debug("NPO List Start")
     db = _get_db()
