@@ -400,3 +400,122 @@ class TestRenderRequestSummaryHtml:
         })
         assert "Custom — AI for accessibility" in html
         assert "February" in html and "2027" in html
+
+
+# The frontend form's initial `formData` keys — copied from
+# frontend-ohack.dev/src/components/HackathonRequest/HackathonRequestForm.js
+# (useState(initialData || {...})). Keep in lockstep: a key missing from the
+# backend allowlist is silently dropped from requester edits.
+FRONTEND_FORM_KEYS = [
+    "companyName", "organizationType", "contactName", "contactEmail", "contactPhone",
+    "employeeCount", "participantType", "hackathonTheme", "customTheme",
+    "expectedHackathonDate", "preferredDate", "alternateDate", "location", "eventFormat",
+    "hasNonprofitList", "nonprofitDetails", "hasWorkedWithNonprofitsBefore",
+    "nonprofitSource", "preferredNonprofitLocation", "specificRegion",
+    "responsibilities", "budget", "donationPercentage", "additionalInfo",
+    "agreeToContact", "agreeToTimeline",
+]
+
+
+def _request_doc(mock_db, stored):
+    mock_doc_ref = MagicMock()
+    snapshot = MagicMock()
+    snapshot.exists = stored is not None
+    snapshot.to_dict.return_value = stored
+    mock_doc_ref.get.return_value = snapshot
+    mock_db.return_value.collection.return_value.document.return_value = mock_doc_ref
+    return mock_doc_ref
+
+
+class TestUpdateHackathonRequest:
+    """Public requester edit (capability link) — must not be a raw doc.update(json)."""
+
+    def test_form_keys_are_all_editable(self):
+        from services.hackathons_service import HACKATHON_REQUEST_EDITABLE_FIELDS
+        assert set(FRONTEND_FORM_KEYS) <= set(HACKATHON_REQUEST_EDITABLE_FIELDS)
+        for staff_key in ("status", "adminNotes", "created", "id", "updated"):
+            assert staff_key not in HACKATHON_REQUEST_EDITABLE_FIELDS
+
+    @patch('services.hackathons_service.send_hackathon_request_email')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
+    def test_body_filtered_and_email_goes_to_stored_contact(self, mock_db, mock_audit, mock_email):
+        """Before: doc.update got the whole body (status/adminNotes writable by
+        anyone with the link) and the email went to body.contactEmail."""
+        ref = _request_doc(mock_db, {"companyName": "old", "contactName": "Owner", "contactEmail": "owner@x", "status": "pending"})
+
+        result = update_hackathon_request("req-1", {
+            "status": "approved", "adminNotes": "pwned", "id": "other", "created": "x",
+            "companyName": "x",
+        })
+
+        ref.update.assert_called_once()
+        written = ref.update.call_args[0][0]
+        assert set(written) == {"companyName", "updated"}
+        assert written["companyName"] == "x"
+        datetime.fromisoformat(written["updated"])
+        mock_email.assert_called_once()
+        assert mock_email.call_args[0][0] == "Owner"
+        assert mock_email.call_args[0][1] == "owner@x"
+        assert result is not None
+
+    @patch('services.hackathons_service.send_hackathon_request_email')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
+    def test_contact_email_change_does_not_redirect_confirmation(self, mock_db, mock_audit, mock_email):
+        ref = _request_doc(mock_db, {"contactName": "Owner", "contactEmail": "owner@x"})
+        update_hackathon_request("req-1", {"contactEmail": "attacker@x", "companyName": "x"})
+        assert mock_email.call_args[0][1] == "owner@x"
+
+    @patch('services.hackathons_service.send_hackathon_request_email')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
+    def test_missing_doc_returns_none_without_email(self, mock_db, mock_audit, mock_email):
+        """Before: emailed body.contactEmail, then crashed on None.update/None dict."""
+        ref = _request_doc(mock_db, None)
+        assert update_hackathon_request("nope", {"contactName": "A", "contactEmail": "a@x"}) is None
+        mock_email.assert_not_called()
+        ref.update.assert_not_called()
+
+
+class TestHackathonRequestPublicRoutes:
+    @pytest.fixture
+    def client(self, monkeypatch):
+        import importlib, sys
+        from flask import Flask
+        from test.common.auth_stubs import passthrough_auth_module
+        monkeypatch.setitem(sys.modules, "common.auth", passthrough_auth_module())
+        sys.modules.pop("api.messages.messages_views", None)
+        views = importlib.import_module("api.messages.messages_views")
+        app = Flask(__name__)
+        app.register_blueprint(views.bp)
+        yield views, app.test_client()
+        sys.modules.pop("api.messages.messages_views", None)
+
+    def test_patch_missing_request_is_404(self, client, monkeypatch):
+        """Before: the view returned the service's None verbatim -> 500."""
+        views, c = client
+        monkeypatch.setattr(views, "update_hackathon_request", lambda rid, body: None)
+        resp = c.patch("/api/messages/create-hackathon/nope", json={"companyName": "x"})
+        assert resp.status_code == 404
+        assert resp.get_json() == {"error": "not_found"}
+
+
+class TestPublicGetAndCreate:
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
+    def test_public_get_strips_admin_notes(self, mock_db, mock_audit):
+        _request_doc(mock_db, {"companyName": "A", "adminNotes": "internal"})
+        result = get_hackathon_request_by_id("req-1")
+        assert result["companyName"] == "A"
+        assert "adminNotes" not in result
+
+    @patch('services.hackathons_service.send_slack')
+    @patch('services.hackathons_service.send_hackathon_request_email')
+    @patch('services.hackathons_service.send_slack_audit')
+    @patch('services.hackathons_service._get_db')
+    def test_create_uses_random_uuid4_ids(self, mock_db, mock_audit, mock_email, mock_slack):
+        """uuid1 ids embed the host MAC + timestamp (guessable capability link)."""
+        import uuid
+        result = create_hackathon({"companyName": "A"})
+        assert uuid.UUID(hex=result["id"]).version == 4

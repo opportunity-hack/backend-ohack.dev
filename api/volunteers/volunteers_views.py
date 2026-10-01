@@ -574,7 +574,7 @@ def get_hacker_application(event_id):
         return _error_response(f"Failed to retrieve application: {str(e)}")
     
 @bp.route('/hacker/applications/<event_id>', methods=['GET'])
-@auth.optional_user
+@auth.require_user
 def get_hacker_applications(event_id):
     """Get all hacker applications for a specific event. Only if teamStatus is 'I'd like to be matched with a team'. using get_all_hackers_by_event_id"""
     user = auth_user

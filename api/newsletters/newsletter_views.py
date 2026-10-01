@@ -8,11 +8,11 @@ from flask import (
     request
 )
 
-from propelauth_flask import init_auth, current_user
-auth = init_auth(
-    os.getenv("PROPEL_AUTH_URL"),
-    os.getenv("PROPEL_AUTH_KEY"),
-)    
+from common.auth import auth
+
+
+def getOrgId(req):
+    return req.headers.get("X-Org-Id")
 
 
 bp_name = 'api-newsletter'
@@ -24,20 +24,20 @@ logger = get_logger("newsletter_views")
 
 @bp.route("/")
 @auth.require_user
-@auth.require_org_member_with_permission("admin_permissions")
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def newsletter():
     return get_subscription_list()
 
 
 @bp.route("/<user_id>")
-# @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def check_sub(user_id):
     return check_subscription_list(user_id=user_id)
 
 @bp.route("/send_newsletter", methods=["POST"])
-# @auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def send_newsletter():
     data = request.get_json()
     try:
@@ -49,6 +49,8 @@ def send_newsletter():
     return "True"
 
 @bp.route("/preview_newsletter", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def preview_newsletter():
     debug(logger, "Sending newsletter")
     data = request.get_json()
@@ -62,8 +64,7 @@ def preview_newsletter():
 
 
 @bp.route("/<subscribe>/<doc_id>", methods=["POST"])
-@auth.require_user
-# @auth.require_org_member_with_permission("admin_permissions")
+@auth.require_user  # per-user self-service (subscribe/verify/unsubscribe) — deliberately not admin-gated
 def newsletter_signup(subscribe, doc_id):
     debug(logger, "User authorized")
     if subscribe == "subscribe":

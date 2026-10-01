@@ -89,6 +89,14 @@ def get_blob_metadata(path):
     return {"exists": True, "size": blob.size, "content_type": blob.content_type}
 
 
+def blob_exists(directory, filename):
+    """True when <directory>/<filename> already exists — the same path
+    upload_to_cdn writes to. Lets callers refuse an overwrite without changing
+    upload_to_cdn (which some callers rely on to overwrite)."""
+    bucket = _get_bucket()
+    return bucket.blob(f"{directory}/{filename}").exists()
+
+
 def delete_from_cdn(path):
     """Best-effort delete of a blob path. Returns True when deleted."""
     try:

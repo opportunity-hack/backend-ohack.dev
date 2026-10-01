@@ -612,6 +612,11 @@ def get_single_hackathon_event(hackathon_id):
             # per-team routes instead.
             for t in result["teams"]:
                 t.pop("project_story", None)
+            # Staff-only team internals (admin_notes, nonprofit_rankings, ...)
+            # never ship on this unauthenticated payload. Imported here:
+            # services.teams_service imports this module lazily too.
+            from services.teams_service import public_team_view
+            result["teams"] = [public_team_view(t) for t in result["teams"]]
         else:
             result["teams"] = []
 
@@ -1085,7 +1090,7 @@ def create_hackathon(json):
     logger.debug("Hackathon Create")
     send_slack_audit(action="create_hackathon", message="Creating", payload=json)
 
-    doc_id = uuid.uuid1().hex
+    doc_id = uuid.uuid4().hex
     collection = db.collection('hackathon_requests')
     json["created"] = datetime.now().isoformat()
     json["status"] = "pending"
@@ -1110,28 +1115,55 @@ def get_hackathon_request_by_id(doc_id):
     db = _get_db()
     logger.debug("Hackathon Request Get")
     doc = db.collection('hackathon_requests').document(doc_id)
-    if doc:
-        doc_dict = doc.get().to_dict()
-        send_slack_audit(action="get_hackathon_request_by_id", message="Getting", payload=doc_dict)
-        return doc_dict
-    else:
+    doc_dict = doc.get().to_dict()
+    if doc_dict is None:
         return None
+    send_slack_audit(action="get_hackathon_request_by_id", message="Getting", payload=doc_dict)
+    # Public capability-link read: staff-only notes never leave the admin API.
+    doc_dict.pop("adminNotes", None)
+    return doc_dict
+
+
+# Fields an (anonymous) requester may change through the emailed edit link —
+# exactly the frontend HackathonRequestForm's `formData` keys. Staff fields
+# (status, adminNotes, created, id, ...) are only writable via
+# admin_update_hackathon_request. Keep in lockstep with the form
+# (api/messages/tests/test_hackathon_requests.py::FRONTEND_FORM_KEYS).
+HACKATHON_REQUEST_EDITABLE_FIELDS = frozenset({
+    "companyName", "organizationType", "contactName", "contactEmail", "contactPhone",
+    "employeeCount", "participantType", "hackathonTheme", "customTheme",
+    "expectedHackathonDate", "preferredDate", "alternateDate", "location", "eventFormat",
+    "hasNonprofitList", "nonprofitDetails", "hasWorkedWithNonprofitsBefore",
+    "nonprofitSource", "preferredNonprofitLocation", "specificRegion",
+    "responsibilities", "budget", "donationPercentage", "additionalInfo",
+    "agreeToContact", "agreeToTimeline",
+})
 
 
 def update_hackathon_request(doc_id, json):
+    """Public requester edit. Returns None when the request doesn't exist."""
     db = _get_db()
     logger.debug("Hackathon Request Update")
     doc = db.collection('hackathon_requests').document(doc_id)
-    if doc:
-        doc_dict = doc.get().to_dict()
-        send_slack_audit(action="update_hackathon_request", message="Updating", payload=doc_dict)
-        send_hackathon_request_email(json["contactName"], json["contactEmail"], doc_id, request_data=json)
-        doc_dict["updated"] = datetime.now().isoformat()
-
-        doc.update(json)
-        return doc_dict
-    else:
+    stored = doc.get().to_dict()
+    if stored is None:
         return None
+
+    body = json if isinstance(json, dict) else {}
+    updates = {k: v for k, v in body.items() if k in HACKATHON_REQUEST_EDITABLE_FIELDS}
+    updates["updated"] = datetime.now().isoformat()
+    send_slack_audit(action="update_hackathon_request", message="Updating", payload=updates)
+
+    doc.update(updates)
+    merged = {**stored, **updates}
+
+    # Confirm to the contact ON FILE — never to an address supplied in the
+    # body, or the edit link becomes a way to redirect the request's email.
+    if stored.get("contactEmail"):
+        send_hackathon_request_email(stored.get("contactName"), stored["contactEmail"], doc_id, request_data=merged)
+
+    merged.pop("adminNotes", None)
+    return merged
 
 
 def get_all_hackathon_requests():

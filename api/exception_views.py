@@ -21,3 +21,13 @@ def _handle_not_found_error(ex):
         return {"message": "Not Found"}, ex.code
     else:
         return ex
+
+
+@bp.app_errorhandler(exceptions.RequestEntityTooLarge)
+def _handle_payload_too_large(ex):
+    # The app forces a JSON content-type on every response, so werkzeug's HTML
+    # 413 page breaks frontend res.json() callers — answer in JSON on /api/.
+    if request.path.startswith('/api/'):
+        from flask import current_app
+        return {"error": "payload_too_large", "max_bytes": current_app.config.get("MAX_CONTENT_LENGTH")}, 413
+    return ex

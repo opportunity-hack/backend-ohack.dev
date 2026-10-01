@@ -3,7 +3,7 @@ import logging
 from datetime import datetime
 from db.db import get_db, get_user_doc_reference
 from api.messages.messages_service import get_problem_statement_from_id_old
-from services.teams_service import get_teams_list, get_team
+from services.teams_service import get_teams_list, get_team, public_team_view
 from services.nonprofits_service import get_single_npo
 from common.utils.firestore_helpers import clear_all_caches as clear_cache
 from services.users_service import (
@@ -647,7 +647,7 @@ def get_my_teams_by_event_id(propel_id, event_id):
                     del team_data["users"]
                     if "problem_statements" in team_data:
                         del team_data["problem_statements"]
-                    teams.append(team_data)
+                    teams.append(public_team_view(team_data))
                     break  # No need to check other users in this team
 
     logger.debug("Teams data: %s", teams)
@@ -795,7 +795,6 @@ def get_teams_by_hackathon_id(hackathon_id):
                 team_data.pop(field, None)
             
             team_data["team_members"] = users
-            #logger.debug("Team data: %s", team_data)
             teams.append(team_data)
         
         logger.info(f"Retrieved {len(teams)} teams for hackathon {hackathon_id}")
@@ -804,6 +803,26 @@ def get_teams_by_hackathon_id(hackathon_id):
     except Exception as e:
         logger.error(f"Error getting teams for hackathon {hackathon_id}: {str(e)}")
         return {"teams": []}
+
+
+# Same slim member shape services.teams_service._enrich_team_users produces.
+_SLIM_MEMBER_FIELDS = ("id", "user_id", "name", "nickname", "profile_image")
+
+
+def public_hackathon_teams_view(payload):
+    """Non-admin projection of get_teams_by_hackathon_id's payload: team
+    internals stripped and each member trimmed to the slim public profile
+    (the full user docs carry email_address etc.)."""
+    teams = []
+    for team in (payload or {}).get("teams") or []:
+        view = public_team_view(team)
+        if isinstance(view, dict) and isinstance(view.get("team_members"), list):
+            view["team_members"] = [
+                {k: m.get(k) for k in _SLIM_MEMBER_FIELDS} if isinstance(m, dict) else m
+                for m in view["team_members"]
+            ]
+        teams.append(view)
+    return {**(payload or {}), "teams": teams}
 
 
 def _normalize_repo_link(link):

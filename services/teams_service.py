@@ -31,6 +31,19 @@ def _clear_cache():
     clear_cache()
 
 
+# Staff-only internals on a team doc. Every public / member-facing team getter
+# goes through public_team_view; admins read the full doc via get_team_admin
+# (GET /api/team/admin/<teamid>). mentor_* fields are public BY DESIGN.
+PUBLIC_TEAM_STRIPPED_FIELDS = ("admin_notes", "nonprofit_rankings", "comments", "communication_history")
+
+
+def public_team_view(team):
+    """Shallow copy of `team` without PUBLIC_TEAM_STRIPPED_FIELDS. None-safe."""
+    if not isinstance(team, dict):
+        return team
+    return {k: v for k, v in team.items() if k not in PUBLIC_TEAM_STRIPPED_FIELDS}
+
+
 @limits(calls=2000, period=THIRTY_SECONDS)
 def get_teams_list(id=None):
     logger.debug(f"Teams List Start team_id={id}")
@@ -41,9 +54,9 @@ def get_teams_list(id=None):
         if doc is None:
             return {}
         else:
-            logger.info(f"Teams List team_id={id} | End (with result):{doc_to_json(docid=doc.id, doc=doc)}")
+            result = public_team_view(doc_to_json(docid=doc.id, doc=doc))
             logger.debug(f"Teams List team_id={id} | End")
-            return doc_to_json(docid=doc.id, doc=doc)
+            return result
     else:
         logger.debug("Teams List | Start")
         docs = db.collection('teams').stream()
@@ -53,9 +66,9 @@ def get_teams_list(id=None):
         else:
             results = []
             for doc in docs:
-                results.append(doc_to_json(docid=doc.id, doc=doc))
+                results.append(public_team_view(doc_to_json(docid=doc.id, doc=doc)))
 
-            logger.debug(f"Found {len(results)} results {results}")
+            logger.debug(f"Found {len(results)} results")
             return { "teams": results }
 
 
@@ -145,7 +158,7 @@ def get_team(id):
         team_data = _enrich_team_users(team_data, db)
         logger.info(f"Successfully retrieved team with id={id}")
         return {
-            "team" : team_data
+            "team" : public_team_view(team_data)
         }
 
     except Exception as e:
@@ -154,6 +167,20 @@ def get_team(id):
 
     finally:
         logger.debug(f"get_team operation completed for id={id}")
+
+
+def get_team_admin(id):
+    """Full team doc (incl. PUBLIC_TEAM_STRIPPED_FIELDS) for admin views, or None."""
+    if not id:
+        return None
+    db = get_db()
+    doc = db.collection('teams').document(id).get()
+    if not doc.exists:
+        return None
+    team_data = doc_to_json(docid=doc.id, doc=doc)
+    if team_data is None:
+        return None
+    return _enrich_team_users(team_data, db)
 
 
 def get_teams_by_event_id(event_id):
@@ -204,7 +231,7 @@ def get_teams_batch(json):
         results = []
         for doc in docs:
             team_data = doc_to_json(docid=doc.id, doc=doc)
-            results.append(team_data)
+            results.append(public_team_view(team_data))
 
         logger.debug(f"get_teams_batch end (with {len(results)} results)")
         return results
