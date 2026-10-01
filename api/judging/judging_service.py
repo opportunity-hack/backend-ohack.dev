@@ -218,7 +218,12 @@ def get_team_details(team_id: str) -> Dict:
             # Import here to avoid circular imports
             from common.utils.firebase import get_user_by_id
             
-            for user_id in user_ids:
+            for u in user_ids:
+                # get_team enriches users[] into dicts; legacy docs carry id
+                # strings. Re-fetch either way (the member shape needs email).
+                user_id = u.get("id") if isinstance(u, dict) else u
+                if not user_id:
+                    continue
                 try:
                     user_data = get_user_by_id(user_id)
                     if user_data:
@@ -474,7 +479,11 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: s
         # Import here to avoid circular imports
         from common.utils.firebase import get_user_by_id
         
-        for user_id in user_ids:
+        for u in user_ids:
+            # users[] may be enriched dicts or legacy id strings.
+            user_id = u.get("id") if isinstance(u, dict) else u
+            if not user_id:
+                continue
             try:
                 user_data = get_user_by_id(user_id)
                 if user_data:

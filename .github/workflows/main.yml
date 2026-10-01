@@ -1,9 +1,9 @@
 name: 🚀 Deploy
 on:
   push:
-    branches:      
+    branches:
       - develop
-      - main      
+      - main
   pull_request: {}
 
 concurrency:
@@ -25,7 +25,7 @@ jobs:
       - name: 🐍 Setup Python
         uses: actions/setup-python@v3
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: 📥 Install dependencies
         run: |
@@ -33,6 +33,9 @@ jobs:
           source venv/bin/activate
           pip install -r requirements.txt
 
+      # Scope stays api/*.py only (pylint -E). Widening this to the full
+      # tree surfaces ~62 pre-existing pylint -E findings across services/
+      # and other api/ subpackages that are out of scope for this change.
       - name: 🔬 Lint
         run: |
           source venv/bin/activate
@@ -48,7 +51,7 @@ jobs:
       - name: 🐍 Setup Python
         uses: actions/setup-python@v3
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       - name: 📥 Install dependencies
         run: |
@@ -59,10 +62,88 @@ jobs:
       - name: 🏄 Copy test env vars
         run: cp .env.example .env
 
-      #- name: 🧪 Run tests
-      #  run: |
-      #    source venv/bin/activate
-      #    pytest api/certificates/tests/test_always_pass.py
+      # common/utils/firebase.py builds a Firestore credentials.Certificate
+      # at IMPORT time from FIREBASE_CERT_CONFIG, so .env.example's
+      # placeholder value blocks collection of almost every test module.
+      # Generate a structurally valid (but throwaway) service-account JSON
+      # at runtime instead of committing a real key. load_dotenv() does not
+      # override variables already present in the environment, so exporting
+      # this via $GITHUB_ENV beats whatever .env carries.
+      - name: 🔐 Generate throwaway Firebase cert
+        run: |
+          openssl genrsa -out /tmp/ci_fake_key.pem 2048
+          python - <<'PY'
+          import json
+
+          with open("/tmp/ci_fake_key.pem") as f:
+              private_key = f.read()
+
+          cert = {
+              "type": "service_account",
+              "project_id": "ci-test",
+              "private_key_id": "ci",
+              "private_key": private_key,
+              "client_email": "ci@ci-test.iam.gserviceaccount.com",
+              "client_id": "0",
+              "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+              "token_uri": "https://oauth2.googleapis.com/token",
+          }
+
+          with open("/tmp/ci_fake_cert.json", "w") as f:
+              json.dump(cert, f)
+          PY
+          echo "FIREBASE_CERT_CONFIG=$(cat /tmp/ci_fake_cert.json)" >> "$GITHUB_ENV"
+
+      # Green set, verified directory-by-directory against this branch's
+      # backend (empty Slack/Resend/OpenAI/PropelAuth-URL env, throwaway
+      # Firebase cert). Excluded, with reasons — do not fold these in
+      # without fixing the underlying issue first:
+      #   api/contact/tests      - one real signature bug + needs recaptcha env
+      #   api/github/tests       - common.auth.init_auth() at import needs a
+      #                             reachable PROPEL_AUTH_URL
+      #   api/slack/tests        - same init_auth-at-import issue as github
+      #   api/leaderboard/tests  - 2 known pre-existing failures (github-derived)
+      #   api/certificates/tests - hangs (reaches out over the network)
+      # api/messages/tests is run one file at a time: importing the whole
+      # directory at once hits module-name collisions.
+      - name: 🧪 Run tests
+        run: |
+          source venv/bin/activate
+          set -e
+          for target in \
+            api/broadcasts/tests \
+            api/judging/tests \
+            api/peer_votes/tests \
+            api/praisebot/tests \
+            api/problemstatements/tests \
+            api/submissions/tests \
+            api/surveys/tests \
+            api/teams/tests \
+            api/users/tests \
+            api/volunteers/tests \
+            api/health/tests \
+            test/common \
+            test/services ; do
+            echo "::group::pytest $target"
+            python -m pytest "$target" -q -p no:cacheprovider
+            echo "::endgroup::"
+          done
+          for f in api/messages/tests/test_*.py ; do
+            echo "::group::pytest $f"
+            python -m pytest "$f" -q -p no:cacheprovider
+            echo "::endgroup::"
+          done
+        env:
+          ENVIRONMENT: test
+          SLACK_WEBHOOK: ""
+          SLACK_BOT_TOKEN: ""
+          SLACK_USER_TOKEN: ""
+          RESEND_API_KEY: ""
+          # NOT empty: common/utils/openai_api.py, services/hearts_service.py and
+          # services/llm_service.py construct OpenAI(...) at import and the client
+          # refuses an empty key. No test calls OpenAI, so a dummy is safe.
+          OPENAI_API_KEY: "sk-test-dummy-not-a-real-key"
+          PROPEL_AUTH_URL: ""
 
       #- name: 📊 Upload test results
       #  uses: actions/upload-artifact@v3
@@ -105,7 +186,7 @@ jobs:
         if: ${{ github.ref == 'refs/heads/main' }}
         uses: superfly/flyctl-actions@1.3
         with:
-          args: 
+          args:
             'deploy --remote-only --build-arg COMMIT_SHA=${{ github.sha }} --app ${{ steps.app_name.outputs.value }}-prod'
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_RELEASE_API_TOKEN }}

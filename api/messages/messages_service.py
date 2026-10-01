@@ -157,7 +157,7 @@ def get_single_problem_statement_old(project_id):
         return result
     return {}
 
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=600, period=ONE_MINUTE)
 def get_problem_statement_list_old():
     logger.debug("Problem Statements List")
     db = get_db()

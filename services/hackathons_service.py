@@ -153,7 +153,12 @@ def get_single_hackathon_id(id):
         logger.warning("get_single_hackathon_id end (no results)")
         return {}
     else:
-        result = doc_to_json(docid=doc.id, doc=doc)
+        # Pass the snapshot (not the reference) so this function's own 20s
+        # TTL governs freshness rather than doc_to_json's reference cache.
+        result = doc_to_json(docid=doc.id, doc=doc.get())
+        if result is None:
+            logger.warning(f"get_single_hackathon_id end (no document id={doc.id})")
+            return {}
         result["id"] = doc.id
 
         logger.info(f"get_single_hackathon_id end (with result id={doc.id})")
@@ -576,7 +581,17 @@ def _enrich_teams_users_batch(teams, db):
         return teams
 
     for team, uids in zip(teams, team_user_ids):
-        team["users"] = [snap_by_id.get(uid, {"id": uid, "user_id": None, "name": None, "nickname": None, "profile_image": None}) for uid in uids]
+        if team is None or not uids:
+            # Nothing to resolve (e.g. users[] already enriched dicts) —
+            # never overwrite it with an empty list.
+            continue
+        # Preserve order and any entries that are already enriched dicts;
+        # only string ids are replaced with their profile dicts.
+        team["users"] = [
+            snap_by_id.get(u, {"id": u, "user_id": None, "name": None, "nickname": None, "profile_image": None})
+            if isinstance(u, str) else u
+            for u in (team.get("users") or [])
+        ]
 
     return teams
 

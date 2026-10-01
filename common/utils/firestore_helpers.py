@@ -58,8 +58,56 @@ def log_execution_time(func):
     return wrapper
 
 
-@cached(cache=TTLCache(maxsize=2000, ttl=3600), lock=threading.Lock(), key=hash_key)
+def _copy_json_like(value):
+    """Recursively copy dicts and lists; return every other leaf as-is.
+
+    Deliberately NOT copy.deepcopy: a DocumentReference leaf holds the
+    Firestore client / gRPC channel and must be shared, not cloned.
+    """
+    if isinstance(value, dict):
+        return {k: _copy_json_like(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_copy_json_like(v) for v in value]
+    return value
+
+
+def _snapshot_to_json(docid, snapshot):
+    d_json = snapshot.to_dict()
+    if d_json is None:
+        logger.warning(f"doc.to_dict() is NoneType | docid={docid} doc={snapshot}")
+        return None
+
+    # If any values in d_json is a list, add only the document id to the list for DocumentReference or DocumentSnapshot
+    for key, value in d_json.items():
+        if isinstance(value, list):
+            for i, v in enumerate(value):
+                if isinstance(v, (firestore.DocumentReference, firestore.DocumentSnapshot)):
+                    value[i] = v.id
+            d_json[key] = value
+
+    d_json["id"] = docid
+    return d_json
+
+
+@cached(cache=TTLCache(maxsize=2000, ttl=600), lock=threading.Lock(), key=hash_key)
+def _doc_to_json_cached(docid, doc):
+    """Cached resolve of a DocumentReference (saves one Firestore .get()).
+
+    Keyed by docid only, so it must never be fed a DocumentSnapshot — a
+    snapshot's data is already in hand and may be fresher than the cache.
+    """
+    logger.debug("doc is DocumentReference")
+    return _snapshot_to_json(docid, doc.get())
+
+
 def doc_to_json(docid=None, doc=None, depth=0):
+    """Convert a Firestore snapshot/reference to a plain dict.
+
+    - DocumentSnapshot: converted directly, never cached (read already done).
+    - DocumentReference: resolved through a 10-min per-process cache.
+    - Anything else: returned unchanged.
+    Every dict/list returned is a fresh copy, so callers may mutate it.
+    """
     if not docid:
         logger.debug("docid is NoneType")
         return
@@ -67,37 +115,19 @@ def doc_to_json(docid=None, doc=None, depth=0):
         logger.debug("doc is NoneType")
         return
 
-    # Check if type is DocumentSnapshot
     if isinstance(doc, firestore.DocumentSnapshot):
         logger.debug("doc is DocumentSnapshot")
-        d_json = doc.to_dict()
-    # Check if type is DocumentReference
-    elif isinstance(doc, firestore.DocumentReference):
-        logger.debug("doc is DocumentReference")
-        d = doc.get()
-        d_json = d.to_dict()
-    else:
-        return doc
+        return _copy_json_like(_snapshot_to_json(docid, doc))
+    if isinstance(doc, firestore.DocumentReference):
+        return _copy_json_like(_doc_to_json_cached(docid, doc))
+    return doc
 
-    if d_json is None:
-        logger.warning(f"doc.to_dict() is NoneType | docid={docid} doc={doc}")
-        return
 
-    # If any values in d_json is a list, add only the document id to the list for DocumentReference or DocumentSnapshot
-    for key, value in d_json.items():
-        if isinstance(value, list):
-            for i, v in enumerate(value):
-                logger.debug(f"doc_to_json - i={i} v={v}")
-                if isinstance(v, firestore.DocumentReference):
-                    value[i] = v.id
-                elif isinstance(v, firestore.DocumentSnapshot):
-                    value[i] = v.id
-                else:
-                    value[i] = v
-            d_json[key] = value
-
-    d_json["id"] = docid
-    return d_json
+# Keep the public name's cachetools API (callers/tests use doc_to_json.cache_clear()).
+doc_to_json.cache = _doc_to_json_cached.cache
+doc_to_json.cache_key = _doc_to_json_cached.cache_key
+doc_to_json.cache_lock = _doc_to_json_cached.cache_lock
+doc_to_json.cache_clear = _doc_to_json_cached.cache_clear
 
 
 def doc_to_json_recursive(doc=None):

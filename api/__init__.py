@@ -170,6 +170,7 @@ def create_app():
     ##########################################
 
     from api import exception_views
+    from api.health import health_views
     from api.messages import messages_views
     from api.newsletters import newsletter_views
     # Leaving this disabled for now - team can fix this based on fixes for above module import
@@ -201,6 +202,7 @@ def create_app():
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
+    app.register_blueprint(health_views.bp)
     app.register_blueprint(newsletter_views.bp)
     app.register_blueprint(certificate_views.bp)
     #app.register_blueprint(subscription_views.bp)
