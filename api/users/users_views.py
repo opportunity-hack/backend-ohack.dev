@@ -53,10 +53,11 @@ def save_profile():
 @bp.route("/<id>/profile", methods=["GET"])
 def get_profile_by_db_id(id):
     p = users_service.get_profile_by_db_id(id)
-    if p: 
+    if p:
         return p #Already a dict
-    else: 
-        return None
+    # A missing profile is a normal 404, not a crash: returning None makes
+    # Flask raise "The view function ... did not return a valid response".
+    return {"error": "Profile not found"}, 404
     
 
 @bp.route("/volunteering", methods=["POST"])
