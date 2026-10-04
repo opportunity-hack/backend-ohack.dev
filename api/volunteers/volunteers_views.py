@@ -30,9 +30,14 @@ bp = Blueprint('volunteers', __name__, url_prefix='/api')
 # Helper functions
 def _process_request() -> Dict[str, Any]:
     """Process request data and return JSON dictionary."""
-    request_data = request.get_json()
-    if not request_data:
+    if not request.data:
         raise InvalidUsageError("Missing request body", status_code=400)
+    # silent=True: malformed JSON returns None instead of raising Werkzeug
+    # BadRequest. A client sending bad JSON gets a clean 400 below, not a
+    # Sentry error event.
+    request_data = request.get_json(silent=True)
+    if not request_data:
+        raise InvalidUsageError("Request body must be valid JSON", status_code=400)
     return request_data
 
 def _get_pagination_params() -> Tuple[int, int, Optional[bool]]:
@@ -794,6 +799,12 @@ def admin_get_resend_email_statuses():
         logger.error("Failed to fetch email statuses. Error: %s", result.get('error', 'Unknown error'))
         return _error_response(result.get('error', 'Unknown error'), 500)
 
+    except InvalidUsageError as e:
+        # The client sent a bad request (missing/malformed JSON body). That is
+        # not a server bug: answer 400 and log at warning so it does not page
+        # Sentry as an error.
+        logger.warning("Bad request to admin_get_resend_email_statuses: %s", e.message)
+        return _error_response(e.message, e.status_code)
     except Exception as e:
         logger.error("Error in admin_get_resend_email_statuses: %s", str(e))
         logger.exception(e)
