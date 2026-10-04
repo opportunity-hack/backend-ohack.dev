@@ -12,6 +12,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.utils.firebase import get_user_by_user_id, get_user_by_email
 from common.log import get_logger, info, debug, warning, error, exception
+from services.resend_utils import send_with_retry
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern, get_cached, set_cached
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
 import os
@@ -2573,7 +2574,15 @@ def _send_email_to_user(
         if qr_code_attachments:
             params["attachments"] = qr_code_attachments
 
-        email_result = resend.Emails.send(params)
+        # Rate limits are retried with backoff inside send_with_retry; if we are
+        # still limited, it returns the error message instead of raising, and
+        # logs at warning so Sentry is not paged for a "slow down" signal.
+        email_result, rate_limit_error = send_with_retry(
+            lambda: resend.Emails.send(params),
+            log_context={"volunteer_id": volunteer_id, "email": email},
+        )
+        if rate_limit_error:
+            return False, rate_limit_error, None
         resend_email_id = email_result.get('id') if isinstance(email_result, dict) else getattr(email_result, 'id', None)
         info(logger, "Email sent to user",
              volunteer_id=volunteer_id, email=email, result=email_result, resend_email_id=resend_email_id, recipient_type=recipient_type)
