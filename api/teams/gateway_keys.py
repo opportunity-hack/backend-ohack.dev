@@ -180,6 +180,42 @@ def _key_spend_best_effort(plaintext_key, team_id):
         return None
 
 
+MAX_STATUS_BATCH = 200
+
+
+def list_gateway_key_statuses(team_ids):
+    """Admin-only, metadata-only status for many teams at once (the admin
+    Teams table). NEVER includes the plaintext or ciphertext — the per-team
+    GET is the only route that decrypts, and only on an explicit reveal.
+
+    Statuses: ``active`` (usable key), ``pending`` (mint in flight or crashed
+    mid-mint; the next provision attempt starts clean), ``missing`` (no doc —
+    approval's best-effort mint failed or the team was approved before this
+    feature). Unknown ids are reported as ``missing`` rather than omitted so
+    the frontend can render one chip per row.
+    """
+    out = {}
+    for team_id in list(dict.fromkeys(t for t in team_ids if t))[:MAX_STATUS_BATCH]:
+        snap = _doc_ref(team_id).get()
+        data = snap.to_dict() if snap.exists else None
+        if not data:
+            out[team_id] = {"status": "missing"}
+            continue
+        status = data.get("status") or "missing"
+        if status == "active" and not data.get("key_ciphertext"):
+            status = "missing"
+        out[team_id] = {
+            "status": status,
+            "key_alias": data.get("key_alias"),
+            "max_budget": data.get("max_budget", GATEWAY_MAX_BUDGET),
+            "expires": data.get("expires", GATEWAY_KEY_EXPIRES),
+            "created_at": data.get("created_at"),
+            "provisioned_at": data.get("provisioned_at"),
+            "rotated_at": data.get("rotated_at"),
+        }
+    return out
+
+
 def get_team_gateway_key(propel_user_id, team_id, is_admin=False):
     """Return (payload, status). The payload carries the plaintext key and is
     only ever returned to team members or admins."""
