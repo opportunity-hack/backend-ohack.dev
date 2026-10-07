@@ -21,6 +21,8 @@ from api.teams.teams_service import (
 )
 from api.teams.gateway_keys import (
     get_team_gateway_key,
+    list_gateway_key_statuses,
+    MAX_STATUS_BATCH,
     provision_team_gateway_key,
     rotate_team_gateway_key,
 )
@@ -309,6 +311,24 @@ def retry_gateway_key_api(teamid):
 
     logger.error("Could not obtain user details for POST /team/<teamid>/gateway-key/retry")
     return {"error": "Unauthorized"}, 401
+
+
+@bp.route("/admin/gateway-keys", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def list_gateway_key_statuses_api():
+    """
+    Admin: AI gateway key status for many teams in one call
+    (?team_ids=a,b,c — the admin Teams table already holds the ids).
+    Metadata only; the plaintext is only served by GET /<teamid>/gateway-key.
+    """
+    raw = request.args.get("team_ids", "")
+    team_ids = [t.strip() for t in raw.split(",") if t.strip()]
+    if not team_ids:
+        return {"error": "team_ids_required"}, 400
+    if len(team_ids) > MAX_STATUS_BATCH:
+        return {"error": "too_many_team_ids", "max": MAX_STATUS_BATCH}, 400
+    return {"keys": list_gateway_key_statuses(team_ids)}, 200
 
 
 @bp.route("/admin/<teamid>", methods=["GET"])
