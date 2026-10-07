@@ -25,13 +25,15 @@ from werkzeug.local import LocalProxy
 VIEWS_MODULE = "api.users.users_views"
 
 
-def _stub_module(name, path=None, **attrs):
+def _stub_module(monkeypatch, name, path=None, **attrs):
+    # Through monkeypatch so the stubbed `api`/`services`/`model` packages are
+    # restored after each test instead of leaking into later test files.
     mod = types.ModuleType(name)
     if path:
         mod.__path__ = path
     for key, value in attrs.items():
         setattr(mod, key, value)
-    sys.modules[name] = mod
+    monkeypatch.setitem(sys.modules, name, mod)
     return mod
 
 
@@ -39,14 +41,14 @@ def _stub_module(name, path=None, **attrs):
 def views(monkeypatch):
     # Skip api/__init__.py (flask_cors, talisman, ...) and the heavy service
     # modules; the view under test only needs the service function mocked.
-    _stub_module("api", path=["api"])
-    _stub_module("api.users", path=["api/users"])
-    _stub_module("services", path=["services"])
-    _stub_module("services.users_service", get_profile_by_db_id=MagicMock())
-    _stub_module("services.user_slug_service")
-    _stub_module("services.problem_statements_service")
-    _stub_module("model", path=["model"])
-    _stub_module("model.user", User=object)
+    _stub_module(monkeypatch, "api", path=["api"])
+    _stub_module(monkeypatch, "api.users", path=["api/users"])
+    _stub_module(monkeypatch, "services", path=["services"])
+    _stub_module(monkeypatch, "services.users_service", get_profile_by_db_id=MagicMock())
+    _stub_module(monkeypatch, "services.user_slug_service")
+    _stub_module(monkeypatch, "services.problem_statements_service")
+    _stub_module(monkeypatch, "model", path=["model"])
+    _stub_module(monkeypatch, "model.user", User=object)
 
     stub_auth = types.ModuleType("common.auth")
 

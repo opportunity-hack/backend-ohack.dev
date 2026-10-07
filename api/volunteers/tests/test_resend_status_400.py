@@ -39,24 +39,32 @@ HEADERS = {"Authorization": "Bearer <redacted>", "X-Org-Id": "org-1"}
 URL = "/api/admin/emails/resend-status"
 
 
-def _stub_module(name, path=None, **attrs):
+def _stub_module(monkeypatch, name, path=None, **attrs):
+    """Install a stub module for the duration of ONE test.
+
+    Must go through monkeypatch: a bare ``sys.modules[name] = mod`` leaked the
+    stubbed ``services`` / ``services.volunteers_service`` packages into every
+    test file collected after this one (``test_resend_utils.py``,
+    ``test_volunteers_service.py``), which then failed with
+    ``module 'services' has no attribute 'volunteers_service'`` in CI.
+    """
     mod = types.ModuleType(name)
     if path:
         mod.__path__ = path
     for key, value in attrs.items():
         setattr(mod, key, value)
-    sys.modules[name] = mod
+    monkeypatch.setitem(sys.modules, name, mod)
     return mod
 
 
 @pytest.fixture
 def views(monkeypatch):
-    _stub_module("api", path=["api"])
-    _stub_module("api.volunteers", path=["api/volunteers"])
-    _stub_module("services", path=["services"])
+    _stub_module(monkeypatch, "api", path=["api"])
+    _stub_module(monkeypatch, "api.volunteers", path=["api/volunteers"])
+    _stub_module(monkeypatch, "services", path=["services"])
     # The view imports many service functions; a MagicMock module supplies them.
-    _stub_module("services.volunteers_service", __getattr__=MagicMock())
-    _stub_module("common.utils.slack", send_slack_audit=MagicMock())
+    _stub_module(monkeypatch, "services.volunteers_service", __getattr__=MagicMock())
+    _stub_module(monkeypatch, "common.utils.slack", send_slack_audit=MagicMock())
 
     stub_auth = types.ModuleType("common.auth")
 
