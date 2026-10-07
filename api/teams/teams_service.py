@@ -1083,6 +1083,16 @@ Let's make a difference! :muscle: :heart:
         "approved_at": datetime.now().isoformat()
     }, merge=True)
 
+    # Mint the team's AI gateway key now that approval is durable.
+    # Best-effort: a LiteLLM outage must never fail an approval.
+    # Lazy import: teams_service must never import gateway_keys at module top.
+    try:
+        from api.teams.gateway_keys import provision_team_gateway_key
+        provision_team_gateway_key(team_id)
+        logger.info("Gateway API key provisioned for team %s", team_id)
+    except Exception as e:
+        logger.warning("Gateway key provisioning failed for team %s (non-blocking): %s", team_id, e)
+
     # Fix-forward: also link the repo to the problem statement(s) so the
     # public project page shows the code (best-effort, never blocks approval)
     _link_repo_to_problem_statements(
