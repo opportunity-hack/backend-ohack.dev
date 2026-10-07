@@ -98,6 +98,10 @@ def create_app():
     ##########################################
 
     app = Flask(__name__, instance_relative_config=True)
+    # Hard cap on request bodies (the largest legitimate upload is a 10 MB
+    # planning attachment; videos go straight to GCS via signed URLs).
+    # Over-limit requests get the JSON 413 from api/exception_views.py.
+    app.config["MAX_CONTENT_LENGTH"] = 32 * 1024 * 1024
     logger.info("Started Flask")
 
 
@@ -166,6 +170,7 @@ def create_app():
     ##########################################
 
     from api import exception_views
+    from api.health import health_views
     from api.messages import messages_views
     from api.newsletters import newsletter_views
     # Leaving this disabled for now - team can fix this based on fixes for above module import
@@ -197,6 +202,7 @@ def create_app():
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
+    app.register_blueprint(health_views.bp)
     app.register_blueprint(newsletter_views.bp)
     app.register_blueprint(certificate_views.bp)
     #app.register_blueprint(subscription_views.bp)

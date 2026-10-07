@@ -157,7 +157,7 @@ def get_single_problem_statement_old(project_id):
         return result
     return {}
 
-@limits(calls=100, period=ONE_MINUTE)
+@limits(calls=600, period=ONE_MINUTE)
 def get_problem_statement_list_old():
     logger.debug("Problem Statements List")
     db = get_db()
@@ -438,17 +438,20 @@ def get_user_by_id_old(id):
     return get_profile_by_db_id(id) or {}
 
 
-def upload_image_to_cdn(request):
+def upload_image_to_cdn(request, allow_overwrite=True):
     """
     Upload an image to CDN. Accepts binary data, base64, or standard image formats.
     Returns the CDN URL of the uploaded image.
+
+    allow_overwrite=False (non-admin uploads) makes the multipart path answer
+    409 file_exists instead of replacing an existing blob.
     """
     import base64
     import tempfile
     import mimetypes
     from werkzeug.utils import secure_filename
-    from common.utils.cdn import upload_to_cdn
-    
+    from common.utils import cdn
+
     logger.info("Starting image upload to CDN")
     
     try:
@@ -473,6 +476,11 @@ def upload_image_to_cdn(request):
             if not _is_image_file(filename):
                 logger.warning(f"Upload failed: File is not an image: {filename}")
                 return {"success": False,"error": "File must be an image"}, 400
+
+            # temp basename == filename, so this is the exact blob upload_to_cdn writes.
+            if not allow_overwrite and cdn.blob_exists(_directory, filename):
+                logger.warning(f"Upload refused: {_directory}/{filename} already exists")
+                return {"success": False, "error": "file_exists"}, 409
             
             # Create a properly named temporary file
             import tempfile
@@ -490,7 +498,7 @@ def upload_image_to_cdn(request):
             try:
                 # Upload to CDN using the properly named temp file
                 logger.info(f"Uploading {filename} to CDN from {temp_filepath}")
-                cdn_url = upload_to_cdn(_directory, temp_filepath, destination_filename)
+                cdn_url = cdn.upload_to_cdn(_directory, temp_filepath, destination_filename)
                 
                 logger.info(f"Successfully uploaded image to CDN: {cdn_url}")
                 return {"success": True, "url": cdn_url, "message": "Image uploaded successfully"}
@@ -547,7 +555,7 @@ def upload_image_to_cdn(request):
                 try:
                     # Upload to CDN using the properly named temp file
                     logger.info(f"Uploading base64 image {filename} to CDN from {temp_filepath}")
-                    cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                    cdn_url = cdn.upload_to_cdn("images", temp_filepath, destination_filename)
                     
                     logger.info(f"Successfully uploaded base64 image to CDN: {cdn_url}")
                     return {"success": True, "url": cdn_url, "message": "Image uploaded successfully"}
@@ -593,7 +601,7 @@ def upload_image_to_cdn(request):
                 try:
                     # Upload to CDN using the properly named temp file
                     logger.info(f"Uploading binary image {filename} to CDN from {temp_filepath}")
-                    cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                    cdn_url = cdn.upload_to_cdn("images", temp_filepath, destination_filename)
                     
                     logger.info(f"Successfully uploaded binary image to CDN: {cdn_url}")
                     return {"success": True, "url": cdn_url, "message": "Image uploaded successfully"}
@@ -632,7 +640,7 @@ def upload_image_to_cdn(request):
             try:
                 # Upload to CDN using the properly named temp file
                 logger.info(f"Uploading raw image {filename} to CDN from {temp_filepath}")
-                cdn_url = upload_to_cdn("images", temp_filepath, destination_filename)
+                cdn_url = cdn.upload_to_cdn("images", temp_filepath, destination_filename)
                 
                 logger.info(f"Successfully uploaded raw image to CDN: {cdn_url}")
                 return {

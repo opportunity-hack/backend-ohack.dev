@@ -12,6 +12,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.utils.firebase import get_user_by_user_id, get_user_by_email
 from common.log import get_logger, info, debug, warning, error, exception
+from services.resend_utils import send_with_retry
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern, get_cached, set_cached
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
 import os
@@ -1517,6 +1518,21 @@ def handle_stripe_hacker_deposit_event(
     return True, f"Ignored event type {event_type}"
 
 
+def _expected_hacker_deposit_cents(event_id: str) -> Optional[int]:
+    """The event's constraints.hacker_deposit.default_amount_cents, or None
+    (missing config / lookup error — callers fail open)."""
+    try:
+        from services.hackathons_service import get_single_hackathon_event
+        event = get_single_hackathon_event(event_id) or {}
+        cents = ((event.get('constraints') or {}).get('hacker_deposit') or {}).get('default_amount_cents')
+        if isinstance(cents, bool) or not isinstance(cents, int):
+            return None
+        return cents
+    except Exception as e:
+        warning(logger, "Could not resolve hacker deposit amount", event_id=event_id, error=str(e))
+        return None
+
+
 def _handle_checkout_session_completed(session: Dict[str, Any]) -> Tuple[bool, str]:
     """Self-heal the volunteer doc when Stripe confirms a checkout payment.
 
@@ -1565,6 +1581,51 @@ def _handle_checkout_session_completed(session: Dict[str, Any]) -> Tuple[bool, s
     vol_id, doc = match
     if doc.get('deposit_status') == 'refunded':
         return True, "Already refunded — not regressing"
+
+    # Best-effort amount check: never mark a session that paid less than the
+    # event's configured deposit as 'paid'. Runs BEFORE the idempotent
+    # already-paid shortcut so an underpaid session can't ride on a doc the
+    # client-side submit already stamped 'paid'. Unknown config fails open.
+    expected_cents = _expected_hacker_deposit_cents(event_id)
+    if (
+        isinstance(expected_cents, int)
+        and isinstance(amount_total, int)
+        and amount_total < expected_cents
+    ):
+        db = get_db()
+        db.collection('volunteers').document(vol_id).update({
+            'deposit_status': 'underpaid',
+            'deposit_amount_cents': amount_total,
+            'stripe_payment_intent_id': payment_intent_id,
+            'updated_timestamp': _get_current_timestamp(),
+        })
+        _clear_volunteer_caches(doc.get('user_id'), email, event_id, 'hacker')
+        try:
+            from common.utils.slack import send_slack_audit
+            send_slack_audit(
+                action="hacker_deposit_underpaid",
+                message=(
+                    f"Hacker deposit underpaid for volunteer {vol_id}: "
+                    f"{amount_total} < {expected_cents} cents"
+                ),
+                payload={
+                    'volunteer_id': vol_id,
+                    'event_id': event_id,
+                    'payment_intent_id': payment_intent_id,
+                    'amount_total': amount_total,
+                    'expected_cents': expected_cents,
+                },
+            )
+        except Exception as e:  # audit is best-effort
+            warning(logger, "Underpaid deposit audit failed", error=str(e))
+        warning(
+            logger,
+            "Webhook: underpaid hacker deposit — not marking paid",
+            volunteer_id=vol_id,
+            payment_intent_id=payment_intent_id,
+        )
+        return True, f"Underpaid deposit recorded for {vol_id}"
+
     if (
         doc.get('deposit_status') == 'paid'
         and doc.get('stripe_payment_intent_id') == payment_intent_id
@@ -1648,6 +1709,23 @@ def _handle_charge_refunded(charge: Dict[str, Any]) -> Tuple[bool, str]:
     return True, f"Recorded refund for {volunteer_id}"
 
 
+# Allowlist for the hacker directory (GET /api/hacker/applications/<event_id>).
+# Every key frontend findteam.js reads, plus teamCode (hacker form "Find your
+# team" picker) and isSelected (api/peer_votes/peer_votes_service.py reads it).
+# Anything else on a hacker application (phone, deposit bookkeeping, sent-email
+# logs, free-text notes, ...) must never ship through this route.
+HACKER_DIRECTORY_FIELDS = frozenset({
+    "id", "user_id", "name", "github", "slack_user_id", "pronouns",
+    "linkedin", "linkedinProfile", "photoUrl", "portfolio",
+    "experienceLevel", "participationCount", "participantType",
+    "schoolOrganization", "willContinue", "inPerson", "isInPerson",
+    "shortBio", "bio", "socialCauses", "primaryRoles", "skills",
+    "teamNeededSkills", "teamMatchingPreferences",
+    "teamMatchingPreferredCauses", "teamMatchingPreferredSkills",
+    "teamMatchingPreferredSize", "teamStatus", "teamCode", "isSelected",
+})
+
+
 def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:
     """
     Get all hackers for a specific event ID.
@@ -1662,8 +1740,12 @@ def get_all_hackers_by_event_id(event_id: str) -> List[Dict[str, Any]]:
     hackers = db.collection('volunteers').where('event_id', '==', event_id).where('volunteer_type', '==', 'hacker').stream()
     hacker_dict = [hacker.to_dict() for hacker in hackers] if hackers else []
 
-    # Remove sensitive info from the fields like: volunteers = [{k: v for k, v in volunteer.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for volunteer in volunteers]
-    hacker_dict = [{k: v for k, v in hacker.items() if k != "email" and k != "ageRange" and k != "shirtSize" and k != "dietaryRestrictions"} for hacker in hacker_dict]
+    # Project to the directory allowlist (was a 4-key denylist that leaked
+    # phone, deposit fields, sent_emails, ...).
+    hacker_dict = [
+        {k: v for k, v in hacker.items() if k in HACKER_DIRECTORY_FIELDS}
+        for hacker in hacker_dict
+    ]
     return hacker_dict
 
 
@@ -2492,7 +2574,15 @@ def _send_email_to_user(
         if qr_code_attachments:
             params["attachments"] = qr_code_attachments
 
-        email_result = resend.Emails.send(params)
+        # Rate limits are retried with backoff inside send_with_retry; if we are
+        # still limited, it returns the error message instead of raising, and
+        # logs at warning so Sentry is not paged for a "slow down" signal.
+        email_result, rate_limit_error = send_with_retry(
+            lambda: resend.Emails.send(params),
+            log_context={"volunteer_id": volunteer_id, "email": email},
+        )
+        if rate_limit_error:
+            return False, rate_limit_error, None
         resend_email_id = email_result.get('id') if isinstance(email_result, dict) else getattr(email_result, 'id', None)
         info(logger, "Email sent to user",
              volunteer_id=volunteer_id, email=email, result=email_result, resend_email_id=resend_email_id, recipient_type=recipient_type)

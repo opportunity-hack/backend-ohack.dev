@@ -1,4 +1,5 @@
 from flask import Blueprint, jsonify, request
+import hmac
 import os
 from common.log import get_logger
 from common.auth import auth
@@ -22,7 +23,7 @@ def verify_webhook_secret(req):
     """Verify the webhook shared secret from the request header."""
     expected = os.environ.get('STORE_WEBHOOK_SECRET', '')
     provided = req.headers.get('X-Webhook-Secret', '')
-    return expected and provided and expected == provided
+    return bool(expected and provided and hmac.compare_digest(str(expected), str(provided)))
 
 
 @bp.route("/store/orders", methods=["POST"])

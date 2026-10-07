@@ -1,4 +1,5 @@
-import os 
+import os
+import hmac
 from common.log import get_logger, debug, error
 import json
 from common.auth import auth, auth_user
@@ -6,7 +7,8 @@ from common.auth import auth, auth_user
 from flask import (
     Blueprint,
     request,
-    g
+    g,
+    jsonify
 )
 
 from api.messages.messages_service import (
@@ -90,6 +92,25 @@ bp = Blueprint(bp_name, __name__, url_prefix=bp_url_prefix)
 def getOrgId(req):
     # Get the org_id from the req
     return req.headers.get("X-Org-Id")
+
+NEWS_LIMIT_MAX = 200
+
+# Constant responses for POST /upload-image directory denials (see
+# api/submissions/submissions_service.py::authorize_upload_directory).
+UPLOAD_DENIAL_RESPONSES = {
+    "invalid_directory": ({"error": "invalid_directory"}, 400),
+    "not_team_member": ({"error": "not_team_member"}, 403),
+    "directory_not_allowed": ({"error": "directory_not_allowed"}, 403),
+    "forbidden": ({"error": "forbidden"}, 403),
+}
+
+
+def _api_key_matches(provided, expected):
+    """Constant-time X-Api-Key check; an unset env secret never matches."""
+    if not expected or not provided:
+        return False
+    return hmac.compare_digest(str(expected), str(provided))
+
 
 def get_authenticated_user_id():
     """Helper function to get authenticated user ID with proper error handling"""
@@ -287,9 +308,9 @@ def add_single_hacker(event_id):
     if auth_user and auth_user.user_id:
         return vars(single_add_volunteer(event_id, request.get_json(), "hacker", auth_user.user_id))
 
+@bp.route("/hackathon/<event_id>/<volunteer_type>/checkins", methods=["GET"])
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-@bp.route("/hackathon/<event_id>/<volunteer_type>/checkins", methods=["GET"])
 def get_volunteers_checked_in_by_event_api(event_id, volunteer_type):
     logger.info(f"GET /hackathon/{event_id}/{volunteer_type}/checked_in called")
     return (get_volunteer_checked_in_by_event(event_id, volunteer_type))
@@ -491,11 +512,9 @@ def store_news():
     # if token is valid, store news
     # else return 401
     token = request.headers.get("X-Api-Key")
-    # Check BACKEND_NEWS_TOKEN
-    if token == None or token != os.getenv("BACKEND_NEWS_TOKEN"):
+    if not _api_key_matches(token, os.getenv("BACKEND_NEWS_TOKEN")):
         return "Unauthorized", 401
-    else:
-        return vars(save_news(request.get_json()))
+    return vars(save_news(request.get_json()))
     
 @bp.route("/news", methods=["GET"])
 def read_news():
@@ -504,10 +523,13 @@ def read_news():
     # Log
     logger.info(f"Processing problem statements list with limit: {limit_arg}")
 
-    # If limit is set, convert to int
-    limit=3
+    limit = 3
     if limit_arg:
-        limit = int(limit_arg)
+        try:
+            limit = int(limit_arg)
+        except (TypeError, ValueError):
+            return {"error": "invalid_limit"}, 400
+        limit = max(1, min(limit, NEWS_LIMIT_MAX))
     
     return vars(get_news(news_limit=limit, news_id=None))  # Pass the 'limit' parameter to the get_news() function
 
@@ -598,8 +620,7 @@ def store_praise():
     sender_id = json_data.get("praise_sender")
     receiver_id = json_data.get("praise_receiver")
 
-    # Check BACKEND_NEWS_TOKEN
-    if token == None or token != os.getenv("BACKEND_PRAISE_TOKEN"):
+    if not _api_key_matches(token, os.getenv("BACKEND_PRAISE_TOKEN")):
         return "Unauthorized", 401
     elif sender_id == receiver_id:
         return "You cannot write a praise about yourself", 400
@@ -798,12 +819,18 @@ def submit_create_hackathon():
 @bp.route("/create-hackathon/<request_id>", methods=["GET"])
 def get_submitted_hackathon(request_id):
     logger.info(f"GET /create-hackathon/{request_id} called")
-    return get_hackathon_request_by_id(request_id)
+    result = get_hackathon_request_by_id(request_id)
+    if result is None:
+        return {"error": "not_found"}, 404
+    return result
 
 @bp.route("/create-hackathon/<request_id>", methods=["PATCH"])
 def update_submitted_hackathon(request_id):
     logger.info(f"PATCH /create-hackathon/{request_id} called")
-    return update_hackathon_request(request_id, request.get_json())
+    result = update_hackathon_request(request_id, request.get_json(silent=True))
+    if result is None:
+        return {"error": "not_found"}, 404
+    return result
 
 
 @bp.route("/upload-image", methods=["POST"])
@@ -817,18 +844,29 @@ def upload_image():
     from api.messages.messages_service import upload_image_to_cdn
     
     if auth_user and auth_user.user_id:
-        # teams/<id>/... directories are only writable by that team's members
-        # (or an admin) — the team-project thumbnail validator trusts that
-        # prefix. Everything else is unchanged.
-        from services.hackathon_planning_service import is_admin
-        from api.submissions.submissions_service import authorize_team_upload_directory
+        # teams/<id>/... is member-only (the project-thumbnail validator
+        # trusts that prefix); other shared directories are admin-only and
+        # non-admins may never overwrite an existing file.
+        from services import hackathon_planning_service as planning
+        from api.submissions.submissions_service import authorize_upload_directory
 
-        blocked = authorize_team_upload_directory(
-            auth_user.user_id, request.form.get("directory"), admin=is_admin(auth_user)
+        admin = bool(planning.is_admin(auth_user))
+        blocked = authorize_upload_directory(
+            auth_user.user_id,
+            request.form.get("directory"),
+            admin=admin,
+            # planning editors (non-admin) may attach files to their event's cards
+            plan_editor_check=lambda event_id: planning.can_write_plan_for_event(auth_user, event_id),
         )
         if blocked:
-            return blocked
-        return upload_image_to_cdn(request)
+            # The gate's payloads are constant, but static analysis follows the
+            # `directory` argument into its return value — answer from a module
+            # constant keyed by the error code so no request data can reach the
+            # response.
+            code = (blocked[0] or {}).get("error")
+            payload, status = UPLOAD_DENIAL_RESPONSES.get(code, UPLOAD_DENIAL_RESPONSES["forbidden"])
+            return jsonify(payload), status
+        return upload_image_to_cdn(request, allow_overwrite=admin)
     else:
         error(logger, "Could not obtain user details for POST /upload-image")
         return {"error": "Unauthorized"}, 401

@@ -13,10 +13,16 @@ from api.teams.teams_service import (
     remove_team_member,
     remove_team,
     get_teams_by_hackathon_id,
+    public_hackathon_teams_view,
     get_my_teams_by_event_id,
     send_team_message,
     toggle_completion_item,
     mark_team_complete,
+)
+from api.teams.gateway_keys import (
+    get_team_gateway_key,
+    provision_team_gateway_key,
+    rotate_team_gateway_key,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,7 +44,13 @@ def get_teams_by_hackathon_id_api(hackathon_id):
     """
     logger.info(f"GET /team/{hackathon_id} called")
     if auth_user and auth_user.user_id:
-        return get_teams_by_hackathon_id(hackathon_id)
+        payload = get_teams_by_hackathon_id(hackathon_id)
+        # Admins (TeamManagement, judging admin) keep the full payload; anyone
+        # else gets team internals stripped and slim member profiles.
+        from services import hackathon_planning_service
+        if hackathon_planning_service.is_admin(auth_user):
+            return payload
+        return public_hackathon_teams_view(payload)
     
     logger.error("Could not obtain user details for GET /team/<hackathon_id>")
     return {"error": "Unauthorized"}, 401
@@ -236,6 +248,80 @@ def approve_team_assignment():
     
     logger.error("Could not obtain user details for POST /team/approve")
     return {"error": "Unauthorized"}, 401
+
+@bp.route("/<teamid>/gateway-key", methods=["GET"])
+@auth.require_user
+def get_gateway_key_api(teamid):
+    """
+    Return the team's AI gateway API key. Team members only (or admins).
+    The plaintext key is only ever served to team members and admins.
+    """
+    logger.info(f"GET /team/{teamid}/gateway-key called")
+    if auth_user and auth_user.user_id:
+        from services.hackathon_planning_service import is_admin
+        return get_team_gateway_key(
+            auth_user.user_id, teamid, is_admin=is_admin(auth_user)
+        )
+
+    logger.error("Could not obtain user details for GET /team/<teamid>/gateway-key")
+    return {"error": "Unauthorized"}, 401
+
+
+@bp.route("/<teamid>/gateway-key/rotate", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def rotate_gateway_key_api(teamid):
+    """
+    Admin endpoint to rotate a team's AI gateway key (leak recovery).
+    Deletes the old key in LiteLLM and mints a fresh one under the same alias.
+    """
+    logger.info(f"POST /team/{teamid}/gateway-key/rotate called")
+    if auth_user and auth_user.user_id:
+        try:
+            return rotate_team_gateway_key(teamid), 200
+        except RuntimeError as e:
+            logger.warning(f"Gateway key rotate refused for team {teamid}: {e}")
+            return {"error": str(e)}, 404
+        except Exception as e:
+            logger.error(f"Gateway key rotate failed for team {teamid}: {e}")
+            return {"error": f"rotation failed: {e}"}, 502
+
+    logger.error("Could not obtain user details for POST /team/<teamid>/gateway-key/rotate")
+    return {"error": "Unauthorized"}, 401
+
+
+@bp.route("/<teamid>/gateway-key/retry", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def retry_gateway_key_api(teamid):
+    """
+    Admin endpoint to (re)provision a team's AI gateway key. Idempotent:
+    returns the active key's metadata when one already exists. Covers the
+    case where approve_team's best-effort mint failed.
+    """
+    logger.info(f"POST /team/{teamid}/gateway-key/retry called")
+    if auth_user and auth_user.user_id:
+        try:
+            return provision_team_gateway_key(teamid), 200
+        except Exception as e:
+            logger.error(f"Gateway key provision failed for team {teamid}: {e}")
+            return {"error": f"provisioning failed: {e}"}, 502
+
+    logger.error("Could not obtain user details for POST /team/<teamid>/gateway-key/retry")
+    return {"error": "Unauthorized"}, 401
+
+
+@bp.route("/admin/<teamid>", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def get_team_admin_api(teamid):
+    """Admin-only full team doc (admin_notes, nonprofit_rankings, comments,
+    communication_history) — the public team routes strip those."""
+    from services import teams_service as services_teams
+    team = services_teams.get_team_admin(teamid)
+    if not team:
+        return {"error": "not_found"}, 404
+    return {"team": team}
 
 @bp.route("/admin/<teamid>/message", methods=["POST"])
 @auth.require_user

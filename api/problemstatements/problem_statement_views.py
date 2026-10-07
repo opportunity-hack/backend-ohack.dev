@@ -85,9 +85,9 @@ def get_problem_statement_helpers(id):
         logger.error(f"Error in get_problem_statement_helpers: {str(e)}")
         return jsonify({"error": "Internal server error"}), 500
 
+@bp.route("/events", methods=["PATCH"])
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
-@bp.route("/events", methods=["PATCH"])
 def update_problem_statement_events_link():    
     res = service.link_problem_statements_to_events(request.get_json())
 
