@@ -64,6 +64,7 @@ Deployed to Fly.io (`fly.toml`, app: `backend-ohack`, region: `sjc`). Uses gunic
 - Tests live in `api/<domain>/tests/` or `test/` at the repo root.
 - The app has heavy external dependencies (Firestore, OpenAI, PropelAuth, Slack, PIL). Tests must pre-mock these modules in `sys.modules` before importing service code.
 - `ENVIRONMENT=test` enables MockFirestore in the DB layer.
+- **Stub `sys.modules` only through `monkeypatch.setitem(sys.modules, name, mod)`** — never a bare `sys.modules[name] = mod`. CI runs each `api/<domain>/tests` directory in ONE pytest process, so an unrestored stub of `services`/`api`/`model` breaks every file collected after it (`module 'services' has no attribute 'volunteers_service'`; red `develop` Oct 4–7 2026, #296). Pattern: `api/volunteers/tests/test_resend_status_400.py::_stub_module`.
 
 ## Code Style Guidelines
 - Python 3.9.13 (Flask backend)
