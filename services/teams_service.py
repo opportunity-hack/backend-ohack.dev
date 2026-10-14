@@ -299,7 +299,16 @@ def save_team(propel_user_id, json):
 
 
     team_slack_channel = slack_channel
-    raw_problem_statement_title = problem_statement.get().to_dict()["title"]
+    problem_statement_data = problem_statement.get().to_dict()
+    if problem_statement_data is None:
+        logger.error(
+            f"save_team: problem statement doc not found problem_statement_id={problem_statement_id} "
+            f"event_id={hackathon_event_id} team_name={team_name}"
+        )
+        return {
+            "message": "Error: Problem Statement not found"
+        }
+    raw_problem_statement_title = problem_statement_data["title"]
 
     problem_statement_title = raw_problem_statement_title.replace(" ", "").replace("-", "")
     logger.info(f"Problem Statement Title: {problem_statement_title}")
@@ -402,7 +411,16 @@ Let's make a difference! :muscle: :heart:
         "teams": user_teams
     }, merge=True)
 
-    hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
+    hackathon = get_hackathon_by_event_id(hackathon_event_id)
+    if hackathon is None:
+        logger.error(
+            f"save_team: no hackathon found for event_id={hackathon_event_id} "
+            f"team_name={team_name} doc_id={doc_id}"
+        )
+        return {
+            "message": "Error: Hackathon not found"
+        }
+    hackathon_db_id = hackathon["id"]
     event_collection = db.collection("hackathons").document(hackathon_db_id)
     event_collection_dict = event_collection.get().to_dict()
 
