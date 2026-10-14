@@ -215,7 +215,12 @@ def add_hackathon():
     logger.info("POST /hackathon called")
     user_id = get_authenticated_user_id()
     if user_id:
-        return vars(save_hackathon(request.get_json(), user_id))
+        # save_hackathon returns an error tuple on failure; vars() on a
+        # tuple raises TypeError (Sentry 7773371562). Mirror PATCH below.
+        result = save_hackathon(request.get_json(), user_id)
+        if isinstance(result, tuple):
+            return result
+        return vars(result)
     return {"error": "Unauthorized"}, 401
 
 @bp.route("/hackathon", methods=["PATCH"])
@@ -265,7 +270,12 @@ def remove_nonprofit_from_hackathon_api():
 def update_hackathon_visible_problem_statements_api():
     logger.info("PATCH /hackathon/problem_statements called")
     if auth_user and auth_user.user_id:
-        return vars(update_hackathon_visible_problem_statements(request.get_json(), auth_user.user_id))
+        # Same tuple guard as save_hackathon above: the service returns an
+        # error tuple when hackathonId is missing or the update fails.
+        result = update_hackathon_visible_problem_statements(request.get_json(), auth_user.user_id)
+        if isinstance(result, tuple):
+            return result
+        return vars(result)
 
 
 @bp.route("/hackathon/<event_id>/mentor", methods=["POST"])

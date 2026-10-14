@@ -420,3 +420,82 @@ def test_gateway_key_routes_registered(client):
     assert "/api/team/<teamid>/gateway-key/retry" in [
         str(r) for r in client.application.url_map.iter_rules()
     ]
+
+
+# ---------------------------------------------------------------------------
+# list_gateway_key_statuses (admin Teams table) — metadata only, never plaintext
+# ---------------------------------------------------------------------------
+
+def test_list_statuses_reports_active_pending_and_missing(service, monkeypatch):
+    module, fake_db = service
+    _seed_active_key(module, monkeypatch, team_id="team-active", key="sk-secret-1")
+    fake_db.collections.setdefault("team_gateway_keys", {})["team-pending"] = {
+        "team_id": "team-pending", "key_alias": "fall26-team-pending",
+        "status": "pending", "created_at": "2026-10-07T00:00:00+00:00",
+    }
+    # An "active" doc with no ciphertext is unusable → reported as missing.
+    fake_db.collections["team_gateway_keys"]["team-broken"] = {
+        "team_id": "team-broken", "status": "active", "key_alias": "fall26-team-broken",
+    }
+
+    out = module.list_gateway_key_statuses(
+        ["team-active", "team-pending", "team-broken", "team-unknown", "team-active", ""]
+    )
+
+    assert out["team-active"]["status"] == "active"
+    assert out["team-active"]["key_alias"] == "fall26-team-active"
+    assert out["team-active"]["max_budget"] == module.GATEWAY_MAX_BUDGET
+    assert out["team-pending"]["status"] == "pending"
+    assert out["team-broken"]["status"] == "missing"
+    assert out["team-unknown"] == {"status": "missing"}
+    assert "" not in out
+    # Nothing secret leaves this function.
+    dumped = json.dumps(out)
+    assert "sk-secret-1" not in dumped
+    assert "key_ciphertext" not in dumped
+    assert "key" not in out["team-active"]
+
+
+def test_list_statuses_caps_batch(service, monkeypatch):
+    module, _ = service
+    ids = [f"t{i}" for i in range(module.MAX_STATUS_BATCH + 50)]
+    out = module.list_gateway_key_statuses(ids)
+    assert len(out) == module.MAX_STATUS_BATCH
+
+
+def test_admin_gateway_keys_route_returns_statuses(client, monkeypatch):
+    seen = {}
+
+    def fake_list(team_ids):
+        seen["ids"] = team_ids
+        return {t: {"status": "active" if t == "a" else "missing"} for t in team_ids}
+
+    monkeypatch.setattr("api.teams.teams_views.list_gateway_key_statuses", fake_list)
+
+    res = client.get("/api/team/admin/gateway-keys?team_ids=a,%20b,,c", headers=HEADERS)
+
+    assert res.status_code == 200
+    assert seen["ids"] == ["a", "b", "c"]
+    assert res.get_json()["keys"]["a"]["status"] == "active"
+
+
+def test_admin_gateway_keys_route_is_not_shadowed_by_admin_teamid(client, monkeypatch):
+    # /admin/<teamid> exists; the static /admin/gateway-keys must win.
+    called = {"detail": False}
+    monkeypatch.setattr(
+        "api.teams.teams_views.list_gateway_key_statuses", lambda ids: {i: {"status": "missing"} for i in ids}
+    )
+    import services.teams_service as ts
+    monkeypatch.setattr(ts, "get_team_admin", lambda tid: called.__setitem__("detail", True) or None)
+
+    res = client.get("/api/team/admin/gateway-keys?team_ids=x", headers=HEADERS)
+
+    assert res.status_code == 200
+    assert "keys" in res.get_json()
+    assert called["detail"] is False
+
+
+def test_admin_gateway_keys_route_400s_without_ids(client):
+    res = client.get("/api/team/admin/gateway-keys", headers=HEADERS)
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "team_ids_required"

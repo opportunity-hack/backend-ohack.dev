@@ -2,6 +2,7 @@ from typing import Dict, List, Optional, Union, Any, Tuple
 import uuid
 import time
 import threading
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import pytz
 from functools import lru_cache
@@ -12,7 +13,7 @@ from google.cloud.firestore_v1.base_query import FieldFilter
 from common.utils.slack import get_slack_user_by_email, send_slack
 from common.utils.firebase import get_user_by_user_id, get_user_by_email
 from common.log import get_logger, info, debug, warning, error, exception
-from services.resend_utils import send_with_retry
+from services.resend_utils import send_with_retry, MAX_ATTEMPTS as RESEND_MAX_ATTEMPTS
 from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern, get_cached, set_cached
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
 import os
@@ -2991,24 +2992,23 @@ def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
         if not resend.api_key:
             return {'success': False, 'error': 'Resend API key not configured'}
 
-        statuses = {}
+        started_at = time.monotonic()
+
+        cached_statuses = {}
         ids_to_fetch = []
 
         for eid in email_ids[:100]:
             cached = get_cached(f"resend:status:{eid}")
             if cached is not None:
-                statuses[eid] = cached
+                cached_statuses[eid] = cached
             else:
                 ids_to_fetch.append(eid)
 
-        first_call = True
-        for eid in ids_to_fetch:
-            if not first_call:
-                time.sleep(0.3)
-            first_call = False
-
+        def _fetch_one_status(eid):
+            """Fetch one uncached status, with the same retry behavior the
+            old sequential loop had: 2 attempts, 0.6s apart, then an
+            'unknown' result (failures are not cached)."""
             retries = 0
-            result = None
             while retries < 2:
                 try:
                     email_data = resend.Emails.get(eid)
@@ -3022,7 +3022,7 @@ def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
                     }
                     ttl = _RESEND_STATUS_TERMINAL_TTL if last_event in _RESEND_STATUS_TERMINAL_EVENTS else _RESEND_STATUS_TRANSIENT_TTL
                     set_cached(f"resend:status:{eid}", result, ttl=ttl)
-                    break
+                    return result
                 except Exception as fetch_error:
                     retries += 1
                     if retries < 2:
@@ -3030,9 +3030,29 @@ def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
                         continue
                     warning(logger, "Failed to fetch Resend email status after retry",
                             resend_email_id=eid, exc_info=fetch_error)
-                    result = {'id': eid, 'last_event': 'unknown', 'error': str(fetch_error)}
+                    return {'id': eid, 'last_event': 'unknown', 'error': str(fetch_error)}
 
-            statuses[eid] = result
+        fetched_statuses = {}
+        if ids_to_fetch:
+            # Fetch uncached IDs in parallel. The old loop went one at a
+            # time with a 0.3s sleep before each call, so a cold-cache
+            # batch of 100 took ~90 seconds (Sentry performance report).
+            # 5 workers: Resend's limit is 10 requests/second, so 5
+            # concurrent calls stay well under it even when retries fire,
+            # and a cold batch now finishes in a few seconds.
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                for eid, result in zip(ids_to_fetch, executor.map(_fetch_one_status, ids_to_fetch)):
+                    fetched_statuses[eid] = result
+
+        # Assemble exactly like the sequential version did: cached entries
+        # first (in input order), then freshly fetched ones (in input
+        # order). Both dicts above were built in input order.
+        statuses = {**cached_statuses, **fetched_statuses}
+
+        info(logger, "Fetched Resend email statuses",
+             requested=len(email_ids[:100]), from_cache=len(cached_statuses),
+             fetched=len(fetched_statuses),
+             elapsed_seconds=round(time.monotonic() - started_at, 2))
 
         return {'success': True, 'statuses': statuses}
 
@@ -3071,7 +3091,6 @@ def _fetch_and_cache_resend_emails(since_days: int = 90) -> Optional[Dict[str, A
     cutoff_dt = datetime.now(pytz.utc) - timedelta(days=since_days)
     all_emails = []
     max_pages = 30
-    max_retries = 2
     params = {"limit": 100}
     page_error_occurred = False
     truncated = False
@@ -3080,10 +3099,23 @@ def _fetch_and_cache_resend_emails(since_days: int = 90) -> Optional[Dict[str, A
     for page in range(max_pages):
         if page > 0:
             time.sleep(0.5)
-        retries = 0
         while True:
             try:
-                response = resend.Emails.list(params)
+                # Same retry policy as the send path (services/resend_utils.py):
+                # only rate limits are retried, with backoff. A rate limit that
+                # outlasts the retries comes back as rate_limit_error instead of
+                # raising, so it can be logged at warning level -- a "slow down"
+                # signal must not page Sentry (issue 7778044789).
+                response, rate_limit_error = send_with_retry(
+                    lambda: resend.Emails.list(params),
+                    log_context={"page": page, "operation": "list_resend_emails"},
+                )
+                if rate_limit_error:
+                    warning(logger, "Resend emails page fetch stopped by rate limit",
+                            page=page, attempts=RESEND_MAX_ATTEMPTS,
+                            error=rate_limit_error)
+                    page_error_occurred = True
+                    break
                 email_list = response.get('data', []) if isinstance(response, dict) else getattr(response, 'data', [])
                 all_emails.extend(email_list)
                 info(logger, "Fetched Resend emails page",
@@ -3115,13 +3147,10 @@ def _fetch_and_cache_resend_emails(since_days: int = 90) -> Optional[Dict[str, A
                 break  # success — move to next page
 
             except Exception as page_error:
-                retries += 1
-                if retries <= max_retries:
-                    warning(logger, "Retrying Resend emails page fetch",
-                            page=page, retry=retries, exc_info=page_error)
-                    time.sleep(1 * retries)
-                    continue
-                error(logger, "Error fetching Resend emails page after retries",
+                # send_with_retry retries only rate limits, so anything that
+                # reaches this handler failed on the first attempt and is a
+                # real error, not a "slow down" signal.
+                error(logger, "Error fetching Resend emails page",
                       page=page, exc_info=page_error)
                 page_error_occurred = True
                 break
