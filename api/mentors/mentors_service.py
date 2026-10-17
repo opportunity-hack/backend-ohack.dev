@@ -21,7 +21,7 @@ from firebase_admin import firestore
 
 from db.db import get_db
 from common.utils.firestore_helpers import clear_all_caches
-from common.utils.slack import send_slack, send_slack_audit
+from common.utils.slack import async_send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
 from services.users_service import get_propel_user_details_by_id
 from services.volunteers_service import find_volunteer_by_caller_identity
@@ -315,7 +315,7 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
         slack_channel = team_data.get("slack_channel")
         if slack_channel:
             try:
-                send_slack(
+                async_send_slack(
                     message=(
                         f":sparkles: *{team_data.get('name', 'This team')}* has full mentor coverage "
                         f"— all {total} items signed off by {COVERAGE_TARGET_MENTORS} mentors each! "
@@ -467,14 +467,14 @@ def raise_mentor_flag(propel_user_id, team_id, severity, body):
     slack_channel = team_data.get("slack_channel")
     if slack_channel:
         try:
-            send_slack(message=team_msg, channel=slack_channel)
+            async_send_slack(message=team_msg, channel=slack_channel)
         except Exception as e:
             logger.error("raise_mentor_flag: team-channel slack failed: %s", e)
 
     mentor_channel = _mentor_channel_for_event(event_id)
     if mentor_channel:
         try:
-            send_slack(
+            async_send_slack(
                 message=(
                     f"{severity_emoji} *{team_name}*: {body[:120]}"
                     f"{'...' if len(body) > 120 else ''}\n{project_link}"
@@ -563,7 +563,7 @@ def resolve_mentor_flag(propel_user_id, team_id, flag_id, resolution_note):
     slack_channel = team_data.get("slack_channel")
     if slack_channel:
         try:
-            send_slack(
+            async_send_slack(
                 message=(
                     f":white_check_mark: *Mentor flag resolved on {team_name}* by *{name}*\n"
                     f">{resolution_note}"
