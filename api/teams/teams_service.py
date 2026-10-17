@@ -12,7 +12,7 @@ from services.users_service import (
     get_user_from_slack_id
 )
 from common.utils.github import create_github_repo, validate_github_username
-from common.utils.slack import create_slack_channel, invite_user_to_channel, send_slack, send_slack_audit
+from common.utils.slack import async_send_slack, create_slack_channel, invite_user_to_channel, send_slack, send_slack_audit
 from common.utils.firebase import get_hackathon_by_event_id
 from common.utils.oauth_providers import extract_slack_user_id, is_oauth_user_id, normalize_slack_user_id
 from common.utils.validators import sanitize_markdown, normalize_github_org
@@ -1303,7 +1303,7 @@ def toggle_completion_item(propel_user_id, team_id, item_slug):
             f"See the full Definition of Done → https://ohack.dev/about/completion"
         )
         try:
-            send_slack(message=msg, channel=slack_channel)
+            async_send_slack(message=msg, channel=slack_channel)
         except Exception as e:
             logger.error("toggle_completion_item: send_slack failed for team %s: %s", team_id, e)
 
@@ -1367,7 +1367,7 @@ def mark_team_complete(propel_user_id, team_id):
     )
     if slack_channel:
         try:
-            send_slack(message=msg, channel=slack_channel)
+            async_send_slack(message=msg, channel=slack_channel)
         except Exception as e:
             logger.error("mark_team_complete: send_slack failed for team %s: %s", team_id, e)
 

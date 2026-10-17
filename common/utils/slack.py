@@ -1,12 +1,13 @@
+import os
 import requests
 from . import safe_get_env_var
 import datetime, json
+from concurrent.futures import ThreadPoolExecutor
 from ratelimiter import RateLimiter
 from slack_sdk import WebClient
 from slack_sdk.models.blocks import SectionBlock
 from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
-from requests.exceptions import ConnectionError
 from cachetools import TTLCache, cached
 from ratelimit import limits, sleep_and_retry
 import threading
@@ -25,30 +26,90 @@ logger.addHandler(logging.StreamHandler())
 logger.setLevel(logging.INFO)
 
 
+# Wall-clock budget for the webhook POST behind send_slack_audit. It runs in
+# the background, but the worker thread still has to be released eventually
+# (the old call had NO timeout and held the request thread until TCP gave up).
+SLACK_HTTP_TIMEOUT_SECONDS = 5
+
+# Bounded pool for fire-and-forget Slack work (audit webhooks, celebration
+# posts). A pool rather than raw threads so a bulk operation that audits
+# hundreds of rows can't spawn hundreds of threads; created lazily per
+# process so gunicorn --preload forks never inherit an executor from the
+# master. Worker threads are non-daemon (Python 3.9+ joins them at interpreter
+# exit), so CLI scripts still flush their pending posts before exiting.
+_BACKGROUND_MAX_WORKERS = 4
+_background_executor = None
+_background_executor_pid = None
+_background_lock = threading.Lock()
+
+
+def _background_executor_for_process():
+    global _background_executor, _background_executor_pid
+    pid = os.getpid()
+    with _background_lock:
+        if _background_executor is None or _background_executor_pid != pid:
+            _background_executor = ThreadPoolExecutor(
+                max_workers=_BACKGROUND_MAX_WORKERS, thread_name_prefix="slack-bg"
+            )
+            _background_executor_pid = pid
+        return _background_executor
+
+
+def run_in_background(label, fn, *args, **kwargs):
+    """Run fn(*args, **kwargs) on the shared Slack background pool.
+
+    Returns the Future so tests can wait on it; request-path callers ignore it.
+    Exceptions are logged and swallowed inside the job: a Slack hiccup must
+    never surface in the business logic that scheduled it.
+    """
+    def _job():
+        try:
+            return fn(*args, **kwargs)
+        except Exception as e:  # fire-and-forget by design
+            logger.warning("Background Slack job %s failed: %s", label, e)
+            return None
+
+    try:
+        return _background_executor_for_process().submit(_job)
+    except RuntimeError as e:
+        # Interpreter shutdown: the pool refuses new work. Run inline rather
+        # than drop the message (still bounded by the per-post timeout).
+        logger.warning("Background Slack pool unavailable (%s); running %s inline", e, label)
+        _job()
+        return None
+
+
+def _post_slack_audit(url, body):
+    try:
+        requests.post(url=url, json=body, timeout=SLACK_HTTP_TIMEOUT_SECONDS)
+    except requests.exceptions.RequestException as e:
+        # ConnectionError, Timeout, MissingSchema (the CHANGEMEPLS placeholder)…
+        # The request from the frontend must not fail because Slack is unreachable.
+        logger.warning("send_slack_audit: webhook post failed (%s): %s", type(e).__name__, e)
+
+
 def send_slack_audit(action="", message="", payload=None):
-    if not SLACK_URL or SLACK_URL == "":
+    """Post an audit line to SLACK_WEBHOOK without blocking the caller.
+
+    The text (including the payload snapshot) is rendered synchronously, so a
+    caller mutating `payload` afterwards can't change what gets posted; only
+    the HTTP POST runs in the background. Returns the Future, or None when
+    the webhook isn't configured.
+    """
+    if not SLACK_URL or SLACK_URL == "CHANGEMEPLS":
         logger.warning("SLACK_URL not set, returning")
-        return
+        return None
 
-    json = {
-        "text": f"[{action}] {message}"
-    }
-
+    text = f"[{action}] {message}"
     if payload:
-        # Create a copy to avoid mutating the original payload
-        payload_copy = payload.copy()               
-
+        # Copy so we never mutate the caller's dict.
+        payload_copy = payload.copy()
         if "recaptchaToken" in payload_copy:
             del payload_copy["recaptchaToken"]
+        text = f"{text}\n{payload_copy}"
 
-        json = {
-            "text": f"[{action}] {message}\n{payload_copy}"
-        }
+    return run_in_background("send_slack_audit", _post_slack_audit, SLACK_URL, {"text": text})
 
-    try: 
-        requests.post(json=json, url=SLACK_URL)
-    except ConnectionError:
-        pass #Eat this error. The request from the frontend should not fail if we can't contact slack
 
 
 @RateLimiter(max_calls=40, period=60)
@@ -364,29 +425,24 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
 
 
 def async_send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None):
+    """Send a Slack message without blocking the caller.
+
+    Same signature as send_slack; the whole send (including the channel-name
+    lookup, which can sleep on its rate limiter) runs on the shared background
+    pool. Use this from request paths where a person is waiting on the
+    response; keep plain send_slack for scripts and wherever ordering matters.
+    Returns the Future so tests can wait on it.
     """
-    Send a Slack message asynchronously using threading.
-    This allows the calling function to return immediately without waiting for the Slack API call.
-
-    :param message: The message to send
-    :param channel: The channel name or user ID to send to
-    :param icon_emoji: Optional emoji icon
-    :param username: The username for the bot
-    :param blocks: Optional Block Kit blocks for rich formatting
-    """
-    def _send_slack_thread():
-        try:
-            send_slack(message=message, channel=channel, icon_emoji=icon_emoji, username=username, blocks=blocks)
-            logger.info(f"Async Slack message sent successfully to {channel}")
-        except Exception as e:
-            logger.error(f"Error sending async Slack message to {channel}: {e}")
-    
-    # Start the thread and let it run in background
-    thread = threading.Thread(target=_send_slack_thread, daemon=True)
-    thread.start()
-    logger.info(f"Started background thread to send Slack message to {channel}")
-
-
+    logger.info("Queued background Slack message to %s", channel)
+    return run_in_background(
+        f"send_slack:{channel}",
+        send_slack,
+        message=message,
+        channel=channel,
+        icon_emoji=icon_emoji,
+        username=username,
+        blocks=blocks,
+    )
 
 
 # Assuming 50 calls per minute for Slack API
