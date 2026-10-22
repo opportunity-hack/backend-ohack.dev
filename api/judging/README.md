@@ -417,8 +417,10 @@ Admins can close scoring for a round. While locked, `POST /api/judge/score` and 
 **GET** `/api/judge/locks/{event_id}` — any authenticated user.
 
 ```json
-{"locks": {"round1": {"locked": false, "locked_at": null, "locked_by_name": null}, "round2": {"locked": true, "locked_at": "2026-10-11T17:40:00-07:00", "locked_by_name": "Greg V"}}}
+{"locks": {"round1": {"locked": false, "locked_at": null, "updated_at": null}, "round2": {"locked": true, "locked_at": "2026-10-11T17:40:00-07:00", "updated_at": "2026-10-11T17:40:00-07:00"}}}
 ```
+
+This is the public view: it never includes who locked the round. Admins see `locked_by` / `locked_by_name` in the progress response below.
 
 `GET /api/judge/teams/{judge_id}/{event_id}` also embeds the same `locks` object and an `event` summary (`title`, `start_date`, `end_date`, `timezone`).
 
@@ -451,4 +453,7 @@ Incomplete judges sort first. A draft that has since been submitted is not count
  "room": "Main Room", "demo_times": {"<team_id>": "2026-10-11T16:40:00-07:00"}, "replace": true}
 ```
 
-Creates every missing (judge, team) pair for the panel in one request (idempotent). `replace: true` also deletes the panel's pairs that are no longer in the cross product. Scores are never modified. Response: `{"success": true, "created": 12, "kept": 63, "updated": 0, "removed": 3, "total": 75}`.
+Creates every missing (judge, team) pair for the panel in one request (idempotent). `replace: true` (JSON boolean required) also deletes the panel's pairs that are no longer in the cross product and collapses duplicate docs. Scores are never modified. Validation (400): `replace_must_be_boolean`, `empty_cross_product` (both lists must be non-empty — an empty set with replace would wipe the panel), `ids_must_be_non_empty_strings`, `room_must_be_string`, `demo_times_must_map_team_id_to_iso_string`. Response: `{"success": true, "created": 12, "kept": 63, "updated": 0, "removed": 3, "total": 75}`.
+
+### Assignment check on writes
+`POST /api/judge/score` and `POST /api/judge/draft` require an assignment for the judge **in that event and that round** (403 otherwise). Reads of a team (`GET /api/judge/team/<id>`) still only require an assignment for the team in any round.

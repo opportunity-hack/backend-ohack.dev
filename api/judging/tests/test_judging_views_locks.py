@@ -80,7 +80,7 @@ def test_every_view_signature_matches_its_url_params(views):
 
 def test_locked_round_rejects_score_submit_with_409(views, client, monkeypatch):
     submit = MagicMock(return_value={"success": True})
-    monkeypatch.setattr(views, "is_judge_assigned_to_team", lambda *_: True)
+    monkeypatch.setattr(views, "is_judge_assigned_for_round", lambda *_: True)
     monkeypatch.setattr(views, "is_round_locked", lambda e, r: True)
     monkeypatch.setattr(views, "submit_judge_score", submit)
 
@@ -93,7 +93,7 @@ def test_locked_round_rejects_score_submit_with_409(views, client, monkeypatch):
 
 def test_unlocked_round_submits_score(views, client, monkeypatch):
     submit = MagicMock(return_value={"success": True, "score_id": "s1"})
-    monkeypatch.setattr(views, "is_judge_assigned_to_team", lambda *_: True)
+    monkeypatch.setattr(views, "is_judge_assigned_for_round", lambda *_: True)
     monkeypatch.setattr(views, "is_round_locked", lambda e, r: False)
     monkeypatch.setattr(views, "submit_judge_score", submit)
 
@@ -104,7 +104,7 @@ def test_unlocked_round_submits_score(views, client, monkeypatch):
 
 def test_locked_round_rejects_draft_save_too(views, client, monkeypatch):
     save = MagicMock(return_value={"success": True})
-    monkeypatch.setattr(views, "is_judge_assigned_to_team", lambda *_: True)
+    monkeypatch.setattr(views, "is_judge_assigned_for_round", lambda *_: True)
     monkeypatch.setattr(views, "is_round_locked", lambda e, r: True)
     monkeypatch.setattr(views, "save_draft_score", save)
 
@@ -114,7 +114,7 @@ def test_locked_round_rejects_draft_save_too(views, client, monkeypatch):
 
 
 def test_unknown_round_is_400_before_lock_check(views, client, monkeypatch):
-    monkeypatch.setattr(views, "is_judge_assigned_to_team", lambda *_: True)
+    monkeypatch.setattr(views, "is_judge_assigned_for_round", lambda *_: True)
     called = MagicMock(return_value=False)
     monkeypatch.setattr(views, "is_round_locked", called)
     res = client.post("/api/judge/score", json={**SCORE_BODY, "round": "finals"}, headers=HEADERS)
@@ -124,7 +124,7 @@ def test_unknown_round_is_400_before_lock_check(views, client, monkeypatch):
 
 def test_get_locks_route(views, client, monkeypatch):
     monkeypatch.setattr(views, "get_round_locks",
-                        lambda e: {"round1": {"locked": True}, "round2": {"locked": False}})
+                        lambda e, public=False: {"round1": {"locked": True}, "round2": {"locked": False}})
     res = client.get("/api/judge/locks/fall-2026", headers=HEADERS)
     assert res.status_code == 200
     assert res.get_json()["locks"]["round1"]["locked"] is True
@@ -170,3 +170,56 @@ def test_bulk_assignments_route_validates_and_delegates(views, client, monkeypat
     bulk.assert_called_once_with(event_id="e", round_name="round2", panel_id="p", judge_ids=["j1"],
                                  team_ids=["t1"], room="Main", demo_times={"t1": "2026-10-11T22:00:00-07:00"},
                                  replace=True)
+
+
+def test_score_requires_an_assignment_for_this_event_and_round(views, client, monkeypatch):
+    """A Round-1-only judge posting round2 must be refused (403), not scored."""
+    calls = []
+
+    def _assigned(judge_id, event_id, team_id, round_name):
+        calls.append((judge_id, event_id, team_id, round_name))
+        return round_name == "round1"
+
+    submit = MagicMock(return_value={"success": True})
+    monkeypatch.setattr(views, "is_judge_assigned_for_round", _assigned)
+    monkeypatch.setattr(views, "is_round_locked", lambda e, r: False)
+    monkeypatch.setattr(views, "submit_judge_score", submit)
+
+    res = client.post("/api/judge/score", json={**SCORE_BODY, "round": "round2"}, headers=HEADERS)
+    assert res.status_code == 403
+    assert calls == [("judge-1", "fall-2026", "team-1", "round2")]
+    submit.assert_not_called()
+
+    res = client.post("/api/judge/score", json=SCORE_BODY, headers=HEADERS)
+    assert res.status_code == 200
+    submit.assert_called_once()
+
+
+def test_bulk_assignments_route_rejects_string_replace_and_empty_lists(views, client, monkeypatch):
+    bulk = MagicMock(return_value={"success": True})
+    monkeypatch.setattr(views, "bulk_create_judge_assignments", bulk)
+    base = {"event_id": "e", "round": "round1", "panel_id": "p", "judge_ids": ["j1"], "team_ids": ["t1"]}
+
+    res = client.post("/api/judge/admin/assignments/bulk", json={**base, "replace": "false"}, headers=HEADERS)
+    assert res.status_code == 400 and res.get_json()["error"] == "replace_must_be_boolean"
+
+    res = client.post("/api/judge/admin/assignments/bulk", json={**base, "team_ids": [], "replace": True}, headers=HEADERS)
+    assert res.status_code == 400 and res.get_json()["error"] == "empty_cross_product"
+
+    res = client.post("/api/judge/admin/assignments/bulk", json={**base, "judge_ids": [{"id": 1}]}, headers=HEADERS)
+    assert res.status_code == 400 and res.get_json()["error"] == "ids_must_be_non_empty_strings"
+
+    bulk.assert_not_called()
+
+
+def test_public_locks_route_uses_public_view(views, client, monkeypatch):
+    seen = {}
+
+    def _locks(event_id, public=False):
+        seen["public"] = public
+        return {"round1": {"locked": True}, "round2": {"locked": False}}
+
+    monkeypatch.setattr(views, "get_round_locks", _locks)
+    res = client.get("/api/judge/locks/fall-2026", headers=HEADERS)
+    assert res.status_code == 200
+    assert seen["public"] is True

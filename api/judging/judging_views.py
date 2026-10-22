@@ -24,6 +24,7 @@ from api.judging.judging_service import (
     get_bulk_judge_scores,
     get_bulk_judge_details,
     get_round_locks,
+    is_judge_assigned_for_round,
     is_round_locked,
     set_round_lock,
     get_judging_progress,
@@ -174,14 +175,16 @@ def submit_score():
               user_id=user_id, requested_judge_id=data['judge_id'])
         return {"error": "Forbidden"}, 403
 
-    # Verify judge is assigned to this team
-    if not is_judge_assigned_to_team(user_id, data['team_id']):
-        error(logger, "Judge attempting to score unassigned team",
-              judge_id=user_id, team_id=data['team_id'])
-        return {"error": "Forbidden: Judge not assigned to this team"}, 403
-
     if data['round'] not in JUDGING_ROUNDS:
         return {"error": "invalid_round"}, 400
+
+    # Verify judge is assigned to this team for THIS event + round (a
+    # Round-1-only judge must not be able to post a Round 2 score).
+    if not is_judge_assigned_for_round(user_id, data['event_id'], data['team_id'], data['round']):
+        error(logger, "Judge attempting to score unassigned team/round",
+              judge_id=user_id, team_id=data['team_id'], event_id=data['event_id'],
+              round_name=data['round'])
+        return {"error": "Forbidden: Judge not assigned to this team for this round"}, 403
 
     if is_round_locked(data['event_id'], data['round']):
         info(logger, "Score rejected: round locked", judge_id=user_id,
@@ -275,14 +278,15 @@ def save_draft():
               user_id=user_id, requested_judge_id=data['judge_id'])
         return {"error": "Forbidden"}, 403
 
-    # Verify judge is assigned to this team
-    if not is_judge_assigned_to_team(user_id, data['team_id']):
-        error(logger, "Judge attempting to save draft for unassigned team",
-              judge_id=user_id, team_id=data['team_id'])
-        return {"error": "Forbidden: Judge not assigned to this team"}, 403
-
     if data['round'] not in JUDGING_ROUNDS:
         return {"error": "invalid_round"}, 400
+
+    # Same round-scoped assignment check as /score.
+    if not is_judge_assigned_for_round(user_id, data['event_id'], data['team_id'], data['round']):
+        error(logger, "Judge attempting to save draft for unassigned team/round",
+              judge_id=user_id, team_id=data['team_id'], event_id=data['event_id'],
+              round_name=data['round'])
+        return {"error": "Forbidden: Judge not assigned to this team for this round"}, 403
 
     if is_round_locked(data['event_id'], data['round']):
         return _round_locked_response(data['event_id'], data['round'])
@@ -606,7 +610,7 @@ def get_locks_api(event_id):
     """Lock state for both rounds. Any signed-in user (judges read it to
     render a read-only scoring page); it carries no scores."""
     info(logger, "API called: GET /locks/{event_id}", event_id=event_id)
-    return {"locks": get_round_locks(event_id)}
+    return {"locks": get_round_locks(event_id, public=True)}
 
 
 @bp.route("/admin/locks/<event_id>/<round_name>", methods=["POST"])
@@ -665,6 +669,16 @@ def bulk_assignments_api():
     team_ids = data.get("team_ids") or []
     if not isinstance(judge_ids, list) or not isinstance(team_ids, list):
         return {"error": "judge_ids and team_ids must be lists"}, 400
+    if not all(isinstance(j, str) and j for j in judge_ids) or \
+            not all(isinstance(t, str) and t for t in team_ids):
+        return {"error": "ids_must_be_non_empty_strings"}, 400
+    replace = data.get("replace", False)
+    if not isinstance(replace, bool):
+        # "false" (a string) is truthy — a bool is required so a client bug
+        # can never turn an additive save into a destructive one.
+        return {"error": "replace_must_be_boolean"}, 400
+    if not judge_ids or not team_ids:
+        return {"error": "empty_cross_product"}, 400
 
     result = bulk_create_judge_assignments(
         event_id=data["event_id"],
@@ -674,7 +688,7 @@ def bulk_assignments_api():
         team_ids=team_ids,
         room=data.get("room"),
         demo_times=data.get("demo_times"),
-        replace=bool(data.get("replace", False)),
+        replace=replace,
     )
     if not result.get("success"):
         return result, 400

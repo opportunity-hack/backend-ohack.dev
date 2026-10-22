@@ -65,7 +65,7 @@ class _Db:
 @pytest.fixture
 def lock_store(monkeypatch):
     stores = {}
-    monkeypatch.setattr(svc, "_locks_db", lambda: _Db(stores))
+    monkeypatch.setattr(svc, "_db", lambda: _Db(stores))
     monkeypatch.setattr("common.utils.slack.send_slack_audit", lambda **kw: None, raising=False)
     return stores
 
@@ -103,7 +103,7 @@ def test_lock_read_error_fails_open(monkeypatch):
     class Boom:
         def collection(self, *_):
             raise RuntimeError("firestore down")
-    monkeypatch.setattr(svc, "_locks_db", lambda: Boom())
+    monkeypatch.setattr(svc, "_db", lambda: Boom())
     assert svc.is_round_locked("fall-2026", "round1") is False
 
 
@@ -218,3 +218,155 @@ def test_bulk_assign_validates_inputs(lock_store):
     assert svc.bulk_create_judge_assignments("e", "round1", None, ["j"], ["t"])["success"] is False
     too_many = [f"j{i}" for i in range(101)]  # dedupe keeps all 101 distinct ids
     assert svc.bulk_create_judge_assignments("e", "round1", "p", too_many, ["t"])["success"] is False
+
+
+# ---------------------------------------------------------------------------
+# Review follow-ups (Oct 2026): public lock view, failed reads, strict bulk input
+# ---------------------------------------------------------------------------
+
+def test_public_lock_view_never_exposes_the_locking_admin(lock_store):
+    svc.set_round_lock("fall-2026", "round1", True, actor_id="propel-uuid", actor_name="Greg")
+    public = svc.get_round_locks("fall-2026", public=True)["round1"]
+    assert public["locked"] is True and public["locked_at"]
+    assert "locked_by" not in public and "locked_by_name" not in public
+    admin = svc.get_round_locks("fall-2026")["round1"]
+    assert admin["locked_by"] == "propel-uuid"
+
+
+def test_progress_fails_loudly_when_the_assignment_read_failed(lock_store):
+    failed = {"data": [], "error": "deadline exceeded"}
+    with patch.object(svc, "fetch_judge_assignments_by_event_id", return_value=failed), \
+            patch.object(svc, "fetch_judge_scores_by_event_id", return_value={"data": []}):
+        result = svc.get_judging_progress("fall-2026", "round1")
+    assert "error" in result and "judges" not in result
+
+
+def test_bulk_assign_does_not_reinsert_when_the_existing_read_failed(lock_store):
+    inserted = []
+    failed = {"data": [], "error": "deadline exceeded"}
+    with patch.object(svc, "fetch_judge_assignments_by_event_id", return_value=failed), \
+            patch.object(svc, "insert_judge_assignment", side_effect=lambda a: inserted.append(a) or a):
+        res = svc.bulk_create_judge_assignments("fall-2026", "round1", "p1", ["j1"], ["t1"], replace=True)
+    assert res["success"] is False
+    assert inserted == []
+
+
+def test_bulk_assign_rejects_empty_cross_product_and_bad_types(lock_store):
+    assert svc.bulk_create_judge_assignments("e", "round1", "p", [], ["t"], replace=True)["error"] == "empty_cross_product"
+    assert svc.bulk_create_judge_assignments("e", "round1", "p", ["j"], [])["error"] == "empty_cross_product"
+    assert svc.bulk_create_judge_assignments("e", "round1", "p", ["j"], ["t"], replace="false")["error"] == "replace_must_be_boolean"
+    assert svc.bulk_create_judge_assignments("e", "round1", "p", [{"id": 1}], ["t"])["error"] == "ids_must_be_non_empty_strings"
+    assert svc.bulk_create_judge_assignments("e", "round1", "p", ["j"], [7])["error"] == "ids_must_be_non_empty_strings"
+    assert svc.bulk_create_judge_assignments("e", "round1", "p", ["j"], ["t"], room=5)["error"] == "room_must_be_string"
+    assert svc.bulk_create_judge_assignments("e", "round1", "p", ["j"], ["t"], demo_times={"t": 5})["error"].startswith("demo_times")
+
+
+def test_bulk_assign_replace_collapses_duplicate_docs(lock_store):
+    existing = {"data": [
+        {**_assignment("j1", "t1"), "id": "dup-a"},
+        {**_assignment("j1", "t1"), "id": "dup-b"},
+        {**_assignment("j1", "tOLD"), "id": "old-a"},
+        {**_assignment("j1", "tOLD"), "id": "old-b"},
+    ]}
+    deleted = []
+    with patch.object(svc, "fetch_judge_assignments_by_event_id", return_value=existing), \
+            patch.object(svc, "insert_judge_assignment", side_effect=lambda a: a), \
+            patch.object(svc, "update_judge_assignment", side_effect=lambda a: a), \
+            patch.object(svc, "delete_judge_assignment", side_effect=lambda i: deleted.append(i) or True):
+        res = svc.bulk_create_judge_assignments("fall-2026", "round1", "p1", ["j1"], ["t1"], replace=True)
+    assert res["kept"] == 1 and res["created"] == 0
+    assert sorted(deleted) == ["dup-b", "old-a", "old-b"]
+    assert res["removed"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Round-scoped assignment check + batched member lookup + get_judge_teams shape
+# ---------------------------------------------------------------------------
+
+class _A:
+    def __init__(self, team_id, round_name, demo_time=None, room=None):
+        self.team_id, self.round, self.demo_time, self.room = team_id, round_name, demo_time, room
+
+
+def test_is_judge_assigned_for_round_matches_team_and_round():
+    with patch.object(svc, "fetch_judge_assignments_by_event_and_judge",
+                      return_value=[_A("t1", "round1"), _A("t2", "round2")]):
+        assert svc.is_judge_assigned_for_round("j", "e", "t1", "round1") is True
+        assert svc.is_judge_assigned_for_round("j", "e", "t1", "round2") is False
+        assert svc.is_judge_assigned_for_round("j", "e", "t2", "round2") is True
+        assert svc.is_judge_assigned_for_round("j", "e", "t9", "round1") is False
+
+
+class _UserSnap:
+    def __init__(self, uid, data):
+        self.id, self._data, self.exists = uid, data, data is not None
+
+    def to_dict(self):
+        return dict(self._data) if self._data else None
+
+
+class _UsersDb:
+    def __init__(self, users):
+        self._users = users
+        self.requested = []
+
+    def collection(self, name):
+        assert name == "users"
+        return self
+
+    def document(self, uid):
+        return uid
+
+    def get_all(self, refs):
+        self.requested.append(list(refs))
+        return [_UserSnap(uid, self._users.get(uid)) for uid in refs]
+
+
+def test_batch_users_for_teams_one_round_trip_and_missing_docs_dropped(monkeypatch):
+    db = _UsersDb({"u1": {"name": "Ada", "email_address": "ada@x.org", "profile_image": "img"},
+                   "u2": {"name": "Bob"}})
+    monkeypatch.setattr(svc, "_db", lambda: db)
+    teams = [{"id": "t1", "users": [{"id": "u1"}, "u2", "u1"]}, {"id": "t2", "users": ["u3", {"id": "u2"}]}]
+    users = svc._batch_users_for_teams(teams)
+    assert db.requested == [["u1", "u2", "u3"]]  # deduped, ONE get_all
+    assert users == {
+        "u1": {"id": "u1", "name": "Ada", "email": "ada@x.org", "profile_image": "img"},
+        "u2": {"id": "u2", "name": "Bob", "email": "", "profile_image": ""},
+    }
+    # Same member shape as the per-user path; missing u3 is dropped; in-team order kept.
+    formatted = svc.format_team_for_judge(teams[0], users_by_id=users)
+    assert [m["id"] for m in formatted["members"]] == ["u1", "u2", "u1"]
+    assert formatted["members"][0] == users["u1"]
+    assert svc.format_team_for_judge(teams[1], users_by_id=users)["members"] == [users["u2"]]
+
+
+def test_batch_users_for_teams_falls_back_to_per_user_reads_on_failure(monkeypatch):
+    class Boom:
+        def collection(self, *_):
+            raise RuntimeError("get_all down")
+    monkeypatch.setattr(svc, "_db", lambda: Boom())
+    assert svc._batch_users_for_teams([{"id": "t1", "users": ["u1"]}]) is None
+    # None → format_team_for_judge takes the legacy per-user path.
+    with patch("common.utils.firebase.get_user_by_id", return_value={"id": "u1", "name": "Ada"}) as m:
+        out = svc.format_team_for_judge({"id": "t1", "users": ["u1"]}, users_by_id=None)
+    m.assert_called_once_with("u1")
+    assert out["members"][0]["name"] == "Ada"
+
+
+def test_get_judge_teams_embeds_event_and_public_locks_and_prefers_round2_slot(lock_store, monkeypatch):
+    svc.set_round_lock("fall-2026", "round2", True, actor_id="p", actor_name="Greg")
+    assignments = [_A("t1", "round1"), _A("t1", "round2", demo_time="2026-10-11T23:00:00-07:00", room="Main")]
+    monkeypatch.setattr(svc, "_batch_users_for_teams", lambda teams: {})
+    with patch.object(svc, "fetch_judge_assignments_by_event_and_judge", return_value=assignments), \
+            patch.object(svc, "get_teams_batch", return_value=[{"id": "t1", "name": "Alpha", "users": []}]), \
+            patch.object(svc, "fetch_judge_scores_by_judge_and_event", return_value=[]), \
+            patch.object(svc, "get_nonprofit_by_id", return_value={"name": "NP"}), \
+            patch.object(svc, "get_single_hackathon_event", return_value={"title": "Fall 2026", "timezone": "America/Phoenix"}):
+        result = svc.get_judge_teams("judge-1", "fall-2026")
+
+    assert result["event"]["title"] == "Fall 2026"
+    assert result["locks"]["round2"]["locked"] is True
+    assert "locked_by" not in result["locks"]["round2"]
+    assert result["round1_teams"][0]["demo_time"] is None
+    r2 = result["round2_teams"][0]
+    assert r2["demo_time"] == "2026-10-11T23:00:00-07:00" and r2["room"] == "Main"

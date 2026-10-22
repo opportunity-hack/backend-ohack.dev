@@ -191,7 +191,7 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
             "round1_teams": round1_teams,
             "round2_teams": round2_teams,
             "event": _event_summary(event_id),
-            "locks": get_round_locks(event_id),
+            "locks": get_round_locks(event_id, public=True),
         }
 
     except Exception as e:
@@ -418,6 +418,22 @@ def is_judge_assigned_to_team(judge_id: str, team_id: str) -> bool:
         return False
 
 
+def is_judge_assigned_for_round(judge_id: str, event_id: str, team_id: str,
+                                round_name: str) -> bool:
+    """Assignment check for score/draft WRITES: the judge must hold an
+    assignment for this team in THIS event and THIS round. The older
+    `is_judge_assigned_to_team` only asks "any event, any round", which let a
+    Round-1-only judge post a Round 2 score for a finalist they'd seen in
+    Round 1 — and that score counted in the final results."""
+    try:
+        assignments = fetch_judge_assignments_by_event_and_judge(event_id, judge_id)
+        return any(a.team_id == team_id and a.round == round_name for a in assignments)
+    except Exception as e:
+        error(logger, "Error checking round assignment", judge_id=judge_id,
+              team_id=team_id, event_id=event_id, round_name=round_name, error=str(e))
+        return False
+
+
 def save_draft_score(judge_id: str, team_id: str, event_id: str,
                      round_name: str, scores_data: Dict, updated_at: str, feedback: str) -> Dict:
     """Save draft scores (auto-save functionality)."""
@@ -514,7 +530,7 @@ def _batch_users_for_teams(teams: list) -> Dict:
     if not ids:
         return {}
     try:
-        db = _locks_db()
+        db = _db()
         refs = [db.collection("users").document(uid) for uid in ids]
         out = {}
         for snap in db.get_all(refs):
@@ -1109,7 +1125,7 @@ BULK_ASSIGN_MAX_JUDGES = 100
 BULK_ASSIGN_MAX_TEAMS = 200
 
 
-def _locks_db():
+def _db():
     # Lazy import: common.utils.firebase builds Firebase credentials at import
     # time; keeping it inside the function keeps judging_service importable in
     # unit tests that patch it.
@@ -1145,7 +1161,7 @@ def _normalize_lock(raw: Dict, event_id: str, round_name: str) -> Dict:
 def get_round_lock(event_id: str, round_name: str) -> Dict:
     """Current lock state for one round. Missing doc ⇒ unlocked."""
     try:
-        snap = _locks_db().collection(JUDGING_LOCKS_COLLECTION).document(
+        snap = _db().collection(JUDGING_LOCKS_COLLECTION).document(
             _lock_doc_id(event_id, round_name)).get()
         raw = snap.to_dict() if getattr(snap, "exists", False) else None
         return _normalize_lock(raw, event_id, round_name)
@@ -1157,9 +1173,22 @@ def get_round_lock(event_id: str, round_name: str) -> Dict:
         return _empty_lock(event_id, round_name)
 
 
-def get_round_locks(event_id: str) -> Dict:
-    """`{"round1": lock, "round2": lock}` for the judge dashboard + admin."""
-    return {r: get_round_lock(event_id, r) for r in JUDGING_ROUNDS}
+PUBLIC_LOCK_FIELDS = ("event_id", "round", "locked", "locked_at", "updated_at")
+
+
+def public_lock_view(lock: Dict) -> Dict:
+    """What a judge (any signed-in user) may see: never the locking admin's
+    PropelAuth id or name — only whether/when the round closed."""
+    return {k: lock.get(k) for k in PUBLIC_LOCK_FIELDS}
+
+
+def get_round_locks(event_id: str, public: bool = False) -> Dict:
+    """`{"round1": lock, "round2": lock}`. `public=True` strips the actor
+    fields for judge-facing responses; admins get the full lock."""
+    locks = {r: get_round_lock(event_id, r) for r in JUDGING_ROUNDS}
+    if public:
+        return {r: public_lock_view(lock) for r, lock in locks.items()}
+    return locks
 
 
 def is_round_locked(event_id: str, round_name: str) -> bool:
@@ -1190,7 +1219,7 @@ def set_round_lock(event_id: str, round_name: str, locked: bool,
         else:
             doc.update({"locked_at": None, "locked_by": None, "locked_by_name": None})
 
-        _locks_db().collection(JUDGING_LOCKS_COLLECTION).document(
+        _db().collection(JUDGING_LOCKS_COLLECTION).document(
             _lock_doc_id(event_id, round_name)).set(doc, merge=True)
 
         try:
@@ -1211,10 +1240,20 @@ def set_round_lock(event_id: str, round_name: str, locked: bool,
         return {"success": False, "error": "Failed to update lock"}
 
 
+class JudgingReadError(RuntimeError):
+    """A db fetcher reported a failure instead of rows."""
+
+
 def _rows(result) -> list:
-    """The event-scoped db fetchers return {"data": [...]}; tolerate a bare
-    list. Only dict rows are returned (keeps pylint's inference honest too)."""
+    """The event-scoped db fetchers return {"data": [...]} — or
+    {"data": [], "error": ...} when the read FAILED. Treating a failed read as
+    "no rows" would make bulk-assign re-insert every pair (and prune nothing)
+    and would show an admin an empty progress board mid-round, so raise
+    instead; callers fall through to their error paths. Bare lists are
+    tolerated. Only dict rows are returned."""
     if isinstance(result, dict):
+        if result.get("error"):
+            raise JudgingReadError(str(result.get("error")))
         result = result.get("data") or []
     return [row for row in (result or []) if isinstance(row, dict)]
 
@@ -1233,14 +1272,8 @@ def _judge_directory(event_id: str) -> Dict:
                 "email": judge.get("email") or "",
                 "is_selected": bool(judge.get("isSelected")),
             }
-    except TypeError:
-        # Older signature without the admin kwarg.
-        for judge in _rows(get_volunteer_from_db_by_event(event_id, "judge")):
-            uid = judge.get("user_id")
-            if uid:
-                directory[uid] = {"name": judge.get("name") or "", "email": judge.get("email") or "",
-                                  "is_selected": bool(judge.get("isSelected"))}
     except Exception as e:
+        # Names are decoration on the progress board; never fail it over them.
         warning(logger, "Judge directory lookup failed", event_id=event_id, error=str(e))
     return directory
 
@@ -1396,26 +1429,46 @@ def bulk_create_judge_assignments(event_id: str, round_name: str, panel_id: str,
     admin removed a judge/finalist and re-saved). Scores are never touched."""
     if round_name not in JUDGING_ROUNDS:
         return {"success": False, "error": "invalid_round"}
-    if not panel_id:
+    if not isinstance(panel_id, str) or not panel_id:
         return {"success": False, "error": "panel_id_required"}
-    judge_ids = [j for j in dict.fromkeys(judge_ids or []) if j]
-    team_ids = [t for t in dict.fromkeys(team_ids or []) if t]
+    if not isinstance(replace, bool):
+        return {"success": False, "error": "replace_must_be_boolean"}
+    if not isinstance(judge_ids, list) or not isinstance(team_ids, list):
+        return {"success": False, "error": "judge_ids_and_team_ids_must_be_lists"}
+    if not all(isinstance(j, str) and j for j in judge_ids) or \
+            not all(isinstance(t, str) and t for t in team_ids):
+        return {"success": False, "error": "ids_must_be_non_empty_strings"}
+    judge_ids = list(dict.fromkeys(judge_ids))
+    team_ids = list(dict.fromkeys(team_ids))
     if len(judge_ids) > BULK_ASSIGN_MAX_JUDGES or len(team_ids) > BULK_ASSIGN_MAX_TEAMS:
         return {"success": False, "error": "too_many_items"}
-    demo_times = demo_times if isinstance(demo_times, dict) else {}
+    if not judge_ids or not team_ids:
+        # An empty cross product with replace=True would wipe the panel; a
+        # frontend bug must never be able to do that. Removing single judges
+        # or teams goes through the explicit DELETE route instead.
+        return {"success": False, "error": "empty_cross_product"}
+    if room is not None and not isinstance(room, str):
+        return {"success": False, "error": "room_must_be_string"}
+    if demo_times is None:
+        demo_times = {}
+    if not isinstance(demo_times, dict) or not all(
+            isinstance(k, str) and (v is None or isinstance(v, str)) for k, v in demo_times.items()):
+        return {"success": False, "error": "demo_times_must_map_team_id_to_iso_string"}
 
     try:
         existing = [a for a in _rows(fetch_judge_assignments_by_event_id(event_id))
                     if a.get("round") == round_name and a.get("panel_id") == panel_id]
+        # Every doc per pair (duplicates can exist from the old per-pair POSTs).
         existing_by_pair = {}
         for a in existing:
-            existing_by_pair.setdefault((a.get("judge_id"), a.get("team_id")), a)
+            existing_by_pair.setdefault((a.get("judge_id"), a.get("team_id")), []).append(a)
 
         wanted = {(j, t) for j in judge_ids for t in team_ids}
-        created, kept, updated = 0, 0, 0
+        created, kept, updated, removed = 0, 0, 0, 0
         for (judge_id, team_id) in sorted(wanted):
-            current = existing_by_pair.get((judge_id, team_id))
-            if current:
+            docs = existing_by_pair.get((judge_id, team_id)) or []
+            if docs:
+                current = docs[0]
                 kept += 1
                 # Keep room/demo_time in sync when the admin changed them.
                 new_room = room if room is not None else current.get("room")
@@ -1424,6 +1477,12 @@ def bulk_create_judge_assignments(event_id: str, round_name: str, panel_id: str,
                     assignment = JudgeAssignment.deserialize({**current, "room": new_room, "demo_time": new_demo})
                     update_judge_assignment(assignment)
                     updated += 1
+                if replace:
+                    # Collapse duplicates of a wanted pair down to one doc.
+                    for dup in docs[1:]:
+                        if dup.get("id"):
+                            delete_judge_assignment(dup["id"])
+                            removed += 1
                 continue
             assignment = JudgeAssignment()
             assignment.judge_id = judge_id
@@ -1436,12 +1495,14 @@ def bulk_create_judge_assignments(event_id: str, round_name: str, panel_id: str,
             insert_judge_assignment(assignment)
             created += 1
 
-        removed = 0
         if replace:
-            for pair, a in existing_by_pair.items():
-                if pair not in wanted and a.get("id"):
-                    delete_judge_assignment(a["id"])
-                    removed += 1
+            for pair, docs in existing_by_pair.items():
+                if pair in wanted:
+                    continue
+                for a in docs:
+                    if a.get("id"):
+                        delete_judge_assignment(a["id"])
+                        removed += 1
 
         return {"success": True, "created": created, "kept": kept, "updated": updated,
                 "removed": removed, "total": len(wanted)}
