@@ -153,16 +153,24 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
         nonprofit_mapping = {id: get_nonprofit_by_id(id) for id in nonprofit_ids}
         logger.info(f"Fetched {len(nonprofit_mapping)} nonprofits for event {event_id}")
 
+        # One batched profile read for every member of every assigned team
+        # (was one serial get_user_by_id per member per team per judge —
+        # 15 judges × 10 teams × 4 members at kickoff).
+        users_by_id = _batch_users_for_teams(teams_data)
+
         for team in teams_data:
             team_id = team.get('id')
             nonprofit_name = nonprofit_mapping.get(team.get('selected_nonprofit_id', ''), {}).get('name', '')
             nonprofit_id = team.get('selected_nonprofit_id', '')
 
-            # Get assignment details for demo scheduling
+            # Round 2 assignments carry the demo slot; prefer that one when
+            # the same team is also assigned in round 1.
             assignment = next(
-                (a for a in assignments if a.team_id == team_id), None)
+                (a for a in assignments if a.team_id == team_id and a.round == 'round2'),
+                None) or next((a for a in assignments if a.team_id == team_id), None)
 
-            team_data = format_team_for_judge(team, score_lookup, nonprofit_id, nonprofit_name)
+            team_data = format_team_for_judge(team, score_lookup, nonprofit_id, nonprofit_name,
+                                              users_by_id=users_by_id)
 
             if team_id in round1_team_ids:
                 round1_teams.append(team_data)
@@ -181,7 +189,9 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
 
         return {
             "round1_teams": round1_teams,
-            "round2_teams": round2_teams
+            "round2_teams": round2_teams,
+            "event": _event_summary(event_id),
+            "locks": get_round_locks(event_id, public=True),
         }
 
     except Exception as e:
@@ -192,6 +202,23 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
         traceback.print_exc()
         return {"round1_teams": [], "round2_teams": [],
                 "error": "Failed to fetch teams"}
+
+
+def _event_summary(event_id: str) -> Dict:
+    """Title/dates/timezone for the judge dashboard masthead (cached getter;
+    best-effort — never fails the teams payload)."""
+    try:
+        h = get_single_hackathon_event(event_id) or {}
+        return {
+            "event_id": event_id,
+            "title": h.get("title", ""),
+            "start_date": h.get("start_date"),
+            "end_date": h.get("end_date"),
+            "timezone": h.get("timezone"),
+        }
+    except Exception as e:
+        warning(logger, "Event summary lookup failed", event_id=event_id, error=str(e))
+        return {"event_id": event_id, "title": "", "start_date": None, "end_date": None, "timezone": None}
 
 
 def get_team_details(team_id: str) -> Dict:
@@ -391,6 +418,22 @@ def is_judge_assigned_to_team(judge_id: str, team_id: str) -> bool:
         return False
 
 
+def is_judge_assigned_for_round(judge_id: str, event_id: str, team_id: str,
+                                round_name: str) -> bool:
+    """Assignment check for score/draft WRITES: the judge must hold an
+    assignment for this team in THIS event and THIS round. The older
+    `is_judge_assigned_to_team` only asks "any event, any round", which let a
+    Round-1-only judge post a Round 2 score for a finalist they'd seen in
+    Round 1 — and that score counted in the final results."""
+    try:
+        assignments = fetch_judge_assignments_by_event_and_judge(event_id, judge_id)
+        return any(a.team_id == team_id and a.round == round_name for a in assignments)
+    except Exception as e:
+        error(logger, "Error checking round assignment", judge_id=judge_id,
+              team_id=team_id, event_id=event_id, round_name=round_name, error=str(e))
+        return False
+
+
 def save_draft_score(judge_id: str, team_id: str, event_id: str,
                      round_name: str, scores_data: Dict, updated_at: str, feedback: str) -> Dict:
     """Save draft scores (auto-save functionality)."""
@@ -465,8 +508,50 @@ def get_draft_score(judge_id: str, team_id: str, event_id: str, round_name: str)
         return {"draft": None, "error": "Failed to fetch draft"}
 
 
-def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: str = None, nonprofit_name: str = None) -> Dict:
-    """Format team data for judge API response."""
+def _member_ids(team: Dict) -> list:
+    """users[] may be enriched dicts or legacy id strings."""
+    out = []
+    for u in team.get('users', []) or []:
+        uid = u.get("id") if isinstance(u, dict) else u
+        if uid and isinstance(uid, str):
+            out.append(uid)
+    return out
+
+
+def _batch_users_for_teams(teams: list) -> Dict:
+    """id -> slim member dict for every member across `teams`, via ONE
+    Firestore get_all. Returns None on any failure so callers fall back to
+    the per-user lookup (never fail a judge's dashboard over an optimisation)."""
+    ids = []
+    for team in teams or []:
+        for uid in _member_ids(team):
+            if uid not in ids:
+                ids.append(uid)
+    if not ids:
+        return {}
+    try:
+        db = _db()
+        refs = [db.collection("users").document(uid) for uid in ids]
+        out = {}
+        for snap in db.get_all(refs):
+            if getattr(snap, "exists", False):
+                d = snap.to_dict() or {}
+                out[snap.id] = {
+                    "id": snap.id,
+                    "name": d.get('name', ''),
+                    "email": d.get('email_address', ''),
+                    "profile_image": d.get('profile_image', ''),
+                }
+        return out
+    except Exception as e:
+        warning(logger, "Batch member lookup failed; falling back to per-user reads", error=str(e))
+        return None
+
+
+def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: str = None,
+                          nonprofit_name: str = None, users_by_id: Dict = None) -> Dict:
+    """Format team data for judge API response. Pass `users_by_id` (from
+    `_batch_users_for_teams`) to avoid a Firestore read per member."""
     if score_lookup is None:
         score_lookup = {}
 
@@ -475,7 +560,11 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: s
     # Resolve team members from user IDs if present
     members = []
     user_ids = team.get('users', [])
-    if user_ids:
+    if user_ids and isinstance(users_by_id, dict):
+        for uid in _member_ids(team):
+            if uid in users_by_id:
+                members.append(dict(users_by_id[uid]))
+    elif user_ids:
         # Import here to avoid circular imports
         from common.utils.firebase import get_user_by_id
         
@@ -1016,3 +1105,410 @@ def get_bulk_judge_details(event_id: str) -> Dict:
         import traceback
         traceback.print_exc()
         return {"judges": [], "total_count": 0, "error": "Failed to fetch judge details"}
+
+
+# ---------------------------------------------------------------------------
+# Round locks, judge progress, bulk assignments (Oct 2026)
+#
+# Locks live in their own collection (`judging_round_locks`, doc id
+# `<event_id>__<round>`) and are read with ONE uncached doc-get on every
+# score/draft write, so flipping the lock takes effect immediately — the
+# hackathon doc is behind a 10-minute cache and would have lagged a live
+# awards ceremony. Writes go through `common.utils.firebase.get_db()` (the
+# same client the submissions service uses; MockFirestore under
+# ENVIRONMENT=test).
+# ---------------------------------------------------------------------------
+
+JUDGING_ROUNDS = ("round1", "round2")
+JUDGING_LOCKS_COLLECTION = "judging_round_locks"
+BULK_ASSIGN_MAX_JUDGES = 100
+BULK_ASSIGN_MAX_TEAMS = 200
+
+
+def _db():
+    # Lazy import: common.utils.firebase builds Firebase credentials at import
+    # time; keeping it inside the function keeps judging_service importable in
+    # unit tests that patch it.
+    from common.utils.firebase import get_db as _get_db
+    return _get_db()
+
+
+def _lock_doc_id(event_id: str, round_name: str) -> str:
+    return f"{event_id}__{round_name}"
+
+
+def _empty_lock(event_id: str, round_name: str) -> Dict:
+    return {
+        "event_id": event_id,
+        "round": round_name,
+        "locked": False,
+        "locked_at": None,
+        "locked_by": None,
+        "locked_by_name": None,
+        "updated_at": None,
+    }
+
+
+def _normalize_lock(raw: Dict, event_id: str, round_name: str) -> Dict:
+    lock = _empty_lock(event_id, round_name)
+    if isinstance(raw, dict):
+        lock["locked"] = bool(raw.get("locked", False))
+        for key in ("locked_at", "locked_by", "locked_by_name", "updated_at"):
+            lock[key] = raw.get(key)
+    return lock
+
+
+def get_round_lock(event_id: str, round_name: str) -> Dict:
+    """Current lock state for one round. Missing doc ⇒ unlocked."""
+    try:
+        snap = _db().collection(JUDGING_LOCKS_COLLECTION).document(
+            _lock_doc_id(event_id, round_name)).get()
+        raw = snap.to_dict() if getattr(snap, "exists", False) else None
+        return _normalize_lock(raw, event_id, round_name)
+    except Exception as e:
+        # Fail OPEN on a read error: a flaky lock read must never block a judge
+        # from scoring. Admins see the lock state on their panel and can retry.
+        warning(logger, "Error reading judging round lock",
+                event_id=event_id, round_name=round_name, error=str(e))
+        return _empty_lock(event_id, round_name)
+
+
+PUBLIC_LOCK_FIELDS = ("event_id", "round", "locked", "locked_at", "updated_at")
+
+
+def public_lock_view(lock: Dict) -> Dict:
+    """What a judge (any signed-in user) may see: never the locking admin's
+    PropelAuth id or name — only whether/when the round closed."""
+    return {k: lock.get(k) for k in PUBLIC_LOCK_FIELDS}
+
+
+def get_round_locks(event_id: str, public: bool = False) -> Dict:
+    """`{"round1": lock, "round2": lock}`. `public=True` strips the actor
+    fields for judge-facing responses; admins get the full lock."""
+    locks = {r: get_round_lock(event_id, r) for r in JUDGING_ROUNDS}
+    if public:
+        return {r: public_lock_view(lock) for r, lock in locks.items()}
+    return locks
+
+
+def is_round_locked(event_id: str, round_name: str) -> bool:
+    return bool(get_round_lock(event_id, round_name).get("locked"))
+
+
+def set_round_lock(event_id: str, round_name: str, locked: bool,
+                   actor_id: str = None, actor_name: str = None) -> Dict:
+    """Lock or unlock scoring for a round. Idempotent; returns the new lock."""
+    if round_name not in JUDGING_ROUNDS:
+        return {"success": False, "error": "invalid_round"}
+    if not isinstance(locked, bool):
+        return {"success": False, "error": "locked_must_be_boolean"}
+    try:
+        now_iso = datetime.now().astimezone().isoformat()
+        doc = {
+            "event_id": event_id,
+            "round": round_name,
+            "locked": locked,
+            "updated_at": now_iso,
+        }
+        if locked:
+            doc.update({
+                "locked_at": now_iso,
+                "locked_by": actor_id,
+                "locked_by_name": actor_name,
+            })
+        else:
+            doc.update({"locked_at": None, "locked_by": None, "locked_by_name": None})
+
+        _db().collection(JUDGING_LOCKS_COLLECTION).document(
+            _lock_doc_id(event_id, round_name)).set(doc, merge=True)
+
+        try:
+            from common.utils.slack import send_slack_audit
+            send_slack_audit(
+                action="judging_round_lock",
+                message=f"{'Locked' if locked else 'Unlocked'} {round_name} scoring for {event_id}",
+                payload={"event_id": event_id, "round": round_name, "locked": locked,
+                         "by": actor_name or actor_id},
+            )
+        except Exception as e:  # audit is best-effort
+            warning(logger, "judging lock audit failed", error=str(e))
+
+        return {"success": True, "lock": _normalize_lock(doc, event_id, round_name)}
+    except Exception as e:
+        error(logger, "Error setting judging round lock",
+              event_id=event_id, round_name=round_name, error=str(e))
+        return {"success": False, "error": "Failed to update lock"}
+
+
+class JudgingReadError(RuntimeError):
+    """A db fetcher reported a failure instead of rows."""
+
+
+def _rows(result) -> list:
+    """The event-scoped db fetchers return {"data": [...]} — or
+    {"data": [], "error": ...} when the read FAILED. Treating a failed read as
+    "no rows" would make bulk-assign re-insert every pair (and prune nothing)
+    and would show an admin an empty progress board mid-round, so raise
+    instead; callers fall through to their error paths. Bare lists are
+    tolerated. Only dict rows are returned."""
+    if isinstance(result, dict):
+        if result.get("error"):
+            raise JudgingReadError(str(result.get("error")))
+        result = result.get("data") or []
+    return [row for row in (result or []) if isinstance(row, dict)]
+
+
+def _judge_directory(event_id: str) -> Dict:
+    """user_id -> {name, email} for every judge application on the event
+    (one query), so progress rows carry names without N lookups."""
+    directory = {}
+    try:
+        for judge in _rows(get_volunteer_from_db_by_event(event_id, "judge", admin=True)):
+            uid = judge.get("user_id")
+            if not uid:
+                continue
+            directory[uid] = {
+                "name": judge.get("name") or "",
+                "email": judge.get("email") or "",
+                "is_selected": bool(judge.get("isSelected")),
+            }
+    except Exception as e:
+        # Names are decoration on the progress board; never fail it over them.
+        warning(logger, "Judge directory lookup failed", event_id=event_id, error=str(e))
+    return directory
+
+
+def get_judging_progress(event_id: str, round_name: str) -> Dict:
+    """Judge × team scoring progress for one round, computed server-side in
+    three queries (assignments, scores, judge applications) + one team batch.
+
+    A judge/team cell is `submitted` when a non-draft score doc exists,
+    `draft` when only a draft exists, else `missing`. Drafts that have since
+    been submitted are NOT counted as drafts."""
+    if round_name not in JUDGING_ROUNDS:
+        return {"error": "invalid_round"}
+    try:
+        assignments = [a for a in _rows(fetch_judge_assignments_by_event_id(event_id))
+                       if a.get("round") == round_name and a.get("judge_id") and a.get("team_id")]
+        scores = [s for s in _rows(fetch_judge_scores_by_event_id(event_id))
+                  if s.get("round") == round_name and s.get("judge_id") and s.get("team_id")]
+
+        submitted = {}  # (judge_id, team_id) -> submitted_at iso|None
+        drafts = {}     # (judge_id, team_id) -> updated_at iso|None
+        for s in scores:
+            key = (s["judge_id"], s["team_id"])
+            if s.get("is_draft"):
+                drafts[key] = _iso(s.get("updated_at"))
+            else:
+                submitted[key] = _iso(s.get("submitted_at") or s.get("updated_at"))
+
+        judges_by_id = {}
+        teams_by_id = {}
+        for a in assignments:
+            j = judges_by_id.setdefault(a["judge_id"], {
+                "judge_id": a["judge_id"], "assigned_team_ids": [],
+                "submitted_team_ids": [], "draft_team_ids": [], "missing_team_ids": [],
+                "last_submitted_at": None, "panel_ids": set(),
+            })
+            if a["team_id"] not in j["assigned_team_ids"]:
+                j["assigned_team_ids"].append(a["team_id"])
+            if a.get("panel_id"):
+                j["panel_ids"].add(a["panel_id"])
+            t = teams_by_id.setdefault(a["team_id"], {
+                "team_id": a["team_id"], "assigned_judge_ids": [], "submitted_judge_ids": [],
+            })
+            if a["judge_id"] not in t["assigned_judge_ids"]:
+                t["assigned_judge_ids"].append(a["judge_id"])
+
+        for jid, j in judges_by_id.items():
+            for tid in j["assigned_team_ids"]:
+                key = (jid, tid)
+                if key in submitted:
+                    j["submitted_team_ids"].append(tid)
+                    teams_by_id[tid]["submitted_judge_ids"].append(jid)
+                    ts = submitted[key]
+                    if ts and (j["last_submitted_at"] is None or ts > j["last_submitted_at"]):
+                        j["last_submitted_at"] = ts
+                elif key in drafts:
+                    j["draft_team_ids"].append(tid)
+                else:
+                    j["missing_team_ids"].append(tid)
+
+        # Names
+        directory = _judge_directory(event_id)
+        team_names = {}
+        team_ids = list(teams_by_id.keys())
+        if team_ids:
+            try:
+                for team in get_teams_batch({"team_ids": team_ids}):
+                    team_names[team.get("id")] = team.get("name", "")
+            except Exception as e:
+                warning(logger, "Progress team batch failed", event_id=event_id, error=str(e))
+
+        judges_out = []
+        for j in judges_by_id.values():
+            info_ = directory.get(j["judge_id"], {})
+            assigned_n = len(j["assigned_team_ids"])
+            submitted_n = len(j["submitted_team_ids"])
+            judges_out.append({
+                "judge_id": j["judge_id"],
+                "name": info_.get("name") or "Unknown judge",
+                "email": info_.get("email") or "",
+                "panel_ids": sorted(j["panel_ids"]),
+                "assigned_team_ids": j["assigned_team_ids"],
+                "submitted_team_ids": j["submitted_team_ids"],
+                "draft_team_ids": j["draft_team_ids"],
+                "missing_team_ids": j["missing_team_ids"],
+                "assigned": assigned_n,
+                "submitted": submitted_n,
+                "complete": assigned_n > 0 and submitted_n >= assigned_n,
+                "last_submitted_at": j["last_submitted_at"],
+            })
+        judges_out.sort(key=lambda j: (j["complete"], -(j["assigned"] - j["submitted"]), j["name"].lower()))
+
+        teams_out = []
+        for t in teams_by_id.values():
+            teams_out.append({
+                "team_id": t["team_id"],
+                "name": team_names.get(t["team_id"], ""),
+                "assigned_judge_ids": t["assigned_judge_ids"],
+                "submitted_judge_ids": t["submitted_judge_ids"],
+                "assigned": len(t["assigned_judge_ids"]),
+                "submitted": len(t["submitted_judge_ids"]),
+            })
+        teams_out.sort(key=lambda t: (t["name"] or "").lower())
+
+        # Scores from judges who no longer hold an assignment (admin re-paneled)
+        # still exist in the collection; surface the count so nobody is confused
+        # by a Results total that is higher than the matrix.
+        assigned_keys = {(a["judge_id"], a["team_id"]) for a in assignments}
+        orphan_submitted = len([k for k in submitted if k not in assigned_keys])
+
+        return {
+            "event_id": event_id,
+            "round": round_name,
+            "lock": get_round_lock(event_id, round_name),
+            "judges": judges_out,
+            "teams": teams_out,
+            "summary": {
+                "judges_total": len(judges_out),
+                "judges_complete": len([j for j in judges_out if j["complete"]]),
+                "assignments_total": len(assigned_keys),
+                "submitted_total": len([k for k in assigned_keys if k in submitted]),
+                "drafts_total": len([k for k in assigned_keys if k in drafts and k not in submitted]),
+                "orphan_submitted": orphan_submitted,
+            },
+        }
+    except Exception as e:
+        error(logger, "Error computing judging progress",
+              event_id=event_id, round_name=round_name, error=str(e))
+        import traceback
+        traceback.print_exc()
+        return {"error": "Failed to compute judging progress"}
+
+
+def _iso(value):
+    if value is None:
+        return None
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            return str(value)
+    return str(value)
+
+
+def bulk_create_judge_assignments(event_id: str, round_name: str, panel_id: str,
+                                  judge_ids: list, team_ids: list, room: str = None,
+                                  demo_times: Dict = None, replace: bool = False) -> Dict:
+    """Create every missing (judge, team) assignment for a panel in one call.
+
+    Idempotent: pairs that already exist for (panel_id, event_id, round) are
+    left alone. With `replace=True` the panel's assignments for this round are
+    made to EQUAL the cross product — pairs no longer in it are deleted (the
+    admin removed a judge/finalist and re-saved). Scores are never touched."""
+    if round_name not in JUDGING_ROUNDS:
+        return {"success": False, "error": "invalid_round"}
+    if not isinstance(panel_id, str) or not panel_id:
+        return {"success": False, "error": "panel_id_required"}
+    if not isinstance(replace, bool):
+        return {"success": False, "error": "replace_must_be_boolean"}
+    if not isinstance(judge_ids, list) or not isinstance(team_ids, list):
+        return {"success": False, "error": "judge_ids_and_team_ids_must_be_lists"}
+    if not all(isinstance(j, str) and j for j in judge_ids) or \
+            not all(isinstance(t, str) and t for t in team_ids):
+        return {"success": False, "error": "ids_must_be_non_empty_strings"}
+    judge_ids = list(dict.fromkeys(judge_ids))
+    team_ids = list(dict.fromkeys(team_ids))
+    if len(judge_ids) > BULK_ASSIGN_MAX_JUDGES or len(team_ids) > BULK_ASSIGN_MAX_TEAMS:
+        return {"success": False, "error": "too_many_items"}
+    if not judge_ids or not team_ids:
+        # An empty cross product with replace=True would wipe the panel; a
+        # frontend bug must never be able to do that. Removing single judges
+        # or teams goes through the explicit DELETE route instead.
+        return {"success": False, "error": "empty_cross_product"}
+    if room is not None and not isinstance(room, str):
+        return {"success": False, "error": "room_must_be_string"}
+    if demo_times is None:
+        demo_times = {}
+    if not isinstance(demo_times, dict) or not all(
+            isinstance(k, str) and (v is None or isinstance(v, str)) for k, v in demo_times.items()):
+        return {"success": False, "error": "demo_times_must_map_team_id_to_iso_string"}
+
+    try:
+        existing = [a for a in _rows(fetch_judge_assignments_by_event_id(event_id))
+                    if a.get("round") == round_name and a.get("panel_id") == panel_id]
+        # Every doc per pair (duplicates can exist from the old per-pair POSTs).
+        existing_by_pair = {}
+        for a in existing:
+            existing_by_pair.setdefault((a.get("judge_id"), a.get("team_id")), []).append(a)
+
+        wanted = {(j, t) for j in judge_ids for t in team_ids}
+        created, kept, updated, removed = 0, 0, 0, 0
+        for (judge_id, team_id) in sorted(wanted):
+            docs = existing_by_pair.get((judge_id, team_id)) or []
+            if docs:
+                current = docs[0]
+                kept += 1
+                # Keep room/demo_time in sync when the admin changed them.
+                new_room = room if room is not None else current.get("room")
+                new_demo = demo_times.get(team_id, current.get("demo_time"))
+                if new_room != current.get("room") or new_demo != current.get("demo_time"):
+                    assignment = JudgeAssignment.deserialize({**current, "room": new_room, "demo_time": new_demo})
+                    update_judge_assignment(assignment)
+                    updated += 1
+                if replace:
+                    # Collapse duplicates of a wanted pair down to one doc.
+                    for dup in docs[1:]:
+                        if dup.get("id"):
+                            delete_judge_assignment(dup["id"])
+                            removed += 1
+                continue
+            assignment = JudgeAssignment()
+            assignment.judge_id = judge_id
+            assignment.event_id = event_id
+            assignment.team_id = team_id
+            assignment.round = round_name
+            assignment.panel_id = panel_id
+            assignment.room = room
+            assignment.demo_time = demo_times.get(team_id)
+            insert_judge_assignment(assignment)
+            created += 1
+
+        if replace:
+            for pair, docs in existing_by_pair.items():
+                if pair in wanted:
+                    continue
+                for a in docs:
+                    if a.get("id"):
+                        delete_judge_assignment(a["id"])
+                        removed += 1
+
+        return {"success": True, "created": created, "kept": kept, "updated": updated,
+                "removed": removed, "total": len(wanted)}
+    except Exception as e:
+        error(logger, "Error bulk-creating judge assignments",
+              event_id=event_id, round_name=round_name, panel_id=panel_id, error=str(e))
+        import traceback
+        traceback.print_exc()
+        return {"success": False, "error": "Failed to create assignments"}

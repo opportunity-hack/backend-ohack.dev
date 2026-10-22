@@ -22,7 +22,14 @@ from api.judging.judging_service import (
     get_judge_assignments_for_panel,
     get_judge_event_details,    
     get_bulk_judge_scores,
-    get_bulk_judge_details
+    get_bulk_judge_details,
+    get_round_locks,
+    is_judge_assigned_for_round,
+    is_round_locked,
+    set_round_lock,
+    get_judging_progress,
+    bulk_create_judge_assignments,
+    JUDGING_ROUNDS,
 )
 
 logger = get_logger("judging_views")
@@ -38,6 +45,29 @@ def get_authenticated_user_id():
         error(logger, "Could not obtain user details - user not authenticated")
         return None
     return auth_user.user_id
+
+
+def _round_locked_response(event_id, round_name):
+    """409 body every judge-side write returns once an admin has locked the
+    round. The frontend branches on `error == "round_locked"`."""
+    return {
+        "error": "round_locked",
+        "round": round_name,
+        "event_id": event_id,
+        "message": "Scoring for this round is closed. Your score was not changed.",
+    }, 409
+
+
+def _actor_display_name(user_id):
+    """Best-effort human name for lock audit rows; never raises."""
+    try:
+        from services.users_service import get_propel_user_details_by_id
+        details = get_propel_user_details_by_id(user_id)
+        if details and len(details) >= 5:
+            return details[4] or details[0]
+    except Exception as e:
+        debug(logger, "actor name lookup failed", error=str(e))
+    return None
 
 
 @bp.route("/assignments/<judge_id>", methods=["GET"])
@@ -145,11 +175,21 @@ def submit_score():
               user_id=user_id, requested_judge_id=data['judge_id'])
         return {"error": "Forbidden"}, 403
 
-    # Verify judge is assigned to this team
-    if not is_judge_assigned_to_team(user_id, data['team_id']):
-        error(logger, "Judge attempting to score unassigned team",
-              judge_id=user_id, team_id=data['team_id'])
-        return {"error": "Forbidden: Judge not assigned to this team"}, 403
+    if data['round'] not in JUDGING_ROUNDS:
+        return {"error": "invalid_round"}, 400
+
+    # Verify judge is assigned to this team for THIS event + round (a
+    # Round-1-only judge must not be able to post a Round 2 score).
+    if not is_judge_assigned_for_round(user_id, data['event_id'], data['team_id'], data['round']):
+        error(logger, "Judge attempting to score unassigned team/round",
+              judge_id=user_id, team_id=data['team_id'], event_id=data['event_id'],
+              round_name=data['round'])
+        return {"error": "Forbidden: Judge not assigned to this team for this round"}, 403
+
+    if is_round_locked(data['event_id'], data['round']):
+        info(logger, "Score rejected: round locked", judge_id=user_id,
+             team_id=data['team_id'], event_id=data['event_id'], round_name=data['round'])
+        return _round_locked_response(data['event_id'], data['round'])
 
     debug(logger, "Submitting score", judge_id=data['judge_id'],
           team_id=data['team_id'], event_id=data['event_id'])
@@ -238,11 +278,18 @@ def save_draft():
               user_id=user_id, requested_judge_id=data['judge_id'])
         return {"error": "Forbidden"}, 403
 
-    # Verify judge is assigned to this team
-    if not is_judge_assigned_to_team(user_id, data['team_id']):
-        error(logger, "Judge attempting to save draft for unassigned team",
-              judge_id=user_id, team_id=data['team_id'])
-        return {"error": "Forbidden: Judge not assigned to this team"}, 403
+    if data['round'] not in JUDGING_ROUNDS:
+        return {"error": "invalid_round"}, 400
+
+    # Same round-scoped assignment check as /score.
+    if not is_judge_assigned_for_round(user_id, data['event_id'], data['team_id'], data['round']):
+        error(logger, "Judge attempting to save draft for unassigned team/round",
+              judge_id=user_id, team_id=data['team_id'], event_id=data['event_id'],
+              round_name=data['round'])
+        return {"error": "Forbidden: Judge not assigned to this team for this round"}, 403
+
+    if is_round_locked(data['event_id'], data['round']):
+        return _round_locked_response(data['event_id'], data['round'])
 
     debug(logger, "Saving draft score", judge_id=data['judge_id'],
           team_id=data['team_id'], event_id=data['event_id'])
@@ -550,4 +597,99 @@ def get_bulk_scores_admin(event_id, round_name):
     if "error" in result:
         return result, 500
 
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Round locks + judge progress + bulk assignments (Oct 2026)
+# ---------------------------------------------------------------------------
+
+@bp.route("/locks/<event_id>", methods=["GET"])
+@auth.require_user
+def get_locks_api(event_id):
+    """Lock state for both rounds. Any signed-in user (judges read it to
+    render a read-only scoring page); it carries no scores."""
+    info(logger, "API called: GET /locks/{event_id}", event_id=event_id)
+    return {"locks": get_round_locks(event_id, public=True)}
+
+
+@bp.route("/admin/locks/<event_id>/<round_name>", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
+def set_lock_api(event_id, round_name):
+    """Lock or unlock scoring for a round. Body: {"locked": true|false}."""
+    info(logger, "API called: POST /admin/locks/{event_id}/{round_name}",
+         event_id=event_id, round_name=round_name)
+    user_id = get_authenticated_user_id()
+    if not user_id:
+        return {"error": "Unauthorized"}, 401
+    if round_name not in JUDGING_ROUNDS:
+        return {"error": "invalid_round"}, 400
+    data = request.get_json(silent=True) or {}
+    locked = data.get("locked")
+    if not isinstance(locked, bool):
+        return {"error": "locked_must_be_boolean"}, 400
+
+    result = set_round_lock(event_id, round_name, locked,
+                            actor_id=user_id, actor_name=_actor_display_name(user_id))
+    if not result.get("success"):
+        return result, 400
+    return result
+
+
+@bp.route("/admin/progress/<event_id>/<round_name>", methods=["GET"])
+@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
+def get_progress_api(event_id, round_name):
+    """Who has submitted scores, who is mid-draft, who hasn't started — per
+    judge and per team — plus the round's lock state. One call."""
+    info(logger, "API called: GET /admin/progress/{event_id}/{round_name}",
+         event_id=event_id, round_name=round_name)
+    if round_name not in JUDGING_ROUNDS:
+        return {"error": "invalid_round"}, 400
+    result = get_judging_progress(event_id, round_name)
+    if "error" in result:
+        return result, 500
+    return result
+
+
+@bp.route("/admin/assignments/bulk", methods=["POST"])
+@auth.require_org_member_with_permission("judge.admin", req_to_org_id=getOrgId)
+def bulk_assignments_api():
+    """Create every (judge, team) assignment for a panel in one request.
+    Body: {event_id, round, panel_id, judge_ids[], team_ids[], room?,
+    demo_times?: {team_id: iso}, replace?: bool}."""
+    info(logger, "API called: POST /admin/assignments/bulk")
+    data = request.get_json(silent=True) or {}
+    for field in ("event_id", "round", "panel_id"):
+        if not data.get(field):
+            return {"error": f"Missing required field: {field}"}, 400
+    if data["round"] not in JUDGING_ROUNDS:
+        return {"error": "invalid_round"}, 400
+    judge_ids = data.get("judge_ids") or []
+    team_ids = data.get("team_ids") or []
+    if not isinstance(judge_ids, list) or not isinstance(team_ids, list):
+        return {"error": "judge_ids and team_ids must be lists"}, 400
+    if not all(isinstance(j, str) and j for j in judge_ids) or \
+            not all(isinstance(t, str) and t for t in team_ids):
+        return {"error": "ids_must_be_non_empty_strings"}, 400
+    replace = data.get("replace", False)
+    if not isinstance(replace, bool):
+        # "false" (a string) is truthy — a bool is required so a client bug
+        # can never turn an additive save into a destructive one.
+        return {"error": "replace_must_be_boolean"}, 400
+    if not judge_ids or not team_ids:
+        return {"error": "empty_cross_product"}, 400
+
+    result = bulk_create_judge_assignments(
+        event_id=data["event_id"],
+        round_name=data["round"],
+        panel_id=data["panel_id"],
+        judge_ids=judge_ids,
+        team_ids=team_ids,
+        room=data.get("room"),
+        demo_times=data.get("demo_times"),
+        replace=replace,
+    )
+    if not result.get("success"):
+        return result, 400
     return result
