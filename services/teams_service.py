@@ -225,13 +225,17 @@ def get_teams_batch(json):
         logger.warning("get_teams_batch end (no team_ids provided)")
         return []
     try:
-        docs = db.collection('teams').where(
-            '__name__', 'in', [db.collection('teams').document(team_id) for team_id in team_ids]).stream()
-
+        # Firestore caps `in` queries at 30 values; a judge assigned to more
+        # teams than that (or a bulk admin read) used to raise and return [].
+        unique_ids = [t for t in dict.fromkeys(team_ids) if t]
         results = []
-        for doc in docs:
-            team_data = doc_to_json(docid=doc.id, doc=doc)
-            results.append(public_team_view(team_data))
+        for start in range(0, len(unique_ids), 30):
+            chunk = unique_ids[start:start + 30]
+            docs = db.collection('teams').where(
+                '__name__', 'in', [db.collection('teams').document(team_id) for team_id in chunk]).stream()
+            for doc in docs:
+                team_data = doc_to_json(docid=doc.id, doc=doc)
+                results.append(public_team_view(team_data))
 
         logger.debug(f"get_teams_batch end (with {len(results)} results)")
         return results

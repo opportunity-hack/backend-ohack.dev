@@ -402,3 +402,53 @@ Remove a judge panel.
 10. **Round Management**: Support multiple judging rounds per event
 11. **Panel UI**: Build admin interface for panel and assignment management
 12. **Feedback**: Support rich text feedback from judges
+
+---
+
+## Round Locks (Oct 2026)
+
+Admins can close scoring for a round. While locked, `POST /api/judge/score` and `POST /api/judge/draft` return **409**:
+
+```json
+{"error": "round_locked", "round": "round2", "event_id": "fall-2026", "message": "Scoring for this round is closed. Your score was not changed."}
+```
+
+### Get locks
+**GET** `/api/judge/locks/{event_id}` — any authenticated user.
+
+```json
+{"locks": {"round1": {"locked": false, "locked_at": null, "locked_by_name": null}, "round2": {"locked": true, "locked_at": "2026-10-11T17:40:00-07:00", "locked_by_name": "Greg V"}}}
+```
+
+`GET /api/judge/teams/{judge_id}/{event_id}` also embeds the same `locks` object and an `event` summary (`title`, `start_date`, `end_date`, `timezone`).
+
+### Set a lock (Admin)
+**POST** `/api/judge/admin/locks/{event_id}/{round_name}` — `judge.admin`. Body `{"locked": true}` (JSON boolean required). Returns `{"success": true, "lock": {...}}`.
+
+## Judge Progress (Admin)
+**GET** `/api/judge/admin/progress/{event_id}/{round_name}` — `judge.admin`.
+
+One call that answers "who has sent in scores and who hasn't":
+
+```json
+{
+  "lock": {"locked": false},
+  "judges": [{"judge_id": "…", "name": "Ada", "email": "…", "assigned": 5, "submitted": 3, "complete": false,
+              "assigned_team_ids": ["…"], "submitted_team_ids": ["…"], "draft_team_ids": ["…"], "missing_team_ids": ["…"],
+              "last_submitted_at": "…"}],
+  "teams": [{"team_id": "…", "name": "Alpha", "assigned": 15, "submitted": 12, "assigned_judge_ids": ["…"], "submitted_judge_ids": ["…"]}],
+  "summary": {"judges_total": 15, "judges_complete": 9, "assignments_total": 75, "submitted_total": 58, "drafts_total": 4, "orphan_submitted": 0}
+}
+```
+
+Incomplete judges sort first. A draft that has since been submitted is not counted as a draft.
+
+## Bulk Assignments (Admin)
+**POST** `/api/judge/admin/assignments/bulk` — `judge.admin`.
+
+```json
+{"event_id": "fall-2026", "round": "round2", "panel_id": "<panel doc id>", "judge_ids": ["…"], "team_ids": ["…"],
+ "room": "Main Room", "demo_times": {"<team_id>": "2026-10-11T16:40:00-07:00"}, "replace": true}
+```
+
+Creates every missing (judge, team) pair for the panel in one request (idempotent). `replace: true` also deletes the panel's pairs that are no longer in the cross product. Scores are never modified. Response: `{"success": true, "created": 12, "kept": 63, "updated": 0, "removed": 3, "total": 75}`.
