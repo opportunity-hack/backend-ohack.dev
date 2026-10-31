@@ -49,11 +49,30 @@ def _toggle(team_data, slug, done, ref=None):
          patch.object(svc, "send_slack_audit"), \
          patch.object(svc, "async_send_slack"), \
          patch.object(svc, "clear_cache"), \
-         patch.object(svc, "datetime") as fake_dt:
-        fake_dt.now.return_value = NOW
-        fake_dt.fromisoformat = datetime.fromisoformat
+         patch.object(svc, "_utc_now", return_value=NOW):
         body, status = svc.toggle_mentor_coverage(ME, "team-1", slug, done)
     return body, status, ref
+
+
+# ---------------------------------------------------------------------------
+# the clock: stamps are naive UTC wherever the backend runs
+# ---------------------------------------------------------------------------
+
+def test_stamps_are_utc_even_on_a_host_in_arizona(monkeypatch):
+    import time
+    from datetime import timezone as _tz
+    monkeypatch.setenv("TZ", "America/Phoenix")
+    time.tzset()
+    try:
+        utc = datetime.now(_tz.utc).replace(tzinfo=None)
+        assert abs((svc._utc_now() - utc).total_seconds()) < 5
+        # host-local "now" is 7h behind — the bug: a fresh check read as stale
+        assert abs((utc - datetime.now()).total_seconds() - 7 * 3600) < 5
+        # and a check stamped from the UTC clock is fresh right away
+        assert svc._check_is_fresh("scope_reviewed", {"checked_at": svc._utc_now().isoformat()})
+    finally:
+        monkeypatch.delenv("TZ")
+        time.tzset()
 
 
 # ---------------------------------------------------------------------------

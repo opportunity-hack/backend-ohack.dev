@@ -179,6 +179,16 @@ def _caller_attribution(propel_user_id):
     return name or "A mentor"
 
 
+def _utc_now():
+    """Naive UTC 'now'. EVERY mentor timestamp is stamped from this so the
+    stored strings mean UTC wherever the backend runs — the frontend reads an
+    offset-less string as UTC (parseMentorTimestamp). `datetime.now()` is
+    host-local: on a laptop in Arizona it wrote stamps 7h behind UTC, so a
+    sign-off read "7h ago · stale" the moment it was saved (and a rating
+    "7h ago"). Prod containers are UTC, where the two are identical."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _touch(team_data, name, now_iso):
     """Mutate team_data in-place with denormalized last-touch info."""
     team_data["mentor_last_touched_at"] = now_iso
@@ -212,9 +222,9 @@ def _coverage_checks(entry):
 def _parse_mentor_ts(iso):
     """Naive-UTC datetime for a stored mentor timestamp, or None.
 
-    We stamp naive `datetime.now().isoformat()` on a UTC container; tolerate a
-    trailing 'Z' or an explicit offset (client-written overlays) by converting
-    to UTC and dropping tzinfo so everything compares against datetime.now()."""
+    We stamp naive UTC (`_utc_now().isoformat()`); tolerate a trailing 'Z' or
+    an explicit offset by converting to UTC and dropping tzinfo so everything
+    compares against `_utc_now()`."""
     if not iso or not isinstance(iso, str):
         return None
     try:
@@ -235,7 +245,7 @@ def _check_is_fresh(slug, check, now=None):
     ts = _parse_mentor_ts((check or {}).get("checked_at"))
     if ts is None:
         return True
-    return (now or datetime.now()) - ts < timedelta(hours=MENTOR_COVERAGE_FRESH_HOURS)
+    return (now or _utc_now()) - ts < timedelta(hours=MENTOR_COVERAGE_FRESH_HOURS)
 
 
 def _coverage_fresh_checks(slug, entry, now=None):
@@ -313,7 +323,7 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now = datetime.now()
+    now = _utc_now()
     now_iso = now.isoformat()
     checklist = dict(team_data.get("mentor_checklist") or {})
     existing_entry = checklist.get(item_slug)
@@ -424,7 +434,7 @@ def add_mentor_note(propel_user_id, team_id, body):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     notes = list(team_data.get("mentor_notes") or [])
     notes.append({
         "id": uuid.uuid4().hex,
@@ -465,7 +475,7 @@ def delete_mentor_note(propel_user_id, team_id, note_id):
         return {"error": "You can only delete your own notes."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     target["deleted_at"] = now_iso
     target["deleted_by_propel_id"] = propel_user_id
 
@@ -503,7 +513,7 @@ def raise_mentor_flag(propel_user_id, team_id, severity, body):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     flags = list(team_data.get("mentor_flags") or [])
     new_flag = {
         "id": uuid.uuid4().hex,
@@ -579,7 +589,7 @@ def take_over_mentor_flag(propel_user_id, team_id, flag_id):
         return {"error": "Flag is already resolved"}, 409
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     target["owner_propel_id"] = propel_user_id
     target["owner_name"] = name
 
@@ -616,7 +626,7 @@ def resolve_mentor_flag(propel_user_id, team_id, flag_id, resolution_note):
         return {"error": "Flag is already resolved"}, 409
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     target["resolved_at"] = now_iso
     target["resolved_by_propel_id"] = propel_user_id
     target["resolved_by_name"] = name
@@ -668,7 +678,7 @@ def set_mentor_rating(propel_user_id, team_id, criterion, score, note=None):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     ratings = list(team_data.get("mentor_ratings") or [])
     entry = {
         "rated_at": now_iso,
