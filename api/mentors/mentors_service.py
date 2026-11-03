@@ -14,7 +14,7 @@ channel; flag-raises also heartbeat the per-event mentor channel.
 """
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
 from firebase_admin import firestore
@@ -48,23 +48,35 @@ def clear_cache():
     except Exception as e:  # pragma: no cover - best-effort cache bust
         logger.warning("mentors clear_cache: hackathon cache clear failed: %s", e)
 
-# Canonical 6-item team-coverage list. Slugs MUST stay in lockstep with the
-# frontend MENTOR_COVERAGE_ITEMS in src/components/Teams/mentorCoverage.js.
+# Canonical 6-item team-coverage list. Slugs AND cadences MUST stay in lockstep
+# with the frontend MENTOR_COVERAGE_ITEMS in src/components/Teams/mentorCoverage.js.
+# cadence "once": doing it one time covers the whole event; "recurring": a
+# sign-off goes stale after MENTOR_COVERAGE_FRESH_HOURS (see below).
 MENTOR_COVERAGE_ITEMS = [
-    {"slug": "intro_made", "label": "Mentor introductions made",
+    {"slug": "intro_made", "label": "Mentor introductions made", "cadence": "once",
      "blurb": "A mentor has connected with the team in their Slack channel."},
-    {"slug": "scope_reviewed", "label": "Project scope reviewed",
+    {"slug": "scope_reviewed", "label": "Project scope reviewed", "cadence": "recurring",
      "blurb": "Scope is realistic for the hackathon window and ties to a real nonprofit need."},
-    {"slug": "architecture_discussed", "label": "Architecture & tech stack discussed",
+    {"slug": "architecture_discussed", "label": "Architecture & tech stack discussed", "cadence": "recurring",
      "blurb": "Stack is sensible; nothing single-file or trivially shallow."},
-    {"slug": "repo_health_checked", "label": "GitHub repo reviewed",
+    {"slug": "repo_health_checked", "label": "GitHub repo reviewed", "cadence": "recurring",
      "blurb": "Commits flowing, structure sensible, README starting to take shape."},
-    {"slug": "criteria_walkthrough", "label": "Judging criteria walkthrough",
+    {"slug": "criteria_walkthrough", "label": "Judging criteria walkthrough", "cadence": "once",
      "blurb": "Team has been shown the judging rubric (Scope, Documentation, Polish, Security, plus Accessibility) and knows what judges look for."},
-    {"slug": "demo_devpost_reviewed", "label": "Demo video + DevPost reviewed",
+    {"slug": "demo_devpost_reviewed", "label": "Demo video + DevPost reviewed", "cadence": "recurring",
      "blurb": "A mentor has reviewed at least a draft of the demo video and DevPost submission."},
 ]
 MENTOR_COVERAGE_SLUGS = {item["slug"]: item for item in MENTOR_COVERAGE_ITEMS}
+
+# A sign-off on a "recurring" item only counts for this long (about one
+# mentor shift). Older checks stay in `checks` as history the frontend
+# renders as "stale"; they no longer count toward the 3-mentor cap, the
+# fully-covered count or the Slack milestone. Keep in lockstep with the
+# frontend MENTOR_COVERAGE_FRESH_HOURS in src/components/Teams/mentorCoverage.js.
+MENTOR_COVERAGE_FRESH_HOURS = 5
+# Every check / re-check / clear appends to mentor_checklist[slug].history
+# (newest last); bounded so a doc can't grow without limit.
+MENTOR_COVERAGE_HISTORY_MAX = 200
 
 # Each coverage item wants independent sign-off from this many distinct mentors
 # (capped here too — we don't want to pester a team with more than this). An item
@@ -167,6 +179,16 @@ def _caller_attribution(propel_user_id):
     return name or "A mentor"
 
 
+def _utc_now():
+    """Naive UTC 'now'. EVERY mentor timestamp is stamped from this so the
+    stored strings mean UTC wherever the backend runs — the frontend reads an
+    offset-less string as UTC (parseMentorTimestamp). `datetime.now()` is
+    host-local: on a laptop in Arizona it wrote stamps 7h behind UTC, so a
+    sign-off read "7h ago · stale" the moment it was saved (and a rating
+    "7h ago"). Prod containers are UTC, where the two are identical."""
+    return datetime.now(timezone.utc).replace(tzinfo=None)
+
+
 def _touch(team_data, name, now_iso):
     """Mutate team_data in-place with denormalized last-touch info."""
     team_data["mentor_last_touched_at"] = now_iso
@@ -197,13 +219,48 @@ def _coverage_checks(entry):
     return {}
 
 
-def _coverage_done_count(checklist):
-    """Count items that have reached COVERAGE_TARGET_MENTORS distinct checks."""
+def _parse_mentor_ts(iso):
+    """Naive-UTC datetime for a stored mentor timestamp, or None.
+
+    We stamp naive UTC (`_utc_now().isoformat()`); tolerate a trailing 'Z' or
+    an explicit offset by converting to UTC and dropping tzinfo so everything
+    compares against `_utc_now()`."""
+    if not iso or not isinstance(iso, str):
+        return None
+    try:
+        dt = datetime.fromisoformat(iso[:-1] + "+00:00" if iso.endswith("Z") else iso)
+    except ValueError:
+        return None
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _check_is_fresh(slug, check, now=None):
+    """True while a check still counts: once-items always, recurring items for
+    MENTOR_COVERAGE_FRESH_HOURS after `checked_at` (a check with no readable
+    timestamp — legacy data — keeps counting)."""
+    if MENTOR_COVERAGE_SLUGS.get(slug, {}).get("cadence") == "once":
+        return True
+    ts = _parse_mentor_ts((check or {}).get("checked_at"))
+    if ts is None:
+        return True
+    return (now or _utc_now()) - ts < timedelta(hours=MENTOR_COVERAGE_FRESH_HOURS)
+
+
+def _coverage_fresh_checks(slug, entry, now=None):
+    """The subset of `_coverage_checks(entry)` that still counts at `now`."""
+    return {pid: c for pid, c in _coverage_checks(entry).items()
+            if _check_is_fresh(slug, c, now)}
+
+
+def _coverage_done_count(checklist, now=None):
+    """Count items with COVERAGE_TARGET_MENTORS distinct FRESH checks."""
     if not isinstance(checklist, dict):
         return 0
     return sum(
         1 for slug in MENTOR_COVERAGE_SLUGS
-        if len(_coverage_checks(checklist.get(slug))) >= COVERAGE_TARGET_MENTORS
+        if len(_coverage_fresh_checks(slug, checklist.get(slug), now)) >= COVERAGE_TARGET_MENTORS
     )
 
 
@@ -245,9 +302,13 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
     Record (done=True) or clear (done=False) the CALLING mentor's own check on a
     coverage item. Each item collects independent sign-off from up to
     COVERAGE_TARGET_MENTORS distinct mentors — a mentor can only add or clear their
-    own check, never another mentor's. An item counts toward the X/6 total (and the
-    one-time "fully covered" Slack milestone) once it reaches the target. Quiet by
-    default — only the first time every item is fully covered does Slack fire.
+    own check, never another mentor's. A check on a recurring item is only FRESH
+    for MENTOR_COVERAGE_FRESH_HOURS: stale checks stay in `checks` (the frontend
+    shows them as stale) but don't count toward the cap, the fully-covered count
+    or the one-time "fully covered" Slack milestone. Re-checking your own (stale)
+    item just refreshes its timestamp. Every check / re-check / clear appends to
+    the item's `history` so the trail is never lost. Quiet by default — only the
+    first time every item is fully covered does Slack fire.
     """
     if item_slug not in MENTOR_COVERAGE_SLUGS:
         return {"error": f"Unknown coverage item: {item_slug}"}, 400
@@ -262,11 +323,13 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now = _utc_now()
+    now_iso = now.isoformat()
     checklist = dict(team_data.get("mentor_checklist") or {})
     existing_entry = checklist.get(item_slug)
     checks = dict(_coverage_checks(existing_entry))  # propel_id -> {name, checked_at}
     is_legacy = isinstance(existing_entry, dict) and "checks" not in existing_entry
+    history_event = None
 
     # set(merge=True) deep-merges map fields, so we write ONLY the nested keys that
     # change. Removing my check means a DELETE_FIELD sentinel at my propel_id path
@@ -282,7 +345,11 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
                 entry_write["checks"][pid] = val
 
     if done:
-        if propel_user_id not in checks and len(checks) >= COVERAGE_TARGET_MENTORS:
+        # Only FRESH checks from other mentors count toward the cap — a stale
+        # Saturday check must never block a Sunday mentor from signing off.
+        fresh_others = [pid for pid, c in checks.items()
+                        if pid != propel_user_id and _check_is_fresh(item_slug, c, now)]
+        if propel_user_id not in checks and len(fresh_others) >= COVERAGE_TARGET_MENTORS:
             return ({"error": f"This item already has {COVERAGE_TARGET_MENTORS} mentor "
                               "checks — that's plenty, no need to add another."}, 409)
         my_check = {"name": name, "checked_at": now_iso}
@@ -290,13 +357,26 @@ def toggle_mentor_coverage(propel_user_id, team_id, item_slug, done, note=None):
             my_check["note"] = str(note)[:MAX_RATING_NOTE_LEN]
         checks[propel_user_id] = my_check
         entry_write["checks"][propel_user_id] = my_check
+        history_event = {"propel_id": propel_user_id, "name": name,
+                         "at": now_iso, "action": "checked"}
     else:
+        if propel_user_id in checks:  # only record a clear that cleared something
+            history_event = {"propel_id": propel_user_id, "name": name,
+                             "at": now_iso, "action": "cleared"}
         checks.pop(propel_user_id, None)
         entry_write["checks"][propel_user_id] = firestore.DELETE_FIELD
 
+    # Append-only trail. Written as the whole list (set(merge=True) replaces
+    # list fields, unlike maps), capped so the doc stays bounded.
+    if history_event:
+        prior = existing_entry.get("history") if isinstance(existing_entry, dict) else None
+        history = [h for h in (prior or []) if isinstance(h, dict)]
+        history.append(history_event)
+        entry_write["history"] = history[-MENTOR_COVERAGE_HISTORY_MAX:]
+
     # Reflect the change in our in-memory copy for counting + milestone.
     checklist[item_slug] = {"checks": checks}
-    new_count = _coverage_done_count(checklist)
+    new_count = _coverage_done_count(checklist, now)
     total = len(MENTOR_COVERAGE_ITEMS)
 
     update = {"mentor_checklist": {item_slug: entry_write}}
@@ -354,7 +434,7 @@ def add_mentor_note(propel_user_id, team_id, body):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     notes = list(team_data.get("mentor_notes") or [])
     notes.append({
         "id": uuid.uuid4().hex,
@@ -395,7 +475,7 @@ def delete_mentor_note(propel_user_id, team_id, note_id):
         return {"error": "You can only delete your own notes."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     target["deleted_at"] = now_iso
     target["deleted_by_propel_id"] = propel_user_id
 
@@ -433,7 +513,7 @@ def raise_mentor_flag(propel_user_id, team_id, severity, body):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     flags = list(team_data.get("mentor_flags") or [])
     new_flag = {
         "id": uuid.uuid4().hex,
@@ -509,7 +589,7 @@ def take_over_mentor_flag(propel_user_id, team_id, flag_id):
         return {"error": "Flag is already resolved"}, 409
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     target["owner_propel_id"] = propel_user_id
     target["owner_name"] = name
 
@@ -546,7 +626,7 @@ def resolve_mentor_flag(propel_user_id, team_id, flag_id, resolution_note):
         return {"error": "Flag is already resolved"}, 409
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     target["resolved_at"] = now_iso
     target["resolved_by_propel_id"] = propel_user_id
     target["resolved_by_name"] = name
@@ -598,7 +678,7 @@ def set_mentor_rating(propel_user_id, team_id, criterion, score, note=None):
         return {"error": "You must be an approved mentor for this event."}, 403
 
     name = _caller_attribution(propel_user_id)
-    now_iso = datetime.now().isoformat()
+    now_iso = _utc_now().isoformat()
     ratings = list(team_data.get("mentor_ratings") or [])
     entry = {
         "rated_at": now_iso,

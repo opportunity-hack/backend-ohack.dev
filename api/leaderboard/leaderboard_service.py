@@ -395,7 +395,7 @@ def collect_mentor_panel_opportunities(event_id: str) -> List[Dict]:
         logger.warning("collect_mentor_panel_opportunities: hackathon lookup failed: %s", e)
         hackathon = {}
 
-    now = datetime.now()
+    now = datetime.utcnow()  # mentor_last_touched_at is stamped naive UTC (mentors_service._utc_now)
     start_date = None
     end_date = None
     try:
