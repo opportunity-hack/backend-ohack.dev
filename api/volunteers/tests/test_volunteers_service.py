@@ -857,3 +857,80 @@ def test_get_my_mentor_events_without_identity_returns_empty():
     assert get_my_mentor_events("") == []
     assert get_my_mentor_events(None) == []
 
+
+
+# ---------------------------------------------------------------------------
+# Share cards: GET /api/volunteer/<event_id>/my-roles
+
+
+class _FakeVolunteersQuery:
+    """Minimal Firestore query double: equality filters over snapshot dicts."""
+
+    def __init__(self, snaps, filters=()):
+        self._snaps = snaps
+        self._filters = filters
+
+    def where(self, field, _op, value):
+        return _FakeVolunteersQuery(self._snaps, self._filters + ((field, value),))
+
+    def limit(self, _n):
+        return self
+
+    def stream(self):
+        for snap in self._snaps:
+            data = snap.to_dict()
+            if all(data.get(f) == v for f, v in self._filters):
+                yield snap
+
+
+from services.volunteers_service import get_my_roles_for_event  # noqa: E402
+
+
+@patch('services.volunteers_service._caller_identities')
+@patch('services.volunteers_service.get_db')
+def test_get_my_roles_for_event_returns_each_role_with_doc_id(mock_get_db, mock_ids):
+    mock_ids.return_value = ("propel-1", "me@example.com", "oauth2|slack|T1-U1")
+    snaps = [
+        _mentor_events_snap("v-judge", {
+            "user_id": "propel-1", "event_id": "EVT", "volunteer_type": "judge",
+            "name": "Satish", "isSelected": True, "email": "me@example.com", "phone": "555",
+        }),
+        # Found only by verified email (admin-imported doc)
+        _mentor_events_snap("v-mentor", {
+            "user_id": "something-else", "email": "me@example.com", "event_id": "EVT",
+            "volunteer_type": "mentor", "name": "Satish", "isSelected": False,
+        }),
+        # Found only by the legacy OAuth user_id
+        _mentor_events_snap("v-hacker", {
+            "user_id": "oauth2|slack|T1-U1", "event_id": "EVT", "volunteer_type": "hacker",
+            "name": "Satish", "isSelected": True,
+        }),
+        # Other event -> ignored
+        _mentor_events_snap("v-other", {
+            "user_id": "propel-1", "event_id": "OTHER", "volunteer_type": "volunteer", "isSelected": True,
+        }),
+    ]
+    mock_db = MagicMock()
+    mock_db.collection.return_value = _FakeVolunteersQuery(snaps)
+    mock_get_db.return_value = mock_db
+
+    result = get_my_roles_for_event("propel-1", "EVT")
+
+    assert result == {"roles": [
+        {"type": "mentor", "id": "v-mentor", "isSelected": False, "name": "Satish"},
+        {"type": "judge", "id": "v-judge", "isSelected": True, "name": "Satish"},
+        {"type": "hacker", "id": "v-hacker", "isSelected": True, "name": "Satish"},
+    ]}
+    for role in result["roles"]:
+        assert set(role.keys()) == {"type", "id", "isSelected", "name"}
+
+
+@patch('services.volunteers_service._caller_identities')
+@patch('services.volunteers_service.get_db')
+def test_get_my_roles_for_event_empty_when_nothing_matches(mock_get_db, mock_ids):
+    mock_ids.return_value = ("propel-1", None, None)
+    mock_db = MagicMock()
+    mock_db.collection.return_value = _FakeVolunteersQuery([])
+    mock_get_db.return_value = mock_db
+    assert get_my_roles_for_event("propel-1", "EVT") == {"roles": []}
+    assert get_my_roles_for_event("", "EVT") == {"roles": []}

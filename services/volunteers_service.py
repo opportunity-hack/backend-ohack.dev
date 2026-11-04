@@ -1849,7 +1849,9 @@ def get_user_hackathon_attendance(
                 if snap.id in seen_ids:
                     continue
                 seen_ids.add(snap.id)
-                volunteer_docs.append(snap.to_dict() or {})
+                data = snap.to_dict() or {}
+                data['_doc_id'] = snap.id
+                volunteer_docs.append(data)
         except Exception as e:
             warning(logger, "volunteers query failed", exc_info=e)
 
@@ -1986,7 +1988,9 @@ def get_my_mentor_events(propel_user_id: str) -> List[Dict[str, Any]]:
                 if snap.id in seen_ids:
                     continue
                 seen_ids.add(snap.id)
-                volunteer_docs.append(snap.to_dict() or {})
+                data = snap.to_dict() or {}
+                data['_doc_id'] = snap.id
+                volunteer_docs.append(data)
         except Exception as e:
             warning(logger, "volunteers query failed", exc_info=e)
 
@@ -2015,11 +2019,81 @@ def get_my_mentor_events(propel_user_id: str) -> List[Dict[str, Any]]:
         application = {k: vol.get(k) for k in _MENTOR_EVENT_SELF_FIELDS if vol.get(k) is not None}
         application['isSelected'] = bool(vol.get('isSelected'))
         application['isCheckedIn'] = bool(vol.get('isCheckedIn'))
+        # The volunteer doc id — what the share card URL
+        # (/hack/<event>/share/mentor/<id>) is keyed on; it is already public
+        # on the event roster for selected mentors.
+        if vol.get('_doc_id'):
+            application['id'] = vol['_doc_id']
         results.append({'event_id': event_id, **hackathon, 'application': application})
 
     results.sort(key=lambda r: r.get('start_date') or '', reverse=True)
     return results
 
+
+
+# The roles a person can hold on an event roster and therefore share a card
+# for (sponsors are organizations, not people on the public roster).
+SHARE_ROLE_TYPES = ("mentor", "judge", "hacker", "volunteer")
+
+
+def _find_volunteer_snapshot(db, propel_user_id: str, event_id: str, volunteer_type: str):
+    """
+    Same three-way identity resolution as find_volunteer_by_caller_identity
+    (propel UUID -> verified email -> legacy OAuth user_id) but returns the
+    Firestore SNAPSHOT so the caller gets the doc id. find_volunteer_by_*
+    return to_dict() copies without the id, and the share-card URL is keyed
+    on the volunteer doc id (the same id the public roster exposes).
+    """
+    if not propel_user_id or not event_id or not volunteer_type:
+        return None
+    propel_id, email, oauth_user_id = _caller_identities(propel_user_id)
+
+    def _first(field: str, value):
+        if not value:
+            return None
+        try:
+            query = db.collection('volunteers').where(field, '==', value) \
+                                              .where('event_id', '==', event_id) \
+                                              .where('volunteer_type', '==', volunteer_type) \
+                                              .limit(1)
+            for snap in query.stream():
+                return snap
+        except Exception as e:
+            warning(logger, "volunteers query failed", field=field, exc_info=e)
+        return None
+
+    snap = _first('user_id', propel_id)
+    if snap is None:
+        snap = _first('email', email)
+    if snap is None and oauth_user_id and oauth_user_id != propel_id:
+        snap = _first('user_id', oauth_user_id)
+    return snap
+
+
+def get_my_roles_for_event(propel_user_id: str, event_id: str) -> Dict[str, Any]:
+    """
+    GET /api/volunteer/<event_id>/my-roles — every role the caller applied for
+    on ONE event, lean: {"roles": [{"type", "id", "isSelected", "name"}]}.
+    Backs the event page's "You're on the roster — share it" band and the
+    roster "You" tag. Only fields the caller already knows about themselves;
+    `id` is the volunteer doc id the public roster exposes for selected people.
+    """
+    if not propel_user_id or not event_id:
+        return {"roles": []}
+    db = get_db()
+    roles: List[Dict[str, Any]] = []
+    for vtype in SHARE_ROLE_TYPES:
+        snap = _find_volunteer_snapshot(db, propel_user_id, event_id, vtype)
+        if snap is None:
+            continue
+        data = snap.to_dict() or {}
+        roles.append({
+            "type": vtype,
+            "id": snap.id,
+            "isSelected": bool(data.get("isSelected")),
+            "name": data.get("name"),
+        })
+    return {"roles": roles}
 
 
 
