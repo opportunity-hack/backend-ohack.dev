@@ -15,6 +15,7 @@ from services.volunteers_service import (
     handle_stripe_hacker_deposit_event,
     get_all_hackers_by_event_id,
     get_mentor_checkin_status,
+    get_my_mentor_events,
     mentor_checkin,
     mentor_checkout,
     send_volunteer_message,
@@ -217,6 +218,26 @@ def get_mentor_application(event_id):
         logger.error(f"Error retrieving mentor application: {str(e)}")
         return _error_response(f"Failed to retrieve application: {str(e)}")
 
+@bp.route('/mentor/me/events', methods=['GET'])
+@auth.require_user
+def get_my_mentor_events_endpoint():
+    """
+    Every event the calling user has a mentor application for, newest first —
+    the one batched read behind the /mentor dashboard (mentor counterpart of
+    GET /api/judge/assignments/<judge_id>). Pending applications are included
+    so the mentor can find and edit them; only lean self-facing fields are
+    returned (see services.volunteers_service.get_my_mentor_events).
+    """
+    user = auth_user
+    if not user or not user.user_id:
+        return _error_response("Authentication required", 401)
+    try:
+        events = get_my_mentor_events(user.user_id)
+        return _success_response({"events": events}, "Mentor events retrieved successfully")
+    except Exception as e:
+        logger.error(f"Error retrieving mentor events: {str(e)}")
+        return _error_response("Failed to retrieve mentor events")
+
 # NOTE: propelauth's require_org_member_with_permission does NOT inject the user/org
 # into the view — it only sets the request-scoped `auth_user` proxy and calls the
 # view with Flask's URL params. A `def view(user, org, <param>)` signature raises
@@ -252,6 +273,27 @@ def get_my_volunteer_status_for_event(event_id):
         from services.volunteers_service import get_volunteer_self_status
         return get_volunteer_self_status(user.user_id, event_id, 'hacker'), 200
     return _error_response("Only type=mentor or type=hacker is supported", 400)
+
+
+@bp.route('/volunteer/<event_id>/my-roles', methods=['GET'])
+@auth.require_user
+def get_my_roles_for_event_endpoint(event_id):
+    """
+    Every role (mentor/judge/hacker/volunteer) the calling user applied for on
+    this event, with the volunteer doc id and isSelected — the one read behind
+    the event page's "You're on the roster — share it" band and the share-card
+    kit's owner detection. Lean by design (see services.volunteers_service.
+    get_my_roles_for_event); an older frontend never calls it.
+    """
+    user = auth_user
+    if not user or not user.user_id:
+        return _error_response("Authentication required", 401)
+    try:
+        from services.volunteers_service import get_my_roles_for_event
+        return jsonify(get_my_roles_for_event(user.user_id, event_id)), 200
+    except Exception as e:
+        logger.error(f"Error resolving roles for event {event_id}: {str(e)}")
+        return _error_response("Failed to resolve your roles", 500)
 
 # Sponsor routes
 @bp.route('/sponsor/application/<event_id>/submit', methods=['POST'])
