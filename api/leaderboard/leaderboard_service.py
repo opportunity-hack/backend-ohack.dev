@@ -372,6 +372,7 @@ def categorize_mentor_opportunities(achievements: List[Dict]) -> List[Dict]:
             opp["value"] = "-"
         if "description" not in opp:
             opp["description"] = "This team might benefit from some mentor guidance to get rolling!"
+        opp.setdefault("reason_code", "default")
 
     return opportunities
 
@@ -434,6 +435,7 @@ def collect_mentor_panel_opportunities(event_id: str) -> List[Dict]:
             open_flags = [f for f in flags if not f.get("resolved_at")][:2]
             for f in open_flags:
                 severity = f.get("severity", "needs_attention")
+                reason_code = "blocked_flag" if severity == "blocked" else "open_flag"
                 body = (f.get("body") or "").strip()
                 preview = (body[:80] + "...") if len(body) > 80 else body
                 opportunities.append({
@@ -441,7 +443,8 @@ def collect_mentor_panel_opportunities(event_id: str) -> List[Dict]:
                     "team": team_name,
                     "teamPage": f"https://www.ohack.dev/hack/{event_id}/team/{team_id}",
                     "icon": "flag",
-                    "value": "Open flag" if severity == "needs_attention" else "Blocked",
+                    "reason_code": reason_code,
+                    "value": "Blocked" if severity == "blocked" else "Open flag",
                     "description": f"{f.get('raised_by_name', 'Mentor')}: {preview}",
                     "members": len(t.get("users") or []),
                 })
@@ -461,6 +464,7 @@ def collect_mentor_panel_opportunities(event_id: str) -> List[Dict]:
                     "team": team_name,
                     "teamPage": f"https://www.ohack.dev/hack/{event_id}/team/{team_id}",
                     "icon": "schedule",
+                    "reason_code": "stale_no_touch",
                     "value": "No mentor touch in 4h",
                     "description": "No mentor has checked on this team in the last 4 hours — drop by!",
                     "members": len(t.get("users") or []),
