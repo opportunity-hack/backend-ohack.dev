@@ -1898,6 +1898,130 @@ def get_user_hackathon_attendance(
 
 
 
+# --- Mentor dashboard (/mentor) ------------------------------------------------
+
+# Fields of the caller's OWN mentor volunteer doc that the /mentor dashboard
+# renders. Lean on purpose: this is one request per page load and the page only
+# needs the decision state, shift availability and check-in state — never the
+# long-form answers, which stay behind GET /api/mentor/application/<event_id>.
+_MENTOR_EVENT_SELF_FIELDS = (
+    'status', 'inPerson', 'isInPerson', 'availability',
+    'checkInTime', 'timeSlot', 'timestamp', 'created_timestamp', 'updated_timestamp',
+)
+
+_MENTOR_EVENT_HACKATHON_FIELDS = (
+    'title', 'start_date', 'end_date', 'location', 'timezone', 'image_url',
+)
+
+
+def _caller_identities(propel_user_id: str) -> Tuple[str, Optional[str], Optional[str]]:
+    """
+    (propel UUID, PropelAuth email, OAuth user_id) — every shape a volunteer
+    doc may have been keyed on (see find_volunteer_by_caller_identity). Email
+    and OAuth id come from the verified token identity, never a request body.
+    """
+    email = oauth_user_id = None
+    try:
+        from services.users_service import get_propel_user_details_by_id
+        details = get_propel_user_details_by_id(propel_user_id) or ()
+        email = details[0] if len(details) > 0 else None
+        oauth_user_id = details[1] if len(details) > 1 else None
+    except Exception as e:
+        warning(logger, "Could not resolve caller identity via PropelAuth",
+                propel_user_id=propel_user_id, exc_info=e)
+    return propel_user_id, email, oauth_user_id
+
+
+def _hackathon_summary(db, event_id: str) -> Optional[Dict[str, Any]]:
+    """Display fields for one hackathon by event_id — no teams/nonprofits fan-out."""
+    try:
+        docs = db.collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
+        for doc in docs:
+            rec = doc.to_dict() or {}
+            summary = {k: rec.get(k) for k in _MENTOR_EVENT_HACKATHON_FIELDS}
+            summary['id'] = doc.id
+            return summary
+    except Exception as e:
+        warning(logger, "Failed to query hackathon for event_id", event_id=event_id, exc_info=e)
+    return None
+
+
+def _mentor_doc_rank(vol: Dict[str, Any]) -> Tuple[int, str]:
+    """When one person has two mentor docs for an event, the approved one wins, then the newest."""
+    stamp = vol.get('updated_timestamp') or vol.get('timestamp') or vol.get('created_timestamp') or ''
+    return (1 if vol.get('isSelected') else 0, str(stamp))
+
+
+def get_my_mentor_events(propel_user_id: str) -> List[Dict[str, Any]]:
+    """
+    Every event the caller has a MENTOR application for, newest event first,
+    for the /mentor dashboard (the mentor counterpart of GET /api/judge/
+    assignments). Unlike get_user_hackathon_attendance there is NO attendance
+    filter — a pending application must show so the mentor can find and edit
+    it — and nothing but the mentor role is returned.
+
+    Shape:
+        [{
+            "event_id", "id", "title", "start_date", "end_date", "location",
+            "timezone", "image_url",
+            "application": {
+                "isSelected": bool, "isCheckedIn": bool,
+                "status"?, "inPerson"?, "isInPerson"?, "availability"?,
+                "checkInTime"?, "timeSlot"?, "timestamp"?, ...
+            },
+        }, ...]
+    """
+    if not propel_user_id:
+        return []
+
+    db = get_db()
+    propel_id, email, oauth_user_id = _caller_identities(propel_user_id)
+
+    seen_ids = set()
+    volunteer_docs: List[Dict[str, Any]] = []
+
+    def _collect(query):
+        try:
+            for snap in query.stream():
+                if snap.id in seen_ids:
+                    continue
+                seen_ids.add(snap.id)
+                volunteer_docs.append(snap.to_dict() or {})
+        except Exception as e:
+            warning(logger, "volunteers query failed", exc_info=e)
+
+    _collect(db.collection('volunteers').where('user_id', '==', propel_id))
+    if email:
+        _collect(db.collection('volunteers').where('email', '==', email))
+    if oauth_user_id and oauth_user_id != propel_id:
+        _collect(db.collection('volunteers').where('user_id', '==', oauth_user_id))
+
+    by_event: Dict[str, Dict[str, Any]] = {}
+    for vol in volunteer_docs:
+        if (vol.get('volunteer_type') or '').lower() != 'mentor':
+            continue
+        event_id = vol.get('event_id')
+        if not event_id:
+            continue
+        current = by_event.get(event_id)
+        if current is None or _mentor_doc_rank(vol) > _mentor_doc_rank(current):
+            by_event[event_id] = vol
+
+    results: List[Dict[str, Any]] = []
+    for event_id, vol in by_event.items():
+        hackathon = _hackathon_summary(db, event_id)
+        if not hackathon:
+            continue
+        application = {k: vol.get(k) for k in _MENTOR_EVENT_SELF_FIELDS if vol.get(k) is not None}
+        application['isSelected'] = bool(vol.get('isSelected'))
+        application['isCheckedIn'] = bool(vol.get('isCheckedIn'))
+        results.append({'event_id': event_id, **hackathon, 'application': application})
+
+    results.sort(key=lambda r: r.get('start_date') or '', reverse=True)
+    return results
+
+
+
 
 def get_mentor_checkin_status(user_id: str, event_id: str) -> Dict[str, Any]:
     """

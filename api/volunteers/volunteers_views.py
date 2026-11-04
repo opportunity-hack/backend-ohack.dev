@@ -15,6 +15,7 @@ from services.volunteers_service import (
     handle_stripe_hacker_deposit_event,
     get_all_hackers_by_event_id,
     get_mentor_checkin_status,
+    get_my_mentor_events,
     mentor_checkin,
     mentor_checkout,
     send_volunteer_message,
@@ -216,6 +217,26 @@ def get_mentor_application(event_id):
     except Exception as e:
         logger.error(f"Error retrieving mentor application: {str(e)}")
         return _error_response(f"Failed to retrieve application: {str(e)}")
+
+@bp.route('/mentor/me/events', methods=['GET'])
+@auth.require_user
+def get_my_mentor_events_endpoint():
+    """
+    Every event the calling user has a mentor application for, newest first —
+    the one batched read behind the /mentor dashboard (mentor counterpart of
+    GET /api/judge/assignments/<judge_id>). Pending applications are included
+    so the mentor can find and edit them; only lean self-facing fields are
+    returned (see services.volunteers_service.get_my_mentor_events).
+    """
+    user = auth_user
+    if not user or not user.user_id:
+        return _error_response("Authentication required", 401)
+    try:
+        events = get_my_mentor_events(user.user_id)
+        return _success_response({"events": events}, "Mentor events retrieved successfully")
+    except Exception as e:
+        logger.error(f"Error retrieving mentor events: {str(e)}")
+        return _error_response("Failed to retrieve mentor events")
 
 # NOTE: propelauth's require_org_member_with_permission does NOT inject the user/org
 # into the view — it only sets the request-scoped `auth_user` proxy and calls the
