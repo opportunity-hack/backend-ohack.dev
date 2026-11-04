@@ -274,6 +274,27 @@ def get_my_volunteer_status_for_event(event_id):
         return get_volunteer_self_status(user.user_id, event_id, 'hacker'), 200
     return _error_response("Only type=mentor or type=hacker is supported", 400)
 
+
+@bp.route('/volunteer/<event_id>/my-roles', methods=['GET'])
+@auth.require_user
+def get_my_roles_for_event_endpoint(event_id):
+    """
+    Every role (mentor/judge/hacker/volunteer) the calling user applied for on
+    this event, with the volunteer doc id and isSelected — the one read behind
+    the event page's "You're on the roster — share it" band and the share-card
+    kit's owner detection. Lean by design (see services.volunteers_service.
+    get_my_roles_for_event); an older frontend never calls it.
+    """
+    user = auth_user
+    if not user or not user.user_id:
+        return _error_response("Authentication required", 401)
+    try:
+        from services.volunteers_service import get_my_roles_for_event
+        return jsonify(get_my_roles_for_event(user.user_id, event_id)), 200
+    except Exception as e:
+        logger.error(f"Error resolving roles for event {event_id}: {str(e)}")
+        return _error_response("Failed to resolve your roles", 500)
+
 # Sponsor routes
 @bp.route('/sponsor/application/<event_id>/submit', methods=['POST'])
 @auth.require_user
