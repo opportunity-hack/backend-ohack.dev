@@ -10,6 +10,7 @@ from services.volunteers_service import (
     get_volunteer_by_user_id,
     get_volunteers_by_event,
     get_user_hackathon_attendance,
+    get_my_mentor_events,
     _did_volunteer_attend,
     generate_qr_code,
     update_volunteer_selection,
@@ -706,3 +707,230 @@ def test_get_volunteer_self_status_leaks_no_pii_beyond_name(mock_find):
     mock_find.return_value = {"name": "Jamie", "isSelected": True, "email": "jamie@example.com", "phone": "555-1234"}
     result = get_volunteer_self_status(MOCK_USER_ID, MOCK_EVENT_ID, "hacker")
     assert set(result["volunteer"].keys()) == {"name", "isSelected"}
+
+
+# ---------------------------------------------------------------------------
+# /mentor dashboard: every mentor application across events, no attendance filter
+
+
+def _mentor_events_snap(doc_id, data):
+    snap = MagicMock()
+    snap.id = doc_id
+    snap.exists = True
+    snap.to_dict.return_value = data
+    return snap
+
+
+def _query_returning(items):
+    q = MagicMock()
+    q.stream.return_value = items
+    q.limit.return_value = q
+    return q
+
+
+@patch('services.volunteers_service.get_db')
+def test_get_my_mentor_events_lists_every_mentor_application(mock_get_db):
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    propel_id = "propel-uuid-1"
+    email = "mentor@example.com"
+    oauth_id = "oauth2|slack|T1-U1"
+
+    by_propel = [
+        # Approved + checked in -> returned with both booleans true
+        _mentor_events_snap("v1", {
+            "user_id": propel_id, "event_id": "EVT_A", "volunteer_type": "mentor",
+            "name": "Me", "email": email, "isSelected": True, "isCheckedIn": True,
+            "checkInTime": "2026-10-11T09:00:00", "availability": "Sat Oct 11: Morning",
+            "inPerson": "Yes!", "shortBio": "long-form answer that must not be returned",
+        }),
+        # Pending (no isSelected) -> still returned (the dashboard shows it as awaiting)
+        _mentor_events_snap("v2", {
+            "user_id": propel_id, "event_id": "EVT_B", "volunteer_type": "mentor",
+            "status": "pending",
+        }),
+        # Hacker application for the same event -> ignored
+        _mentor_events_snap("v3", {
+            "user_id": propel_id, "event_id": "EVT_A", "volunteer_type": "hacker",
+        }),
+        # Mentor doc for an event with no hackathon record -> dropped
+        _mentor_events_snap("v5", {
+            "user_id": propel_id, "event_id": "EVT_MISSING", "volunteer_type": "mentor",
+        }),
+    ]
+    # Doc keyed on the email only (admin import) -> found through the email query
+    by_email = [
+        _mentor_events_snap("v4", {
+            "email": email, "event_id": "EVT_C", "volunteer_type": "mentor", "isSelected": True,
+        }),
+        # Same doc id surfaced twice must dedupe
+        by_propel[0],
+    ]
+
+    volunteer_collection = MagicMock()
+
+    def volunteer_where(field, op, value):
+        if field == 'user_id' and value == propel_id:
+            return _query_returning(by_propel)
+        if field == 'email' and value == email:
+            return _query_returning(by_email)
+        return _query_returning([])
+    volunteer_collection.where.side_effect = volunteer_where
+
+    hackathons = {
+        "EVT_A": {"event_id": "EVT_A", "title": "Fall 2026", "start_date": "2026-10-11",
+                  "end_date": "2026-10-12", "location": "Tempe", "timezone": "America/Phoenix",
+                  "teams": ["heavy"], "nonprofits": ["heavy"]},
+        "EVT_B": {"event_id": "EVT_B", "title": "Spring 2027", "start_date": "2027-03-01",
+                  "end_date": "2027-03-02"},
+        "EVT_C": {"event_id": "EVT_C", "title": "Summer 2025", "start_date": "2025-07-01",
+                  "end_date": "2025-07-02"},
+    }
+    hackathon_collection = MagicMock()
+    hackathon_collection.where.side_effect = lambda field, op, value: _query_returning(
+        [_mentor_events_snap(f"h-{value}", hackathons[value])] if value in hackathons else []
+    )
+
+    mock_db.collection.side_effect = lambda name: {
+        'volunteers': volunteer_collection,
+        'hackathons': hackathon_collection,
+    }.get(name, MagicMock())
+
+    with patch('services.users_service.get_propel_user_details_by_id',
+               return_value=(email, oauth_id, None, None, None, None)):
+        result = get_my_mentor_events(propel_id)
+
+    # Newest event first; EVT_MISSING dropped; hacker doc ignored; email doc found
+    assert [r['event_id'] for r in result] == ['EVT_B', 'EVT_A', 'EVT_C']
+
+    evt_a = result[1]
+    assert evt_a['title'] == 'Fall 2026'
+    assert evt_a['id'] == 'h-EVT_A'
+    assert 'teams' not in evt_a and 'nonprofits' not in evt_a
+    assert evt_a['application']['isSelected'] is True
+    assert evt_a['application']['isCheckedIn'] is True
+    assert evt_a['application']['availability'] == 'Sat Oct 11: Morning'
+    assert evt_a['application']['inPerson'] == 'Yes!'
+    # Lean: long-form answers and identity fields stay behind the per-event route
+    for leaked in ('shortBio', 'name', 'email', 'user_id'):
+        assert leaked not in evt_a['application']
+
+    evt_b = result[0]
+    assert evt_b['application']['isSelected'] is False
+    assert evt_b['application']['isCheckedIn'] is False
+    assert evt_b['application']['status'] == 'pending'
+
+
+@patch('services.volunteers_service.get_db')
+def test_get_my_mentor_events_prefers_the_approved_doc_per_event(mock_get_db):
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+    propel_id = "propel-uuid-2"
+
+    docs = [
+        _mentor_events_snap("old", {"user_id": propel_id, "event_id": "EVT_A",
+                                    "volunteer_type": "mentor", "timestamp": "2026-09-01T00:00:00"}),
+        _mentor_events_snap("approved", {"user_id": propel_id, "event_id": "EVT_A",
+                                         "volunteer_type": "mentor", "isSelected": True,
+                                         "timestamp": "2026-08-01T00:00:00"}),
+    ]
+    volunteer_collection = MagicMock()
+    volunteer_collection.where.side_effect = lambda field, op, value: _query_returning(
+        docs if (field == 'user_id' and value == propel_id) else []
+    )
+    hackathon_collection = MagicMock()
+    hackathon_collection.where.side_effect = lambda field, op, value: _query_returning(
+        [_mentor_events_snap("h", {"event_id": "EVT_A", "title": "Fall", "start_date": "2026-10-11"})]
+    )
+    mock_db.collection.side_effect = lambda name: {
+        'volunteers': volunteer_collection, 'hackathons': hackathon_collection,
+    }.get(name, MagicMock())
+
+    with patch('services.users_service.get_propel_user_details_by_id', return_value=None):
+        result = get_my_mentor_events(propel_id)
+
+    assert len(result) == 1
+    assert result[0]['application']['isSelected'] is True
+
+
+def test_get_my_mentor_events_without_identity_returns_empty():
+    assert get_my_mentor_events("") == []
+    assert get_my_mentor_events(None) == []
+
+
+
+# ---------------------------------------------------------------------------
+# Share cards: GET /api/volunteer/<event_id>/my-roles
+
+
+class _FakeVolunteersQuery:
+    """Minimal Firestore query double: equality filters over snapshot dicts."""
+
+    def __init__(self, snaps, filters=()):
+        self._snaps = snaps
+        self._filters = filters
+
+    def where(self, field, _op, value):
+        return _FakeVolunteersQuery(self._snaps, self._filters + ((field, value),))
+
+    def limit(self, _n):
+        return self
+
+    def stream(self):
+        for snap in self._snaps:
+            data = snap.to_dict()
+            if all(data.get(f) == v for f, v in self._filters):
+                yield snap
+
+
+from services.volunteers_service import get_my_roles_for_event  # noqa: E402
+
+
+@patch('services.volunteers_service._caller_identities')
+@patch('services.volunteers_service.get_db')
+def test_get_my_roles_for_event_returns_each_role_with_doc_id(mock_get_db, mock_ids):
+    mock_ids.return_value = ("propel-1", "me@example.com", "oauth2|slack|T1-U1")
+    snaps = [
+        _mentor_events_snap("v-judge", {
+            "user_id": "propel-1", "event_id": "EVT", "volunteer_type": "judge",
+            "name": "Satish", "isSelected": True, "email": "me@example.com", "phone": "555",
+        }),
+        # Found only by verified email (admin-imported doc)
+        _mentor_events_snap("v-mentor", {
+            "user_id": "something-else", "email": "me@example.com", "event_id": "EVT",
+            "volunteer_type": "mentor", "name": "Satish", "isSelected": False,
+        }),
+        # Found only by the legacy OAuth user_id
+        _mentor_events_snap("v-hacker", {
+            "user_id": "oauth2|slack|T1-U1", "event_id": "EVT", "volunteer_type": "hacker",
+            "name": "Satish", "isSelected": True,
+        }),
+        # Other event -> ignored
+        _mentor_events_snap("v-other", {
+            "user_id": "propel-1", "event_id": "OTHER", "volunteer_type": "volunteer", "isSelected": True,
+        }),
+    ]
+    mock_db = MagicMock()
+    mock_db.collection.return_value = _FakeVolunteersQuery(snaps)
+    mock_get_db.return_value = mock_db
+
+    result = get_my_roles_for_event("propel-1", "EVT")
+
+    assert result == {"roles": [
+        {"type": "mentor", "id": "v-mentor", "isSelected": False, "name": "Satish"},
+        {"type": "judge", "id": "v-judge", "isSelected": True, "name": "Satish"},
+        {"type": "hacker", "id": "v-hacker", "isSelected": True, "name": "Satish"},
+    ]}
+    for role in result["roles"]:
+        assert set(role.keys()) == {"type", "id", "isSelected", "name"}
+
+
+@patch('services.volunteers_service._caller_identities')
+@patch('services.volunteers_service.get_db')
+def test_get_my_roles_for_event_empty_when_nothing_matches(mock_get_db, mock_ids):
+    mock_ids.return_value = ("propel-1", None, None)
+    mock_db = MagicMock()
+    mock_db.collection.return_value = _FakeVolunteersQuery([])
+    mock_get_db.return_value = mock_db
+    assert get_my_roles_for_event("propel-1", "EVT") == {"roles": []}
+    assert get_my_roles_for_event("", "EVT") == {"roles": []}
