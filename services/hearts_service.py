@@ -379,7 +379,7 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
     # Generate a unique background image
     if generate_backround_image:
         response = client.images.generate(
-            model="gpt-image-1",
+            model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1-mini"),
             prompt="without text a mesmerizing background with geometric shapes and fireworks no text high resolution 4k",
             n=1,
             size="1024x1024",
@@ -391,7 +391,7 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
             error(logger, "Error with OpenAI API", response=response)
             raise Exception("OpenAI response is not valid")
 
-        # gpt-image-1 returns base64 data; fall back to URL for other models
+        # gpt-image-* models return base64 data; fall back to URL for other models
         image_data = response.data[0]
         if getattr(image_data, "b64_json", None):
             with open("./generated_image.png", "wb") as f:

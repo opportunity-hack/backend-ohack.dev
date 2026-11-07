@@ -10,6 +10,7 @@ from ratelimit import limits
 from common.log import get_logger
 from common.utils.firebase import (
     upsert_news,
+    get_news_image_by_slack_ts,
     upsert_praise,
     get_user_by_user_id,
     get_recent_praises,
@@ -38,13 +39,19 @@ def save_news(json):
             logger.error(f"Missing field {field} in {json}")
             return Message("Missing field")
 
-    cdn_dir = "ohack.dev/news"
-    try:
-        news_image = generate_and_save_image_to_cdn(cdn_dir, json["title"])
-        json["image"] = f"{CDN_SERVER}/{cdn_dir}/{news_image}"
-    except Exception as e:
-        logger.exception(f"Image generation failed for title '{json['title']}': {e}")
-        json["image"] = None
+    # Re-saving the same Slack message (e.g. a second :newspaper: reaction) keeps
+    # its existing image: no new image cost, and a failed generation can't wipe it.
+    existing_image = get_news_image_by_slack_ts(json["slack_ts"])
+    if existing_image:
+        json["image"] = existing_image
+    else:
+        cdn_dir = "ohack.dev/news"
+        try:
+            news_image = generate_and_save_image_to_cdn(cdn_dir, json["title"])
+            json["image"] = f"{CDN_SERVER}/{cdn_dir}/{news_image}"
+        except Exception as e:
+            logger.exception(f"Image generation failed for title '{json['title']}': {e}")
+            json.pop("image", None)  # merge-upsert leaves any stored value alone
     json["last_updated"] = datetime.now().isoformat()
     news_id = upsert_news(json)
 
