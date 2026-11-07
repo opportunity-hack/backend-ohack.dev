@@ -29,6 +29,7 @@ from api.judging.judging_service import (
     set_round_lock,
     get_judging_progress,
     bulk_create_judge_assignments,
+    get_public_judging_schedule,
     JUDGING_ROUNDS,
 )
 
@@ -692,4 +693,23 @@ def bulk_assignments_api():
     )
     if not result.get("success"):
         return result, 400
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Public judging schedule (Nov 2026)
+# ---------------------------------------------------------------------------
+
+@bp.route("/schedule/<event_id>", methods=["GET"])
+def get_public_schedule_api(event_id):
+    """Panels, rooms, judges and assigned teams for the public
+    /hack/<event_id>/judging page. No auth (like the peer-vote summary):
+    empty until constraints.judging_schedule_published is true, and only
+    public judge fields are ever emitted."""
+    info(logger, "API called: GET /schedule/{event_id}", event_id=event_id)
+    result = get_public_judging_schedule(event_id)
+    if result.get("error") == "event_not_found":
+        return result, 404
+    if result.get("error"):
+        return result, 500
     return result
