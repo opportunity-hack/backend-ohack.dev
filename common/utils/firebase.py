@@ -1223,6 +1223,15 @@ def upsert_news(news):
     return doc_ref.id
 
 
+def get_news_image_by_slack_ts(slack_ts):
+    """Return the stored image URL for the news doc with this slack_ts, or None."""
+    db = get_db()
+    docs = db.collection("news").where("slack_ts", "==", slack_ts).limit(1).get()
+    if not docs:
+        return None
+    return (docs[0].to_dict() or {}).get("image")
+
+
 def update_news_partial(news_id, patch):
     """Partial update of a news doc. Returns True if the doc existed and was updated."""
     db = get_db()

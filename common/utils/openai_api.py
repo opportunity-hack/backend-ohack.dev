@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+# gpt-image-1 was retired by OpenAI (400 "model does not exist"); override via env.
+IMAGE_MODEL = os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1-mini")
 def summarize_text(text, max_tokens=100):
     text = "Summarize this text as a news article title:\n" + text
     openai_request = client.chat.completions.create(
@@ -140,7 +142,7 @@ def generate_and_save_image_to_cdn(directory, text):
     logger.info(f"Generating image with prompt: {prompt}")
 
     openai_response = client.images.generate(
-        model="gpt-image-1",
+        model=IMAGE_MODEL,
         prompt=prompt,
         n=1,
         size="1024x1024",
@@ -155,7 +157,7 @@ def generate_and_save_image_to_cdn(directory, text):
     filename = f"{filename}.png"
 
     print(f"Saving to {filename}...")
-    # gpt-image-1 returns base64 data; fall back to URL for other models
+    # gpt-image-* models return base64 data; fall back to URL for other models
     image_data = openai_response.data[0]
     if getattr(image_data, "b64_json", None):
         with open(filename, "wb") as f:
