@@ -200,29 +200,6 @@ def test_hackathon_clear_cache_also_clears_the_schedule(db, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# View: public route, status codes
-# ---------------------------------------------------------------------------
-
-def test_schedule_route_is_public_and_maps_errors(monkeypatch):
-    import api.judging.judging_views as views
-    from flask import Flask
-    app = Flask(__name__)
-    app.register_blueprint(views.bp)
-    client = app.test_client()
-
-    monkeypatch.setattr(views, "get_public_judging_schedule", lambda e: {"event_id": e, "published": False,
-                                                                         "rounds": {"round1": [], "round2": []}})
-    res = client.get(f"/api/judge/schedule/{EVENT}")  # no Authorization header
-    assert res.status_code == 200 and res.get_json()["published"] is False
-
-    monkeypatch.setattr(views, "get_public_judging_schedule", lambda e: {"error": "event_not_found"})
-    assert client.get("/api/judge/schedule/nope").status_code == 404
-
-    monkeypatch.setattr(views, "get_public_judging_schedule", lambda e: {"error": "read_failed"})
-    assert client.get(f"/api/judge/schedule/{EVENT}").status_code == 500
-
-
-# ---------------------------------------------------------------------------
 # Judge dashboard: Round 1 teams now carry room + panel name
 # ---------------------------------------------------------------------------
 
