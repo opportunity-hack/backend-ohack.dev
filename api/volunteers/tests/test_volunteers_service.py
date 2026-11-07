@@ -940,7 +940,7 @@ def test_get_my_roles_for_event_empty_when_nothing_matches(mock_get_db, mock_ids
 # Confirmation email — role-specific "what happens next" blocks
 # ---------------------------------------------------------------------------
 
-def _send_confirmation_capturing_html(volunteer_type, shifts=None):
+def _send_confirmation_capturing_html(volunteer_type, shifts=None, event=None):
     """Run send_volunteer_confirmation_email with Resend stubbed and return the html."""
     import os
     from services import volunteers_service
@@ -955,7 +955,7 @@ def _send_confirmation_capturing_html(volunteer_type, shifts=None):
          patch("services.volunteers_service.resend.Emails.send", side_effect=fake_send):
         result = volunteers_service.send_volunteer_confirmation_email(
             "Sam", "Doe", "sam@example.com", volunteer_type, None, "fall-2026", volunteer_id=None,
-            shifts=shifts,
+            shifts=shifts, event=event,
         )
     assert result == "re_test"
     return sent
@@ -1001,13 +1001,15 @@ def test_calendar_attachments_use_the_volunteer_shift_hours():
     )
     assert len(result) == 3
     contents = [a["content"] for a in result]
-    assert "DTSTART:20261114T080000MST" in contents[0]
-    assert "DTEND:20261114T110000MST" in contents[0]
-    assert "DTSTART:20261114T143000MST" in contents[1]
-    assert "DTEND:20261114T170000MST" in contents[1]
+    # "MST" in the slot text → America/Phoenix TZID (the old "…T080000MST"
+    # suffix isn't valid iCalendar; clients treated it as floating time).
+    assert "DTSTART;TZID=America/Phoenix:20261114T080000" in contents[0]
+    assert "DTEND;TZID=America/Phoenix:20261114T110000" in contents[0]
+    assert "DTSTART;TZID=America/Phoenix:20261114T143000" in contents[1]
+    assert "DTEND;TZID=America/Phoenix:20261114T170000" in contents[1]
     # Midnight run spans into the next day.
-    assert "DTSTART:20261114T233000MST" in contents[2]
-    assert "DTEND:20261115T003000MST" in contents[2]
+    assert "DTSTART;TZID=America/Phoenix:20261114T233000" in contents[2]
+    assert "DTEND;TZID=America/Phoenix:20261115T003000" in contents[2]
     assert all("ATTENDEE:MAILTO:vol@example.com" in c for c in contents)
 
 
@@ -1017,7 +1019,7 @@ def test_calendar_attachments_mentor_named_slots_still_use_the_mapping():
         volunteer_type="mentor", year=2026,
     )
     assert len(result) == 1
-    assert "DTSTART:20261114T070000MST" in result[0]["content"]
+    assert "DTSTART;TZID=America/Phoenix:20261114T070000" in result[0]["content"]
 
 
 def test_confirmation_email_lists_the_shifts_as_text():
@@ -1031,3 +1033,124 @@ def test_confirmation_email_lists_the_shifts_as_text():
 def test_confirmation_email_without_shifts_has_no_shift_block():
     sent = _send_confirmation_capturing_html("judge", shifts=[])
     assert "Your shifts" not in sent["html"]
+
+
+# ---------------------------------------------------------------------------
+# Event details come from the hackathon record. The .ics LOCATION used to be
+# hardcoded to "Virtual" for every event (and the email body named no event
+# at all), so an in-person volunteer's calendar said they were volunteering
+# online.
+# ---------------------------------------------------------------------------
+
+FALL_2026_EVENT = {
+    "event_id": "fall-2026",
+    "title": "2026 Fall Hackathon: Tempe, AZ | Opportunity Hack",
+    "location": "Engineering Center G Wing, 501 E Tyler Mall, Tempe, AZ",
+    "timezone": "America/Phoenix",
+    "start_date": "2026-11-14",
+    "end_date": "2026-11-15",
+}
+
+
+def test_calendar_attachments_carry_the_venue_and_hackathon_timezone():
+    result = get_calendar_email_attachment_from_availability(
+        VOLUNTEER_AVAILABILITY, "vol@example.com", volunteer_type="volunteer", year=2026,
+        event_name="Opportunity Hack Fall 2026",
+        location=FALL_2026_EVENT["location"],
+        tz_name="America/Phoenix",
+    )
+    content = result[0]["content"]
+    # Commas inside a TEXT value must be escaped or the venue is truncated.
+    assert "LOCATION:Engineering Center G Wing\\, 501 E Tyler Mall\\, Tempe\\, AZ" in content
+    assert "Virtual" not in content
+    assert "SUMMARY:Opportunity Hack Fall 2026 - Doors Open & Registration - 📋 Check-in Registration" in content
+    assert "DTSTART;TZID=America/Phoenix:20261114T080000" in content
+    assert "DTSTAMP:" in content and "Z\n" in content  # stamps are UTC
+
+
+def test_calendar_attachments_omit_location_when_the_event_is_unknown():
+    result = get_calendar_email_attachment_from_availability(
+        "Saturday, Nov 14: 🌅 Early Morning (7am - 9am PST)", "m@example.com",
+        volunteer_type="mentor", year=2026,
+    )
+    content = result[0]["content"]
+    assert "LOCATION:" not in content
+    assert "Virtual" not in content
+    # No hackathon timezone → the abbreviation in the slot text decides.
+    assert "DTSTART;TZID=America/Los_Angeles:20261114T070000" in content
+
+
+def test_calendar_event_name_normalizes_hackathon_titles():
+    from services.volunteers_service import _calendar_event_name
+    assert _calendar_event_name(FALL_2026_EVENT) == "Opportunity Hack Fall 2026"
+    assert _calendar_event_name({"title": "Opportunity Hack - ASU Fall Hackathon 2026"}) == "Opportunity Hack Fall 2026"
+    assert _calendar_event_name({"title": "Opportunity Hack Summer 2026 Virtual"}) == "Opportunity Hack Summer 2026"
+    assert _calendar_event_name({"title": "Arizona Hackathon for Social Good"}) == "Opportunity Hack Arizona Hackathon for Social Good"
+    assert _calendar_event_name({"title": ""}) == "Opportunity Hack Volunteering"
+    assert _calendar_event_name(None) == "Opportunity Hack Volunteering"
+
+
+def test_format_event_date_range():
+    from services.volunteers_service import _format_event_date_range, _event_year
+    assert _format_event_date_range("2026-11-14", "2026-11-15") == "Nov 14–15, 2026"
+    assert _format_event_date_range("2026-11-14T00:00:00", "2026-11-14") == "Nov 14, 2026"
+    assert _format_event_date_range("2026-11-28", "2026-12-01") == "Nov 28 – Dec 1, 2026"
+    assert _format_event_date_range("2026-12-31", "2027-01-01") == "Dec 31, 2026 – Jan 1, 2027"
+    assert _format_event_date_range("soon", None) == ""
+    assert _event_year(FALL_2026_EVENT) == 2026
+    assert _event_year({"start_date": "TBD"}) is None
+
+
+def test_confirmation_email_names_the_event_dates_and_venue():
+    sent = _send_confirmation_capturing_html("volunteer", event=FALL_2026_EVENT)
+    html_body = sent["html"]
+    assert "Your event" in html_body
+    assert "Opportunity Hack Fall 2026" in html_body
+    assert "Nov 14–15, 2026" in html_body
+    assert "Engineering Center G Wing, 501 E Tyler Mall, Tempe, AZ" in html_body
+    assert "https://www.ohack.dev/hack/fall-2026" in html_body
+    assert "Virtual" not in html_body
+
+
+def test_confirmation_email_without_an_event_has_no_event_block():
+    sent = _send_confirmation_capturing_html("volunteer", event=None)
+    assert "Your event" not in sent["html"]
+
+
+@patch('services.volunteers_service.get_db')
+def test_create_volunteer_feeds_the_hackathon_into_the_email_and_invites(mock_get_db):
+    """The hackathon doc for the event_id drives event_name / location /
+    timezone / year on the invites and the `event` block on the email."""
+    mock_db = MagicMock()
+    mock_get_db.return_value = mock_db
+
+    hackathon_doc = MagicMock()
+    hackathon_doc.to_dict.return_value = dict(FALL_2026_EVENT)
+    hackathons = MagicMock()
+    hackathons.where.return_value.limit.return_value.stream.return_value = iter([hackathon_doc])
+    volunteers = MagicMock()
+
+    def collection(name):
+        return hackathons if name == 'hackathons' else volunteers
+    mock_db.collection.side_effect = collection
+
+    with patch('services.volunteers_service.get_volunteer_by_user_id', return_value=None), \
+         patch('services.volunteers_service.find_volunteer_by_caller_identity', return_value=None), \
+         patch('services.volunteers_service.get_slack_user_by_email', return_value=None), \
+         patch('services.volunteers_service.send_admin_notification_email'), \
+         patch('services.volunteers_service.send_slack_volunteer_notification'), \
+         patch('services.volunteers_service.get_calendar_email_attachment_from_availability',
+               return_value=[]) as mock_ics, \
+         patch('services.volunteers_service.send_volunteer_confirmation_email') as mock_email:
+        create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email=MOCK_EMAIL, event_id="fall-2026",
+            volunteer_data={"volunteer_type": "volunteer", "name": "Sam Doe",
+                            "availability": VOLUNTEER_AVAILABILITY},
+        )
+
+    ics_kwargs = mock_ics.call_args.kwargs
+    assert ics_kwargs["event_name"] == "Opportunity Hack Fall 2026"
+    assert ics_kwargs["location"] == FALL_2026_EVENT["location"]
+    assert ics_kwargs["tz_name"] == "America/Phoenix"
+    assert ics_kwargs["year"] == 2026
+    assert mock_email.call_args.kwargs["event"]["location"] == FALL_2026_EVENT["location"]

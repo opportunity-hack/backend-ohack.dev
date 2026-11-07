@@ -276,7 +276,8 @@ def verify_recaptcha(token: str) -> bool:
 
 def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str,
     calendar_attachments: Optional[List[Dict[str, Any]]] = None, event_id: Optional[str] = None,
-    volunteer_id: Optional[str] = None, shifts: Optional[List[str]] = None) -> Optional[str]:
+    volunteer_id: Optional[str] = None, shifts: Optional[List[str]] = None,
+    event: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """
     Send a confirmation email to the volunteer who submitted the form.
     
@@ -289,6 +290,8 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         event_id: Event ID for generating links
         shifts: Optional human-readable shift/time-slot lines (see
             split_availability_slots) rendered as a "Your shifts" list
+        event: Optional hackathon summary (see _hackathon_for_confirmation)
+            rendered as a "Your event" block — title, dates, venue, event link
         
     Returns:
         True if email was sent successfully, False otherwise
@@ -319,6 +322,35 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <p style="margin: 5px 0 0 0; color: #34495e;">Your volunteering time slots have been attached as calendar files (.ics). Click on the attachments to add them to your Google Calendar, Outlook, or Apple Calendar.</p>
             </div>"""
             info(logger, "Including calendar attachments in email", email=email, attachment_count=len(calendar_attachments))
+
+        # Which event, when and where — from the hackathon record, so an
+        # in-person event never reads as "Virtual" (the old .ics default).
+        event_block = ""
+        if event and (event.get("title") or event.get("location")):
+            event_title = html.escape(_calendar_event_name(event))
+            event_dates = html.escape(_format_event_date_range(event.get("start_date"), event.get("end_date")))
+            event_location = html.escape(str(event.get("location") or "").strip())
+            event_slug = html.escape(str(event.get("event_id") or event_id or ""))
+            dates_line = (
+                f'<p style="margin: 6px 0 0 0; font-size: 15px; color: #2c3e50;">📅 {event_dates}</p>'
+                if event_dates else ""
+            )
+            location_line = (
+                f'<p style="margin: 4px 0 0 0; font-size: 15px; color: #2c3e50;">📍 {event_location}</p>'
+                if event_location else ""
+            )
+            event_link = (
+                f'<p style="margin: 10px 0 0 0; font-size: 14px;"><a href="https://www.ohack.dev/hack/{event_slug}" style="color: #1B3A6B; font-weight: bold; text-decoration: none;">Event page: schedule, venue &amp; parking →</a></p>'
+                if event_slug else ""
+            )
+            event_block = f"""
+            <div style="background-color: #f8f9fa; padding: 16px 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #E2552E;">
+                <p style="margin: 0 0 6px 0; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #777;">Your event</p>
+                <p style="margin: 0; font-size: 17px; font-weight: bold; color: #1B3A6B;">{event_title}</p>
+                {dates_line}
+                {location_line}
+                {event_link}
+            </div>"""
 
         # The shifts/time slots they picked, as text. Mentors and volunteers both
         # choose structured slots; judges send free text (no block then).
@@ -418,6 +450,7 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <h2 style="color: #3498db; text-align: center;">Thanks for your Opportunity Hack {volunteer_type_readable} application!</h2>
                 <p style="font-size: 16px;">Hello {full_name},</p>
                 <p style="font-size: 16px;">{intro_line}</p>
+                {event_block}
                 {pending_review_banner}
                 {shifts_block}
                 {calendar_note}
@@ -709,14 +742,106 @@ def _parse_explicit_time_range(text: str) -> Optional[Dict[str, str]]:
     return {"start": to_24h(sh, sm, sap), "end": to_24h(eh, em, eap)}
 
 
+# The timezone abbreviations the application forms append to each slot
+# ("(8:00am - 11:00am MST)") mapped to IANA zones for the .ics TZID. The
+# hackathon's own `timezone` field wins when it is known.
+_TZ_ABBREVIATION_TO_IANA = {
+    "MST": "America/Phoenix",
+    "PST": "America/Los_Angeles",
+    "EST": "America/New_York",
+    "CST": "America/Chicago",
+}
+_DEFAULT_EVENT_TZ = "America/Phoenix"
+
+_CONFIRMATION_HACKATHON_FIELDS = ("title", "location", "timezone", "start_date", "end_date")
+
+_SEASON_RE = re.compile(
+    r"\b(spring|summer|fall|autumn|winter)\b(?:\s+[A-Za-z]+){0,2}\s+(20\d{2})\b"
+    r"|\b(20\d{2})\s+(spring|summer|fall|autumn|winter)\b",
+    re.IGNORECASE,
+)
+
+
+def _ical_escape(text: Any) -> str:
+    """RFC 5545 TEXT escaping — a venue like "G Wing, 501 E Tyler Mall, Tempe, AZ"
+    carries commas that would otherwise end the property value."""
+    return (
+        str(text or "")
+        .replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+    )
+
+
+def _hackathon_for_confirmation(event_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The hackathon fields the confirmation email + calendar invites need
+    (title, venue, timezone, dates). None when the event can't be found —
+    callers fall back to generic copy rather than guessing a location."""
+    if not event_id:
+        return None
+    try:
+        docs = get_db().collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
+        for doc in docs:
+            rec = doc.to_dict() or {}
+            event = {k: rec.get(k) for k in _CONFIRMATION_HACKATHON_FIELDS}
+            event["event_id"] = rec.get("event_id") or event_id
+            return event
+    except Exception as e:
+        warning(logger, "Failed to load hackathon for confirmation email", event_id=event_id, exc_info=e)
+    return None
+
+
+def _calendar_event_name(event: Optional[Dict[str, Any]]) -> str:
+    """"Opportunity Hack Fall 2026" from whatever the hackathon title is
+    (mirrors the frontend's eventDisplayName so emails and share cards agree)."""
+    title = str((event or {}).get("title") or "").strip()
+    if not title:
+        return "Opportunity Hack Volunteering"
+    season = _SEASON_RE.search(title)
+    if season:
+        word = (season.group(1) or season.group(4)).capitalize()
+        year = season.group(2) or season.group(3)
+        return f"Opportunity Hack {'Fall' if word == 'Autumn' else word} {year}"
+    first = re.split(r"\s*[|:\u2013\u2014]\s*|\s+-\s+", title)[0].strip() or title
+    return first if re.search(r"opportunity\s*hack", first, re.IGNORECASE) else f"Opportunity Hack {first}"
+
+
+def _event_year(event: Optional[Dict[str, Any]]) -> Optional[int]:
+    match = re.match(r"(\d{4})-\d{2}-\d{2}", str((event or {}).get("start_date") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _format_event_date_range(start: Any, end: Any) -> str:
+    """"2026-11-14" + "2026-11-15" → "Nov 14–15, 2026" (best effort; "" if unparseable)."""
+    def parse(value):
+        try:
+            return datetime.strptime(str(value or "")[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+
+    s, e = parse(start), parse(end)
+    if not s:
+        return ""
+    if not e or e.date() == s.date():
+        return f"{s.strftime('%b')} {s.day}, {s.year}"
+    if s.year != e.year:
+        return f"{s.strftime('%b')} {s.day}, {s.year} \u2013 {e.strftime('%b')} {e.day}, {e.year}"
+    if s.month != e.month:
+        return f"{s.strftime('%b')} {s.day} \u2013 {e.strftime('%b')} {e.day}, {e.year}"
+    return f"{s.strftime('%b')} {s.day}\u2013{e.day}, {e.year}"
+
+
 def get_calendar_email_attachment_from_availability(
     availability: str, 
     volunteer_email: str,
     event_name: str = "Opportunity Hack Volunteering", 
-    location: str = "Virtual",
+    location: Optional[str] = None,
     organizer_email: str = "welcome@ohack.dev",
     year: Optional[int] = None,
-    volunteer_type: Optional[str] = None
+    volunteer_type: Optional[str] = None,
+    tz_name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Parse availability string and generate calendar attachment data for email.
@@ -725,9 +850,12 @@ def get_calendar_email_attachment_from_availability(
         availability: String containing availability information
         volunteer_email: Email of the volunteer (for proper ATTENDEE field)
         event_name: Name of the calendar event
-        location: Location of the event
+        location: Venue for the LOCATION line; omitted when unknown (it used
+            to be hardcoded to "Virtual" for every event)
         organizer_email: Email of the event organizer
         year: Year for the event (defaults to current year if not specified)
+        tz_name: IANA timezone for the invite (the hackathon's `timezone`);
+            falls back to the abbreviation found in the slot text
         
     Returns:
         List of dictionaries containing calendar event data for email attachments
@@ -782,6 +910,7 @@ def get_calendar_email_attachment_from_availability(
         timezone = "MST"
     elif "CST" in availability:
         timezone = "CST"
+    tzid = tz_name or _TZ_ABBREVIATION_TO_IANA.get(timezone, _DEFAULT_EVENT_TZ)
     
     # Split into individual time slots - need to be smarter about comma splitting
     # The issue is that "Sunday, Oct 12: ☀️ Morning" gets split on the comma between Sunday and Oct
@@ -947,8 +1076,14 @@ def get_calendar_email_attachment_from_availability(
             # Format dates for iCalendar (UTC format for better compatibility)
             start_str = start_date.strftime("%Y%m%dT%H%M%S")
             end_str = end_date.strftime("%Y%m%dT%H%M%S")
-            created_str = datetime.now().strftime("%Y%m%dT%H%M%S")
-            debug(logger, "Calendar event time range", start=start_str, end=end_str)
+            created_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            debug(logger, "Calendar event time range", start=start_str, end=end_str, tzid=tzid)
+            summary_text = _ical_escape(f"{event_name} - {time_emoji_name}")
+            description_text = _ical_escape(
+                f"{(volunteer_type or 'Volunteer').capitalize()} availability time slot for {weekday}, "
+                f"{month_name} {day} - {time_emoji_name}. Thank you for volunteering with Opportunity Hack!"
+            )
+            location_line = f"LOCATION:{_ical_escape(location)}\n" if location else ""
             
             # Clean up emoji names for filenames
             clean_time_name = re.sub(r'[^\w\s-]', '', time_emoji_name).strip().replace(' ', '_')
@@ -961,15 +1096,14 @@ CALSCALE:GREGORIAN
 METHOD:PUBLISH
 BEGIN:VEVENT
 UID:{event_uid}@ohack.dev
-DTSTART:{start_str}{timezone}
-DTEND:{end_str}{timezone}
-DTSTAMP:{created_str}{timezone}
-CREATED:{created_str}{timezone}
-LAST-MODIFIED:{created_str}{timezone}
-SUMMARY:{event_name} - {time_emoji_name}
-DESCRIPTION:{volunteer_type} availability time slot for {weekday}, {month_name} {day} - {time_emoji_name}. Thank you for volunteering with Opportunity Hack!
-LOCATION:{location}
-ORGANIZER:MAILTO:{organizer_email}
+DTSTART;TZID={tzid}:{start_str}
+DTEND;TZID={tzid}:{end_str}
+DTSTAMP:{created_str}
+CREATED:{created_str}
+LAST-MODIFIED:{created_str}
+SUMMARY:{summary_text}
+DESCRIPTION:{description_text}
+{location_line}ORGANIZER:MAILTO:{organizer_email}
 ATTENDEE:MAILTO:{volunteer_email}
 STATUS:CONFIRMED
 TRANSP:OPAQUE
@@ -1104,6 +1238,10 @@ def create_or_update_volunteer(
     # stored under another identity shape (email / OAuth id) fall into the
     # create branch on edit, spawning a duplicate isSelected=False doc.
     existing = find_volunteer_by_caller_identity(user_id, event_id, volunteer_type)
+
+    # Title / venue / timezone / dates for the confirmation email and its .ics
+    # invites. One lookup serves both branches below.
+    event_ctx = _hackathon_for_confirmation(event_id)
     
     if existing:
         # Update existing record
@@ -1139,10 +1277,12 @@ def create_or_update_volunteer(
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
             email,  # Pass volunteer email for proper ATTENDEE field
-            event_name="Opportunity Hack Volunteering",
-            location="Virtual",
+            event_name=_calendar_event_name(event_ctx),
+            location=(event_ctx or {}).get('location') or None,
             organizer_email="welcome@ohack.dev",
-            volunteer_type=volunteer_type
+            year=_event_year(event_ctx),
+            volunteer_type=volunteer_type,
+            tz_name=(event_ctx or {}).get('timezone') or None,
         )
         
         # Clear all related caches
@@ -1174,7 +1314,8 @@ def create_or_update_volunteer(
                 info(logger, "No calendar attachments generated from availability data", email=email)
                 
             send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
-                                              shifts=split_availability_slots(volunteer_data.get('availability', '')))
+                                              shifts=split_availability_slots(volunteer_data.get('availability', '')),
+                                              event=event_ctx)
 
             info(logger, "Sent notifications about updated volunteer", email=email)
         except Exception as e:
@@ -1219,10 +1360,12 @@ def create_or_update_volunteer(
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
             email,  # Pass volunteer email for proper ATTENDEE field
-            event_name="Opportunity Hack Volunteering",
-            location="Virtual",
+            event_name=_calendar_event_name(event_ctx),
+            location=(event_ctx or {}).get('location') or None,
             organizer_email="welcome@ohack.dev",
-            volunteer_type=volunteer_type
+            year=_event_year(event_ctx),
+            volunteer_type=volunteer_type,
+            tz_name=(event_ctx or {}).get('timezone') or None,
         )
         
         # Send confirmation email to the volunteer
@@ -1248,7 +1391,8 @@ def create_or_update_volunteer(
                 info(logger, "No calendar attachments generated from availability data", email=email)
                 
             send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
-                                              shifts=split_availability_slots(volunteer_data.get('availability', '')))
+                                              shifts=split_availability_slots(volunteer_data.get('availability', '')),
+                                              event=event_ctx)
             send_admin_notification_email(volunteer_doc)
             send_slack_volunteer_notification(volunteer_doc)
             info(logger, "Sent notifications for new volunteer", email=email)
