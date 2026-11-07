@@ -34,6 +34,20 @@ def profile():
     return profile_data
 
 
+@bp.route("/profile/teams", methods=["GET"])
+@auth.require_user
+def my_teams():
+    """Own teams across every hackathon, newest event first — feeds the
+    "Your teams" card on /profile. {"teams": [...]} ; 503 when the caller's
+    identity can't be resolved (same rule as GET /profile)."""
+    if not (auth_user and auth_user.user_id):
+        return {"error": "Unauthorized"}, 401
+    payload = users_service.get_my_teams(auth_user.user_id)
+    if payload is None:
+        return {"error": "Unable to resolve user profile"}, 503
+    return payload
+
+
 @bp.route("/profile", methods=["POST"])
 @auth.require_user
 def save_profile():
