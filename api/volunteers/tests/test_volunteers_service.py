@@ -934,3 +934,43 @@ def test_get_my_roles_for_event_empty_when_nothing_matches(mock_get_db, mock_ids
     mock_get_db.return_value = mock_db
     assert get_my_roles_for_event("propel-1", "EVT") == {"roles": []}
     assert get_my_roles_for_event("", "EVT") == {"roles": []}
+
+
+# ---------------------------------------------------------------------------
+# Confirmation email — role-specific "what happens next" blocks
+# ---------------------------------------------------------------------------
+
+def _send_confirmation_capturing_html(volunteer_type):
+    """Run send_volunteer_confirmation_email with Resend stubbed and return the html."""
+    import os
+    from services import volunteers_service
+    sent = {}
+
+    def fake_send(params):
+        sent.update(params)
+        return {"id": "re_test"}
+
+    with patch("services.volunteers_service._notifications_disabled", return_value=False), \
+         patch.dict(os.environ, {"RESEND_WELCOME_EMAIL_KEY": "re_dummy"}), \
+         patch("services.volunteers_service.resend.Emails.send", side_effect=fake_send):
+        result = volunteers_service.send_volunteer_confirmation_email(
+            "Sam", "Doe", "sam@example.com", volunteer_type, None, "fall-2026", volunteer_id=None,
+        )
+    assert result == "re_test"
+    return sent
+
+
+def test_confirmation_email_volunteer_links_to_the_volunteer_guide():
+    sent = _send_confirmation_capturing_html("volunteer")
+    assert "https://www.ohack.dev/about/volunteers" in sent["html"]
+    assert "check-in QR code" in sent["html"]
+    # Event volunteers aren't staff-reviewed: no pending-review framing.
+    assert "[Pending Review]" not in sent["subject"]
+    assert "pending review" not in sent["html"].lower()
+
+
+def test_confirmation_email_mentor_keeps_mentor_block_and_pending_banner():
+    sent = _send_confirmation_capturing_html("mentor")
+    assert "https://www.ohack.dev/about/mentors" in sent["html"]
+    assert "https://www.ohack.dev/about/volunteers" not in sent["html"]
+    assert sent["subject"].startswith("[Pending Review]")

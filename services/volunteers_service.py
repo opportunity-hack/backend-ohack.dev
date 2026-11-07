@@ -350,6 +350,24 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                     </a>
                 </div>
             </div>"""
+        elif volunteer_type.lower() == "volunteer":
+            # Event volunteers (check-in, food, cleanup, photo, judging support).
+            # Not staff-reviewed like mentors/judges, but organizers still put
+            # them on the roster before the event — the guide explains what
+            # "approved" unlocks (QR code, roster, share card) and how check-in
+            # works for anyone on the registration shift.
+            volunteer_specific_content = """
+            <div style="background-color: #eef2f8; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1B3A6B;">
+                <h3 style="color: #1B3A6B; margin-top: 0;">🙌 What happens next as an event volunteer</h3>
+                <p style="margin-bottom: 12px;">Organizers confirm volunteers before the event. Once you're on the roster, your application page shows your personal <strong>check-in QR code</strong> — have it ready on your phone when you arrive.</p>
+                <p style="margin-bottom: 15px;">Signed up for the registration shift? The volunteer guide walks through exactly how check-in works, what to do when someone isn't on the list, and a before/during/after checklist for every role.</p>
+                <div style="text-align: center;">
+                    <a href="https://www.ohack.dev/about/volunteers"
+                       style="background-color: #1B3A6B; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; font-size: 16px;">
+                        📖 Read the Volunteer Guide
+                    </a>
+                </div>
+            </div>"""
         elif volunteer_type.lower() == "judge":
             volunteer_specific_content = """
             <div style="background-color: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
