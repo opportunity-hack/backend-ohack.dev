@@ -5,6 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import pytz
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from functools import lru_cache
 from ratelimiter import RateLimiter
 from db.db import get_db
@@ -742,16 +743,41 @@ def _parse_explicit_time_range(text: str) -> Optional[Dict[str, str]]:
     return {"start": to_24h(sh, sm, sap), "end": to_24h(eh, em, eap)}
 
 
-# The timezone abbreviations the application forms append to each slot
-# ("(8:00am - 11:00am MST)") mapped to IANA zones for the .ics TZID. The
-# hackathon's own `timezone` field wins when it is known.
+# Event timezone for the .ics invites. The hackathon's own `timezone` (admin
+# Overview section) is the source of truth: the application forms label every
+# slot with that zone's abbreviation ("(8:00am - 11:00am MST)"). The
+# abbreviation is only a hint for when the hackathon record can't be read, and
+# DEFAULT_EVENT_TIMEZONE mirrors the frontend's DEFAULT_EVENT_TIMEZONE
+# (src/lib/timezoneUtils.js) — the zone the forms label slots with when the
+# admin never set one.
+DEFAULT_EVENT_TIMEZONE = "America/Phoenix"
 _TZ_ABBREVIATION_TO_IANA = {
     "MST": "America/Phoenix",
+    "MDT": "America/Denver",
     "PST": "America/Los_Angeles",
-    "EST": "America/New_York",
+    "PDT": "America/Los_Angeles",
     "CST": "America/Chicago",
+    "CDT": "America/Chicago",
+    "EST": "America/New_York",
+    "EDT": "America/New_York",
 }
-_DEFAULT_EVENT_TZ = "America/Phoenix"
+# The abbreviation closing a slot's parenthesised time range: "(… 11:00am MST)".
+_SLOT_TZ_ABBR_RE = re.compile(r"\s([A-Z]{2,4})\s*\)")
+
+
+def _resolve_event_tz(tz_name: Optional[str], availability: Optional[str] = None) -> ZoneInfo:
+    """The zone a slot's wall-clock times are in: the hackathon's `timezone`
+    first, then the abbreviation in the slot text, then the default. An
+    invalid zone name never fails a submit — it logs and falls back."""
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            warning(logger, "Invalid hackathon timezone; falling back", tz_name=tz_name)
+    for abbr in _SLOT_TZ_ABBR_RE.findall(availability or ""):
+        if abbr in _TZ_ABBREVIATION_TO_IANA:
+            return ZoneInfo(_TZ_ABBREVIATION_TO_IANA[abbr])
+    return ZoneInfo(DEFAULT_EVENT_TIMEZONE)
 
 _CONFIRMATION_HACKATHON_FIELDS = ("title", "location", "timezone", "start_date", "end_date")
 
@@ -854,8 +880,10 @@ def get_calendar_email_attachment_from_availability(
             to be hardcoded to "Virtual" for every event)
         organizer_email: Email of the event organizer
         year: Year for the event (defaults to current year if not specified)
-        tz_name: IANA timezone for the invite (the hackathon's `timezone`);
-            falls back to the abbreviation found in the slot text
+        tz_name: IANA timezone the slot times are in (the hackathon's
+            `timezone`); falls back to the abbreviation found in the slot text.
+            Times are written as UTC instants (no TZID — a TZID without a
+            VTIMEZONE block is not valid RFC 5545 and Outlook misreads it).
         
     Returns:
         List of dictionaries containing calendar event data for email attachments
@@ -897,20 +925,9 @@ def get_calendar_email_attachment_from_availability(
         "Late Night": {"start": "23:00", "end": "02:00"}  # Added non-emoji version
     }
     
-    # Parse timezone
-    timezone_match = re.search(r'\(.*?(\w+)\)', availability)
-    timezone = timezone_match.group(1) if timezone_match else "PST"
-    
-    # Check if there's a more explicit timezone indicator
-    if "PST" in availability:
-        timezone = "PST"
-    elif "EST" in availability:
-        timezone = "EST"
-    elif "MST" in availability:
-        timezone = "MST"
-    elif "CST" in availability:
-        timezone = "CST"
-    tzid = tz_name or _TZ_ABBREVIATION_TO_IANA.get(timezone, _DEFAULT_EVENT_TZ)
+    # The zone the slot times are in (hackathon timezone from the admin
+    # Overview section, else the slot's own abbreviation, else the default).
+    event_zone = _resolve_event_tz(tz_name, availability)
     
     # Split into individual time slots - need to be smarter about comma splitting
     # The issue is that "Sunday, Oct 12: ☀️ Morning" gets split on the comma between Sunday and Oct
@@ -1073,15 +1090,20 @@ def get_calendar_email_attachment_from_availability(
             # Generate unique ID for the event
             event_uid = str(uuid.uuid4())
             
-            # Format dates for iCalendar (UTC format for better compatibility)
-            start_str = start_date.strftime("%Y%m%dT%H%M%S")
-            end_str = end_date.strftime("%Y%m%dT%H%M%S")
+            # Wall-clock time in the event zone → UTC instant. zoneinfo picks
+            # the right offset per instant, so a DST change mid-event is fine,
+            # and every calendar client shows it in the viewer's local time.
+            utc = ZoneInfo("UTC")
+            start_str = start_date.replace(tzinfo=event_zone).astimezone(utc).strftime("%Y%m%dT%H%M%SZ")
+            end_str = end_date.replace(tzinfo=event_zone).astimezone(utc).strftime("%Y%m%dT%H%M%SZ")
             created_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
-            debug(logger, "Calendar event time range", start=start_str, end=end_str, tzid=tzid)
+            zone_label = f"{start_date.replace(tzinfo=event_zone).tzname()} ({event_zone.key})"
+            debug(logger, "Calendar event time range", start=start_str, end=end_str, zone=event_zone.key)
             summary_text = _ical_escape(f"{event_name} - {time_emoji_name}")
             description_text = _ical_escape(
                 f"{(volunteer_type or 'Volunteer').capitalize()} availability time slot for {weekday}, "
-                f"{month_name} {day} - {time_emoji_name}. Thank you for volunteering with Opportunity Hack!"
+                f"{month_name} {day} - {time_emoji_name} (times are {zone_label}). "
+                f"Thank you for volunteering with Opportunity Hack!"
             )
             location_line = f"LOCATION:{_ical_escape(location)}\n" if location else ""
             
@@ -1096,8 +1118,8 @@ CALSCALE:GREGORIAN
 METHOD:PUBLISH
 BEGIN:VEVENT
 UID:{event_uid}@ohack.dev
-DTSTART;TZID={tzid}:{start_str}
-DTEND;TZID={tzid}:{end_str}
+DTSTART:{start_str}
+DTEND:{end_str}
 DTSTAMP:{created_str}
 CREATED:{created_str}
 LAST-MODIFIED:{created_str}
