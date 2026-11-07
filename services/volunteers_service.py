@@ -18,6 +18,7 @@ from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern,
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
 import os
 import requests
+import html
 import resend
 import stripe
 import markdown
@@ -275,7 +276,7 @@ def verify_recaptcha(token: str) -> bool:
 
 def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str,
     calendar_attachments: Optional[List[Dict[str, Any]]] = None, event_id: Optional[str] = None,
-    volunteer_id: Optional[str] = None) -> Optional[str]:
+    volunteer_id: Optional[str] = None, shifts: Optional[List[str]] = None) -> Optional[str]:
     """
     Send a confirmation email to the volunteer who submitted the form.
     
@@ -286,6 +287,8 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         volunteer_type: Type of volunteer (mentor, sponsor, judge)
         calendar_attachments: Optional list of calendar attachments
         event_id: Event ID for generating links
+        shifts: Optional human-readable shift/time-slot lines (see
+            split_availability_slots) rendered as a "Your shifts" list
         
     Returns:
         True if email was sent successfully, False otherwise
@@ -316,6 +319,20 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <p style="margin: 5px 0 0 0; color: #34495e;">Your volunteering time slots have been attached as calendar files (.ics). Click on the attachments to add them to your Google Calendar, Outlook, or Apple Calendar.</p>
             </div>"""
             info(logger, "Including calendar attachments in email", email=email, attachment_count=len(calendar_attachments))
+
+        # The shifts/time slots they picked, as text. Mentors and volunteers both
+        # choose structured slots; judges send free text (no block then).
+        shifts_block = ""
+        if shifts:
+            shift_items = "".join(
+                f'<li style="margin: 6px 0; color: #2c3e50;">{html.escape(shift)}</li>' for shift in shifts
+            )
+            shifts_block = f"""
+            <div style="background-color: #f8f9fa; padding: 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1B3A6B;">
+                <h3 style="color: #1B3A6B; margin: 0 0 10px 0; font-size: 18px;">🗓️ Your shifts</h3>
+                <ul style="margin: 0; padding-left: 20px; font-size: 15px;">{shift_items}</ul>
+                <p style="margin: 12px 0 0 0; font-size: 14px; color: #555;">Need to change a shift? Reopen your application on the event page and update your availability.</p>
+            </div>"""
 
         # Pending-review banner (mentor + judge only — these roles are reviewed by staff)
         pending_review_banner = ""
@@ -402,6 +419,7 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <p style="font-size: 16px;">Hello {full_name},</p>
                 <p style="font-size: 16px;">{intro_line}</p>
                 {pending_review_banner}
+                {shifts_block}
                 {calendar_note}
                 {volunteer_specific_content}
                 <p style="font-size: 16px;">In the meantime, feel free to explore our website and learn more about our mission and past events.</p>
@@ -652,6 +670,45 @@ def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update:
         exception(logger, "Error sending Slack notification", exc_info=e, email=email, volunteer_type=volunteer_type)
         return False
 
+_STRUCTURED_SLOT_RE = re.compile(r'[A-Za-z]+day,\s*[A-Za-z]{3,}\s+\d{1,2}')
+_EXPLICIT_RANGE_RE = re.compile(
+    r'(\d{1,2})(?::(\d{2}))?\s*([ap]m)\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*([ap]m)',
+    re.IGNORECASE,
+)
+
+
+def split_availability_slots(availability: Optional[str]) -> List[str]:
+    """Split a structured availability string into its slot strings.
+
+    Returns [] for empty or free-text availability (judges). The slot strings
+    are the exact human-readable text the forms produce, e.g.
+    "Saturday, Nov 14: Doors Open & Registration - 📋 Check-in Registration (8:00am - 11:00am MST)"
+    or "Saturday, Nov 14: 🌅 Early Morning (7am - 9am MST)".
+    """
+    if not availability or not _STRUCTURED_SLOT_RE.search(availability):
+        return []
+    # Split on commas that are followed by a weekday — the comma inside
+    # "Saturday, Nov 14" must not split.
+    parts = re.split(r',\s*(?=[A-Za-z]+day,)', availability)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _parse_explicit_time_range(text: str) -> Optional[Dict[str, str]]:
+    """"(8:00am - 11:00am MST)" → {"start": "08:00", "end": "11:00"}; None if absent."""
+    match = _EXPLICIT_RANGE_RE.search(text or "")
+    if not match:
+        return None
+
+    def to_24h(hour: str, minute: Optional[str], meridiem: str) -> str:
+        h = int(hour) % 12
+        if meridiem.lower() == "pm":
+            h += 12
+        return f"{h:02d}:{int(minute or 0):02d}"
+
+    sh, sm, sap, eh, em, eap = match.groups()
+    return {"start": to_24h(sh, sm, sap), "end": to_24h(eh, em, eap)}
+
+
 def get_calendar_email_attachment_from_availability(
     availability: str, 
     volunteer_email: str,
@@ -731,10 +788,7 @@ def get_calendar_email_attachment_from_availability(
     # We need to split on commas that are followed by a day name pattern
     
     # Use regex to split on commas that are followed by weekday patterns
-    import re
-    time_slot_pattern = r',\s*(?=[A-Za-z]+day,)'  # Split on comma followed by weekday,
-    time_slots = re.split(time_slot_pattern, availability)
-    time_slots = [slot.strip() for slot in time_slots if slot.strip()]
+    time_slots = split_availability_slots(availability)
     
     debug(logger, "Parsed time slots", time_slots=time_slots, slot_count=len(time_slots))
     
@@ -845,17 +899,22 @@ def get_calendar_email_attachment_from_availability(
             }
             month = month_mapping.get(month_abbr, 1) # Default to January if not found
         
-        # Find the time slot in our mapping
-        slot_times = None
-        for key, value in time_slot_mapping.items():
-            # Handle exact match
-            if time_emoji_name == key:
-                slot_times = value
-                break
-            # Handle partial match (in case the emoji is missing)
-            elif time_emoji_name in key or key in time_emoji_name:
-                slot_times = value
-                break
+        # An explicit range in the slot text wins (volunteer shifts carry their
+        # own hours, e.g. "(8:00am - 11:00am MST)"); otherwise fall back to the
+        # named mentor blocks.
+        slot_times = _parse_explicit_time_range(slot)
+        if slot_times:
+            info(logger, "Using explicit time range from slot", slot=slot.strip(), slot_times=slot_times)
+        else:
+            for key, value in time_slot_mapping.items():
+                # Handle exact match
+                if time_emoji_name == key:
+                    slot_times = value
+                    break
+                # Handle partial match (in case the emoji is missing)
+                elif time_emoji_name in key or key in time_emoji_name:
+                    slot_times = value
+                    break
         
         if not slot_times:
             warning(logger, "Time slot not found in mapping", time_slot=time_emoji_name)
@@ -1114,7 +1173,8 @@ def create_or_update_volunteer(
             else:
                 info(logger, "No calendar attachments generated from availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
+                                              shifts=split_availability_slots(volunteer_data.get('availability', '')))
 
             info(logger, "Sent notifications about updated volunteer", email=email)
         except Exception as e:
@@ -1187,7 +1247,8 @@ def create_or_update_volunteer(
             else:
                 info(logger, "No calendar attachments generated from availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
+                                              shifts=split_availability_slots(volunteer_data.get('availability', '')))
             send_admin_notification_email(volunteer_doc)
             send_slack_volunteer_notification(volunteer_doc)
             info(logger, "Sent notifications for new volunteer", email=email)
