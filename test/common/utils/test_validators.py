@@ -316,6 +316,25 @@ def test_partial_rejects_non_bool_peer_vote_enabled():
     assert "peer_vote_enabled" not in cleaned["constraints"]
 
 
+def test_partial_accepts_and_rejects_judging_schedule_published():
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({"judging_schedule_published": True}))
+    assert skipped == []
+    assert cleaned["constraints"]["judging_schedule_published"] is True
+
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({"judging_schedule_published": "true"}))
+    assert any(s["field"] == "constraints.judging_schedule_published" for s in skipped)
+    assert "judging_schedule_published" not in cleaned["constraints"]
+
+
+def test_full_validator_rejects_non_bool_judging_schedule_published():
+    data = _hackathon_data({"judging_schedule_published": "yes"})
+    with pytest.raises(ValueError, match="judging_schedule_published"):
+        validate_hackathon_data(data)
+    validate_hackathon_data(_hackathon_data({"judging_schedule_published": False}))
+
+
 # ---------------------------------------------------------------------------
 # deadlines wired into validate_hackathon_data_partial (uses the hackathon's
 # own timezone, defaulting to America/Phoenix).

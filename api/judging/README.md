@@ -457,3 +457,28 @@ Creates every missing (judge, team) pair for the panel in one request (idempoten
 
 ### Assignment check on writes
 `POST /api/judge/score` and `POST /api/judge/draft` require an assignment for the judge **in that event and that round** (403 otherwise). Reads of a team (`GET /api/judge/team/<id>`) still only require an assignment for the team in any round.
+
+## Public Judging Schedule (Nov 2026)
+**GET** `/api/judge/schedule/{event_id}` — **no auth** (backs the public `/hack/{event_id}/judging` page, which replaced the per-event Google Doc of panels → judges → team channels).
+
+```json
+{
+  "event_id": "fall-2026",
+  "published": true,
+  "event": {"title": "…", "start_date": "…", "end_date": "…", "timezone": "America/Phoenix", "location": "…"},
+  "locks": {"round1": {"locked": false, …}, "round2": {…}},
+  "rounds": {
+    "round1": [{"panel_id": "<judge_panels doc id>", "panel_name": "Panel A", "room": "Room 101",
+                "judges": [{"id": "<volunteer doc id>", "name": "…", "title": "…", "company": "…", "photoUrl": "…", "linkedinProfile": "…"}],
+                "teams": [{"id": "<team id>", "name": "…", "slack_channel": "…", "demo_time": null, "room": "Room 101"}]}],
+    "round2": [/* same shape; teams sorted by demo_time, then name */]
+  },
+  "unassigned_judge_ids_count": 0
+}
+```
+
+- **Publish switch:** nothing but `published:false` + empty rounds is returned until `constraints.judging_schedule_published` is `true` on the hackathon (bool-validated in both hackathon validators). Assignments are not even read before that.
+- **Public fields only:** judges are resolved server-side from the judge applications (`judge_assignments.judge_id` = the application's `user_id`) and emit ONLY `PUBLIC_JUDGE_FIELDS` — never `user_id`, email, training links or intro videos. Teams emit name/Slack channel/room/demo time; readiness (video, write-up, commits) is computed by the frontend from the public event payload.
+- Grouped by `(round, panel_id)` — `panel_id` is the `judge_panels` doc id; an assignment pointing at a deleted panel renders as "Panel" with the assignment's room. Judges deduped + sorted by name; Round 1 teams by name; panels natural-sorted ("Panel 9" before "Panel 10"). Deleted team docs are skipped. Judges with assignments but no application are counted in `unassigned_judge_ids_count` (and logged), not shown.
+- **Cache:** 60 s TTL, cleared after every panel/assignment/bulk/lock write (`@_clears_public_schedule`) and by `hackathons_service.clear_cache()` (so the publish switch shows immediately). Errors are never cached. 404 `event_not_found`; 500 `read_failed`.
+- `get_judge_teams` (judge dashboard) now also returns `room` + `panel_name` on **Round 1** teams (assignment room first, then the panel's room).

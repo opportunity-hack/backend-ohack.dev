@@ -354,6 +354,12 @@ def validate_hackathon_data(data):
             if not isinstance(amount, int) or amount < 0 or amount > 50000:
                 raise ValueError("hacker_deposit.default_amount_cents must be a non-negative integer (cents) up to 50000")
 
+    # judging_schedule_published (Nov 2026) — gates the public
+    # /hack/<event>/judging page (panels, rooms, judges). Bool or null.
+    published = constraints.get("judging_schedule_published")
+    if published is not None and not isinstance(published, bool):
+        raise ValueError("judging_schedule_published must be a boolean")
+
     # Validate meals if present
     meals = constraints.get("meals")
     if meals is not None:
@@ -511,6 +517,11 @@ def validate_hackathon_data_partial(data):
             # max picks have independent ranges, plus max_picks must stay below
             # whatever slate size ends up in the cleaned constraints (falling
             # back to the service-layer default of 5 when unset here).
+            if "judging_schedule_published" in c and c["judging_schedule_published"] is not None:
+                if not isinstance(c["judging_schedule_published"], bool):
+                    _skip("constraints.judging_schedule_published", "must be a boolean")
+                    c.pop("judging_schedule_published")
+
             if "peer_vote_enabled" in c and c["peer_vote_enabled"] is not None:
                 if not isinstance(c["peer_vote_enabled"], bool):
                     _skip("constraints.peer_vote_enabled", "must be a boolean")

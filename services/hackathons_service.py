@@ -51,6 +51,14 @@ def clear_cache():
     get_hackathon_list.cache_clear()
     get_hackathon_funnel.cache_clear()
     delete_cached(_FUNNEL_AGG_CACHE_KEY)
+    # The public judging schedule reads constraints.judging_schedule_published
+    # through get_single_hackathon_event; drop it too so the admin publish
+    # switch shows at once. Lazy import: api.judging imports this module.
+    try:
+        from api.judging.judging_service import clear_public_schedule_cache
+        clear_public_schedule_cache()
+    except Exception as e:  # never fail a hackathon save over a cache
+        logger.warning(f"clear_public_schedule_cache failed: {e}")
 
 
 def add_nonprofit_to_hackathon(json):

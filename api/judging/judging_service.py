@@ -1,5 +1,9 @@
+import re
+import threading
 from typing import Dict
 from datetime import datetime
+
+from cachetools import cached, TTLCache
 
 from common.log import get_logger, debug, warning, error
 from db.db import (
@@ -36,6 +40,37 @@ from services.teams_service import (
 from common.utils.firebase import get_nonprofit_by_id, get_volunteer_from_db_by_event
 
 logger = get_logger("judging_service")
+
+
+# ---------------------------------------------------------------------------
+# Public judging schedule cache (Nov 2026). Defined up here because every
+# panel/assignment/lock write below is wrapped in @_clears_public_schedule.
+# ---------------------------------------------------------------------------
+
+_PUBLIC_SCHEDULE_CACHE = TTLCache(maxsize=100, ttl=60)
+_PUBLIC_SCHEDULE_LOCK = threading.Lock()
+
+
+def clear_public_schedule_cache():
+    """Drop every cached public schedule (cheap; called after any write that
+    changes panels, assignments, rooms, demo times or round locks — and by
+    hackathons_service.clear_cache so the publish switch shows at once)."""
+    with _PUBLIC_SCHEDULE_LOCK:
+        _PUBLIC_SCHEDULE_CACHE.clear()
+
+
+def _clears_public_schedule(fn):
+    """Clear the public schedule cache AFTER the wrapped write ran (clearing
+    before would let a concurrent read re-cache the old state)."""
+    import functools
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            clear_public_schedule_cache()
+    return wrapper
 
 
 def get_judge_assignments(judge_id: str) -> Dict:
@@ -143,6 +178,10 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
         round1_teams = []
         round2_teams = []
 
+        # Panel names + rooms for both rounds (one read). Round 1 used to carry
+        # no room, so judges couldn't tell where their panel sits.
+        panels_by_id = _panels_by_id(event_id)
+
         # Get all of the nonprofit IDs for this event as a set, remove any that are empty strings
         nonprofit_ids = {team.get('selected_nonprofit_id', '') for team in teams_data}
         nonprofit_ids = {id for id in nonprofit_ids if id}
@@ -173,14 +212,18 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
                                               users_by_id=users_by_id)
 
             if team_id in round1_team_ids:
-                round1_teams.append(team_data)
+                r1_assignment = next(
+                    (a for a in assignments if a.team_id == team_id and a.round == 'round1'), None)
+                r1_data = team_data.copy()
+                r1_data.update(_room_fields(r1_assignment, panels_by_id))
+                round1_teams.append(r1_data)
 
             if team_id in round2_team_ids:
                 # Add round2 specific fields
                 team2_data = team_data.copy()
                 team2_data.update({
                     "demo_time": assignment.demo_time if assignment else None,
-                    "room": assignment.room if assignment else None,
+                    **_room_fields(assignment, panels_by_id),
                     "judged": f"{team_id}_round2" in score_lookup,
                     "score": (score_lookup.get(f"{team_id}_round2").total_score
                               if f"{team_id}_round2" in score_lookup else None)
@@ -202,6 +245,28 @@ def get_judge_teams(judge_id: str, event_id: str) -> Dict:
         traceback.print_exc()
         return {"round1_teams": [], "round2_teams": [],
                 "error": "Failed to fetch teams"}
+
+
+def _panels_by_id(event_id: str) -> Dict:
+    """judge_panels doc id -> JudgePanel for the event. Best-effort: rooms
+    and panel names are decoration, never fail a payload over them."""
+    try:
+        return {p.id: p for p in (fetch_judge_panels_by_event(event_id) or [])
+                if getattr(p, "id", None)}
+    except Exception as e:
+        warning(logger, "Judge panel lookup failed", event_id=event_id, error=str(e))
+        return {}
+
+
+def _room_fields(assignment, panels_by_id: Dict) -> Dict:
+    """room + panel_name for one assignment. The assignment's own room wins
+    (round 2 sets it per slot); the panel's room is the fallback."""
+    if assignment is None:
+        return {"room": None, "panel_name": None}
+    panel = panels_by_id.get(getattr(assignment, "panel_id", None))
+    room = getattr(assignment, "room", None) or (panel.room if panel else None)
+    return {"room": room or None,
+            "panel_name": (panel.panel_name if panel else None) or None}
 
 
 def _event_summary(event_id: str) -> Dict:
@@ -625,6 +690,7 @@ def format_team_for_judge(team: Dict, score_lookup: Dict = None, nonprofit_id: s
 
 # Judge Assignment Management Functions
 
+@_clears_public_schedule
 def create_judge_assignment(judge_id: str, event_id: str, team_id: str,
                            round_name: str, demo_time: str = None,
                            room: str = None, panel_id: str = None) -> Dict:
@@ -678,6 +744,7 @@ def create_judge_assignment(judge_id: str, event_id: str, team_id: str,
         return {"success": False, "error": "Failed to create assignment"}
 
 
+@_clears_public_schedule
 def update_judge_assignment_details(assignment_id: str, demo_time: str = None,
                                    room: str = None) -> Dict:
     """Update judge assignment details like demo time and room."""
@@ -723,6 +790,7 @@ def update_judge_assignment_details(assignment_id: str, demo_time: str = None,
         return {"success": False, "error": "Failed to update assignment"}
 
 
+@_clears_public_schedule
 def remove_judge_assignment(assignment_id: str) -> Dict:
     """Remove a judge assignment."""
     try:
@@ -866,6 +934,7 @@ def get_judge_assignments_for_panel(panel_id: str) -> Dict:
         return {"assignments": [], "error": "Failed to fetch assignments for panel"}       
 
 
+@_clears_public_schedule
 def create_judge_panel(event_id: str, panel_name: str, room: str,
                       panel_id: str) -> Dict:
     """Create a new judge panel."""
@@ -899,6 +968,7 @@ def create_judge_panel(event_id: str, panel_name: str, room: str,
         return {"success": False, "error": "Failed to create panel"}
 
 
+@_clears_public_schedule
 def update_judge_panel_details(panel_id: str, panel_name: str = None,
                               room: str = None) -> Dict:
     """Update judge panel details."""
@@ -935,6 +1005,7 @@ def update_judge_panel_details(panel_id: str, panel_name: str = None,
         return {"success": False, "error": "Failed to update panel"}
 
 
+@_clears_public_schedule
 def remove_judge_panel(panel_id: str) -> Dict:
     """Remove a judge panel."""
     try:
@@ -1195,6 +1266,7 @@ def is_round_locked(event_id: str, round_name: str) -> bool:
     return bool(get_round_lock(event_id, round_name).get("locked"))
 
 
+@_clears_public_schedule
 def set_round_lock(event_id: str, round_name: str, locked: bool,
                    actor_id: str = None, actor_name: str = None) -> Dict:
     """Lock or unlock scoring for a round. Idempotent; returns the new lock."""
@@ -1418,6 +1490,7 @@ def _iso(value):
     return str(value)
 
 
+@_clears_public_schedule
 def bulk_create_judge_assignments(event_id: str, round_name: str, panel_id: str,
                                   judge_ids: list, team_ids: list, room: str = None,
                                   demo_times: Dict = None, replace: bool = False) -> Dict:
@@ -1512,3 +1585,172 @@ def bulk_create_judge_assignments(event_id: str, round_name: str, panel_id: str,
         import traceback
         traceback.print_exc()
         return {"success": False, "error": "Failed to create assignments"}
+
+
+# ---------------------------------------------------------------------------
+# Public judging schedule (Nov 2026) — GET /api/judge/schedule/<event_id>
+#
+# Replaces the Google Doc organizers kept per event (panel -> nonprofit,
+# judges, team Slack channels). Unauthenticated, so it emits ONLY public
+# fields: judge names/titles/companies/photos/LinkedIn (never user_id, email,
+# training links or intro videos) and team names/Slack channels/rooms/demo
+# times. Nothing is returned until an admin flips
+# constraints.judging_schedule_published. Readiness (video, write-up,
+# commits) is computed on the frontend from the public event payload.
+# ---------------------------------------------------------------------------
+
+class _EventNotFound(Exception):
+    pass
+
+
+PUBLIC_JUDGE_FIELDS = ("id", "name", "title", "company", "photoUrl", "linkedinProfile")
+UNKNOWN_PANEL_NAME = "Panel"
+
+
+def _natural_key(text):
+    """'Panel 10' sorts after 'Panel 9'."""
+    return [int(part) if part.isdigit() else part.lower()
+            for part in re.split(r"(\d+)", str(text or ""))]
+
+
+def _public_judge(judge: Dict) -> Dict:
+    return {
+        "id": judge.get("id"),
+        "name": (judge.get("name") or "").strip(),
+        "title": judge.get("title") or "",
+        "company": judge.get("companyName") or judge.get("company") or "",
+        "photoUrl": judge.get("photoUrl") or "",
+        "linkedinProfile": judge.get("linkedinProfile") or judge.get("linkedin") or "",
+    }
+
+
+def _public_judge_directory(event_id: str) -> Dict:
+    """PropelAuth user_id (= judge_assignments.judge_id) -> public judge card.
+    One query; the admin read is needed because the public roster strips
+    user_id, but only PUBLIC_JUDGE_FIELDS leave this function."""
+    directory = {}
+    for judge in _rows(get_volunteer_from_db_by_event(event_id, "judge", admin=True)):
+        uid = judge.get("user_id")
+        if not uid:
+            continue
+        # Prefer the selected application when someone applied twice.
+        if uid in directory and not judge.get("isSelected"):
+            continue
+        directory[uid] = _public_judge(judge)
+    return directory
+
+
+def _empty_rounds() -> Dict:
+    return {round_name: [] for round_name in JUDGING_ROUNDS}
+
+
+@cached(cache=_PUBLIC_SCHEDULE_CACHE, lock=_PUBLIC_SCHEDULE_LOCK)
+def _build_public_schedule(event_id: str) -> Dict:
+    """Raises _EventNotFound / JudgingReadError — exceptions are never cached."""
+    event = get_single_hackathon_event(event_id) or {}
+    if not event:
+        raise _EventNotFound(event_id)
+
+    constraints = event.get("constraints") or {}
+    published = constraints.get("judging_schedule_published") is True
+    result = {
+        "event_id": event_id,
+        "published": published,
+        "event": {
+            "title": event.get("title", ""),
+            "start_date": event.get("start_date"),
+            "end_date": event.get("end_date"),
+            "timezone": event.get("timezone"),
+            "location": event.get("location"),
+        },
+        "locks": get_round_locks(event_id, public=True),
+        "rounds": _empty_rounds(),
+        "unassigned_judge_ids_count": 0,
+    }
+    if not published:
+        # Never leak panels, judges or rooms before an admin publishes.
+        return result
+
+    assignments = [a for a in _rows(fetch_judge_assignments_by_event_id(event_id))
+                   if a.get("round") in JUDGING_ROUNDS and a.get("judge_id") and a.get("team_id")]
+    if not assignments:
+        return result
+
+    panels = _panels_by_id(event_id)
+    try:
+        directory = _public_judge_directory(event_id)
+    except JudgingReadError as e:
+        # Judge names are part of the page but not worth failing it over.
+        warning(logger, "Public schedule judge directory failed", event_id=event_id, error=str(e))
+        directory = {}
+
+    team_ids = list(dict.fromkeys(a["team_id"] for a in assignments))
+    teams = {t.get("id"): t for t in (get_teams_batch({"team_ids": team_ids}) or [])
+             if isinstance(t, dict) and t.get("id")}
+
+    groups = {}
+    missing_judges = set()
+    for a in assignments:
+        team = teams.get(a["team_id"])
+        if team is None:
+            continue  # deleted team doc — nothing to show
+        # judge_assignments.panel_id holds the judge_panels DOC id. Legacy
+        # rows without one are grouped by room so they still render.
+        panel_doc_id = a.get("panel_id") or ""
+        panel = panels.get(panel_doc_id)
+        key = panel_doc_id or f"room-{a.get('room') or 'unassigned'}"
+        group = groups.get((a["round"], key))
+        if group is None:
+            group = groups[(a["round"], key)] = {
+                "panel_id": key,
+                "panel_name": (panel.panel_name if panel else None) or UNKNOWN_PANEL_NAME,
+                "room": (panel.room if panel else None) or a.get("room") or None,
+                "_judges": {},
+                "_teams": {},
+            }
+        judge = directory.get(a["judge_id"])
+        if judge is None:
+            missing_judges.add(a["judge_id"])
+        elif judge["id"] not in group["_judges"]:
+            group["_judges"][judge["id"]] = judge
+        entry = group["_teams"].get(team["id"])
+        if entry is None:
+            entry = group["_teams"][team["id"]] = {
+                "id": team["id"],
+                "name": team.get("name") or "",
+                "slack_channel": team.get("slack_channel") or "",
+                "demo_time": None,
+                "room": None,
+            }
+        entry["demo_time"] = entry["demo_time"] or a.get("demo_time") or None
+        entry["room"] = entry["room"] or a.get("room") or group["room"]
+
+    if missing_judges:
+        warning(logger, "Public schedule: assigned judges with no judge application",
+                event_id=event_id, count=len(missing_judges))
+    result["unassigned_judge_ids_count"] = len(missing_judges)
+
+    for (round_name, _key), group in groups.items():
+        judges = sorted(group.pop("_judges").values(), key=lambda j: (j["name"].lower(), j["id"] or ""))
+        team_rows = list(group.pop("_teams").values())
+        if round_name == "round2":
+            team_rows.sort(key=lambda t: (t["demo_time"] is None, t["demo_time"] or "", t["name"].lower()))
+        else:
+            team_rows.sort(key=lambda t: t["name"].lower())
+        result["rounds"][round_name].append({**group, "judges": judges, "teams": team_rows})
+
+    for round_name in JUDGING_ROUNDS:
+        result["rounds"][round_name].sort(key=lambda p: (_natural_key(p["panel_name"]), p["panel_id"]))
+    return result
+
+
+def get_public_judging_schedule(event_id: str) -> Dict:
+    """Public panel/room/judge/team schedule for one event (60s cache,
+    cleared on every panel/assignment/lock write and on hackathon saves)."""
+    try:
+        return _build_public_schedule(event_id)
+    except _EventNotFound:
+        return {"error": "event_not_found"}
+    except Exception as e:
+        error(logger, "Error building public judging schedule", event_id=event_id, error=str(e))
+        return {"error": "read_failed"}
