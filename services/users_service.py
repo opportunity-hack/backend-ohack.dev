@@ -918,9 +918,10 @@ def _trim_event_for_portfolio(event):
     return {k: event.get(k) for k in keep if event.get(k) is not None}
 
 
-@redis_cached(prefix="portfolio:teams", ttl=900)
-def _fetch_portfolio_teams_cached(db_id):
-    """User's teams (allowlisted) with a trimmed `event` object attached."""
+def _fetch_portfolio_teams(db_id):
+    """User's teams (allowlisted) with a trimmed `event` object attached,
+    newest event first. Uncached — the own-profile "Your teams" card reads
+    this directly so a join/leave shows up on the next /profile load."""
     from db.db import fetch_user_portfolio_teams
     from common.utils.firebase import get_hackathon_by_event_id
 
@@ -941,6 +942,29 @@ def _fetch_portfolio_teams_cached(db_id):
     # Newest event first; teams with no event date sink to the end
     teams.sort(key=lambda t: ((t.get("event") or {}).get("start_date") or ""), reverse=True)
     return teams
+
+
+@redis_cached(prefix="portfolio:teams", ttl=900)
+def _fetch_portfolio_teams_cached(db_id):
+    """Public-portfolio copy of `_fetch_portfolio_teams` (15-min cache)."""
+    return _fetch_portfolio_teams(db_id)
+
+
+def get_my_teams(propel_id):
+    """Own-profile "Your teams": every team the caller is on, with its event,
+    newest event first (`GET /api/users/profile/teams`). Same allowlisted
+    team shape as the public portfolio, but read fresh (no redis cache) and
+    never gated by the `teams` privacy setting — it's the owner asking.
+    Returns None when the identity can't be resolved."""
+    user, _ = _resolve_and_ensure_user(propel_id)
+    if user is None:
+        return None
+    try:
+        teams = _fetch_portfolio_teams(user.id)
+    except Exception as e:
+        warning(logger, "Failed to load own teams", db_id=getattr(user, "id", None), error=str(e))
+        teams = []
+    return {"teams": teams}
 
 
 def _attach_teams(user, public_data, privacy_settings):
