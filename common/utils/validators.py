@@ -26,6 +26,12 @@ DEADLINE_KEYS = {"submission", "late_submission_until", "voting_opens", "voting_
 PEER_VOTE_SLATE_SIZE_RANGE = (3, 10)
 PEER_VOTE_MAX_PICKS_RANGE = (1, 5)
 
+# Hacker application lock / auto-approve settings (Nov 2026). The access code
+# unlocks a manually locked (or ended) hacker form; capacity caps auto-approve
+# and is stated on the public form. Frontend: ParticipantsSection.js.
+MAX_HACKER_ACCESS_CODE_LENGTH = 64
+HACKER_CAPACITY_RANGE = (1, 10000)
+
 # Regular expression for email validation
 # This regex follows the RFC 5322 standard for email addresses
 EMAIL_REGEX = re.compile(r"""(?:[a-z0-9!#$%&'*+/=?^_`{|}~-]+(?:\.[a-z0-9!#$%&'*+/=?^_`{|}~-]+)*|"(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21\x23-\x5b\x5d-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])*")@(?:(?:[a-z0-9](?:[a-z0-9-]*[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]*[a-z0-9])?|\[(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?|[a-z0-9-]*[a-z0-9]:(?:[\x01-\x08\x0b\x0c\x0e-\x1f\x21-\x5a\x53-\x7f]|\\[\x01-\x09\x0b\x0c\x0e-\x7f])+)\])""", re.IGNORECASE)
@@ -537,6 +543,26 @@ def validate_hackathon_data_partial(data):
                 if not isinstance(c["peer_vote_requires_submission"], bool):
                     _skip("constraints.peer_vote_requires_submission", "must be a boolean")
                     c.pop("peer_vote_requires_submission")
+
+            # Hacker application lock + auto-approve (Nov 2026).
+            if "application_hacker_enabled_code" in c and c["application_hacker_enabled_code"] is not None:
+                code = c["application_hacker_enabled_code"]
+                if not isinstance(code, str) or len(code) > MAX_HACKER_ACCESS_CODE_LENGTH:
+                    _skip("constraints.application_hacker_enabled_code", f"must be a string <= {MAX_HACKER_ACCESS_CODE_LENGTH} chars")
+                    c.pop("application_hacker_enabled_code")
+
+            for bool_key in ("application_hacker_close_at_deadline", "hacker_auto_approve"):
+                if bool_key in c and c[bool_key] is not None:
+                    if not isinstance(c[bool_key], bool):
+                        _skip(f"constraints.{bool_key}", "must be a boolean")
+                        c.pop(bool_key)
+
+            if "hacker_capacity" in c and c["hacker_capacity"] is not None:
+                cap = c["hacker_capacity"]
+                lo, hi = HACKER_CAPACITY_RANGE
+                if not isinstance(cap, int) or isinstance(cap, bool) or not (lo <= cap <= hi):
+                    _skip("constraints.hacker_capacity", f"must be an integer between {lo} and {hi}, or null for no limit")
+                    c.pop("hacker_capacity")
 
             cleaned["constraints"] = c
 

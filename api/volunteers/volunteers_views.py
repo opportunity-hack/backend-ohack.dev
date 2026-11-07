@@ -133,7 +133,14 @@ def handle_submit(user, event_id: str, volunteer_type: str) -> Tuple[Dict[str, A
             created_by=user_id,
             recaptcha_token=recaptcha_token
         )
-        
+
+        # create_or_update_volunteer reports rejections (failed reCAPTCHA, a
+        # wrong eligibility answer) as {"error": ...}. Those used to ride back
+        # inside a 200 "submitted successfully", so the form showed its success
+        # screen for an application that was never saved.
+        if isinstance(result, dict) and result.get("error"):
+            return _error_response(result["error"], 400)
+
         return _success_response(result, "Application submitted successfully")
     except Exception as e:
         logger.error(f"Error submitting {volunteer_type} application: {str(e)}")

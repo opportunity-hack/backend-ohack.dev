@@ -46,6 +46,8 @@ STAFF_OWNED_VOLUNTEER_FIELDS = frozenset({
     'deposit_status', 'deposit_refund_id', 'deposit_refund_amount_cents',
     'deposit_refunded_at', 'deposit_refunded_by', 'deposit_refund_status_msg',
     'certificates', 'sent_emails',
+    # Written only by the hacker auto-approve hook (_apply_roster_decision).
+    'auto_approved', 'auto_approved_at',
 })
 
 def _notifications_disabled() -> bool:
@@ -278,7 +280,7 @@ def verify_recaptcha(token: str) -> bool:
 def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str,
     calendar_attachments: Optional[List[Dict[str, Any]]] = None, event_id: Optional[str] = None,
     volunteer_id: Optional[str] = None, shifts: Optional[List[str]] = None,
-    event: Optional[Dict[str, Any]] = None) -> Optional[str]:
+    event: Optional[Dict[str, Any]] = None, roster_outcome: Optional[str] = None) -> Optional[str]:
     """
     Send a confirmation email to the volunteer who submitted the form.
     
@@ -293,6 +295,8 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
             split_availability_slots) rendered as a "Your shifts" list
         event: Optional hackathon summary (see _hackathon_for_confirmation)
             rendered as a "Your event" block — title, dates, venue, event link
+        roster_outcome: "approved" | "waitlisted" | None — set when hacker
+            auto-approve decided this application (see _hacker_roster_decision)
         
     Returns:
         True if email was sent successfully, False otherwise
@@ -311,6 +315,10 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
     try:
         volunteer_type_readable = volunteer_type.capitalize()
         is_reviewed_role = volunteer_type.lower() in ("mentor", "judge")
+        is_hacker = volunteer_type.lower() == "hacker"
+        confirmed = is_hacker and roster_outcome == "approved"
+        waitlisted = is_hacker and roster_outcome == "waitlisted"
+        event_slug_raw = str((event or {}).get("event_id") or event_id or "")
         # Format the name properly, handling empty strings
         full_name = first_name + " " + last_name if first_name and last_name else first_name or last_name or "Volunteer"
 
@@ -378,6 +386,33 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 </p>
             </div>"""
 
+        # Hacker auto-approve outcome (Nov 2026). Confirmed hackers get their
+        # check-in QR + team links up front; waitlisted ones a calm "we'll email
+        # you" — never a rejection.
+        roster_banner = ""
+        if confirmed:
+            slug = html.escape(event_slug_raw)
+            roster_banner = f"""
+            <div style="background-color: #e8f5e9; padding: 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #27ae60;">
+                <h3 style="color: #1e7e34; margin: 0 0 8px 0; font-size: 18px;">✅ You're confirmed — you're on the roster</h3>
+                <p style="margin: 0 0 12px 0; font-size: 15px; color: #2c3e50;">
+                    There's nothing else to wait for. Your application page now shows your personal <strong>check-in QR code</strong> — have it ready on your phone when you arrive. Next, find or set up your team.
+                </p>
+                <p style="margin: 0; font-size: 15px;">
+                    <a href="https://www.ohack.dev/hack/{slug}/hacker-application" style="color: #1B3A6B; font-weight: bold; text-decoration: none;">Your check-in QR code →</a>
+                    &nbsp;&nbsp;
+                    <a href="https://www.ohack.dev/hack/{slug}/manageteam" style="color: #1B3A6B; font-weight: bold; text-decoration: none;">Set up your team →</a>
+                </p>
+            </div>"""
+        elif waitlisted:
+            roster_banner = """
+            <div style="background-color: #fff8e1; padding: 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+                <h3 style="color: #92400e; margin: 0 0 8px 0; font-size: 18px;">⏳ You're on the waitlist</h3>
+                <p style="margin: 0; font-size: 15px; color: #78350f;">
+                    The event has reached capacity, so we've saved your application on the waitlist. If a spot opens up we'll email you right away — thank you for wanting to build with us.
+                </p>
+            </div>"""
+
         # Generate volunteer type specific content
         volunteer_specific_content = ""
         if volunteer_type.lower() == "mentor":
@@ -433,16 +468,21 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
             </div>"""
 
         subject_prefix = "[Pending Review] " if is_reviewed_role else ""
-        intro_line = (
-            f"Thanks for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack — your application has been received."
-            if is_reviewed_role
-            else f"Thank you for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. We've received your information and our team will review it shortly."
-        )
+        subject = f"{subject_prefix}Thanks for your Opportunity Hack {volunteer_type_readable} application"
+        if is_reviewed_role:
+            intro_line = f"Thanks for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack — your application has been received."
+        elif confirmed:
+            subject = "[Confirmed] You're in — Opportunity Hack Hacker application"
+            intro_line = "Thanks for applying as a <strong>Hacker</strong> for Opportunity Hack — you're in, and we can't wait to build with you."
+        elif waitlisted:
+            intro_line = "Thanks for applying as a <strong>Hacker</strong> for Opportunity Hack — we've received your application."
+        else:
+            intro_line = f"Thank you for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. We've received your information and our team will review it shortly."
 
         params = {
             "from": "Opportunity Hack <welcome@notifs.ohack.org>",
             "to": [email],
-            "subject": f"{subject_prefix}Thanks for your Opportunity Hack {volunteer_type_readable} application",
+            "subject": subject,
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border-radius: 5px;">
                 <div style="text-align: center; margin-bottom: 20px;">
@@ -452,6 +492,7 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <p style="font-size: 16px;">Hello {full_name},</p>
                 <p style="font-size: 16px;">{intro_line}</p>
                 {event_block}
+                {roster_banner}
                 {pending_review_banner}
                 {shifts_block}
                 {calendar_note}
@@ -801,22 +842,136 @@ def _ical_escape(text: Any) -> str:
     )
 
 
-def _hackathon_for_confirmation(event_id: Optional[str]) -> Optional[Dict[str, Any]]:
-    """The hackathon fields the confirmation email + calendar invites need
-    (title, venue, timezone, dates). None when the event can't be found —
-    callers fall back to generic copy rather than guessing a location."""
+def _load_hackathon_record(event_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The raw hackathon doc for ``event_id`` (one query), or None when it
+    can't be found/read. create_or_update_volunteer loads it ONCE and derives
+    both the constraints (required questions, auto-approve) and the
+    confirmation-email event summary from it."""
     if not event_id:
         return None
     try:
         docs = get_db().collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
         for doc in docs:
-            rec = doc.to_dict() or {}
-            event = {k: rec.get(k) for k in _CONFIRMATION_HACKATHON_FIELDS}
-            event["event_id"] = rec.get("event_id") or event_id
-            return event
+            return doc.to_dict() or {}
     except Exception as e:
-        warning(logger, "Failed to load hackathon for confirmation email", event_id=event_id, exc_info=e)
+        warning(logger, "Failed to load hackathon record", event_id=event_id, exc_info=e)
     return None
+
+
+def _confirmation_event_from_record(record: Optional[Dict[str, Any]], event_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if record is None:
+        return None
+    event = {k: record.get(k) for k in _CONFIRMATION_HACKATHON_FIELDS}
+    event["event_id"] = record.get("event_id") or event_id
+    return event
+
+
+def _hackathon_for_confirmation(event_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The hackathon fields the confirmation email + calendar invites need
+    (title, venue, timezone, dates). None when the event can't be found —
+    callers fall back to generic copy rather than guessing a location."""
+    return _confirmation_event_from_record(_load_hackathon_record(event_id), event_id)
+
+
+# Review statuses an applicant can never be auto-approved out of — a staff
+# decision (or the applicant's own withdrawal) always wins over the switch.
+_AUTO_APPROVE_BLOCKED_STATUSES = frozenset({"denied", "withdrew", "no_show"})
+
+
+def _count_selected_hackers(event_id: str) -> int:
+    """How many hackers are on the event roster (isSelected=True). Uses a
+    Firestore count() aggregation; falls back to streaming ids when the client
+    lacks it (MockFirestore in tests, very old SDKs)."""
+    query = (
+        get_db().collection('volunteers')
+        .where('event_id', '==', event_id)
+        .where('volunteer_type', '==', 'hacker')
+        .where('isSelected', '==', True)
+    )
+    try:
+        result = query.count(alias='n').get()
+        return int(result[0][0].value)
+    except Exception:
+        try:
+            return sum(1 for _ in query.select([]).stream())
+        except Exception:
+            return sum(1 for _ in query.stream())
+
+
+def _hacker_roster_decision(volunteer_type: Optional[str], event_id: str,
+                            constraints: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Auto-approve decision for a hacker submit/update (Nov 2026).
+
+    Returns None unless the event has ``constraints.hacker_auto_approve`` on
+    and this is a hacker application; otherwise "approved" while the roster is
+    under ``constraints.hacker_capacity`` (None/absent = no limit) and
+    "waitlisted" once it is full.
+
+    Read-then-write race: two submits landing at the same moment can both see
+    count == capacity - 1 and both get approved, so the roster can exceed the
+    cap by a handful. Accepted at walk-in volume (~10 people); admins can take
+    anyone off the roster in the Volunteer section.
+    """
+    if volunteer_type != 'hacker' or not constraints:
+        return None
+    if constraints.get('hacker_auto_approve') is not True:
+        return None
+    capacity = constraints.get('hacker_capacity')
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
+        return "approved"
+    try:
+        on_roster = _count_selected_hackers(event_id)
+    except Exception as e:
+        # Can't tell whether there's room — leave the application pending for
+        # a human rather than over- or under-filling the roster.
+        warning(logger, "Could not count the hacker roster; skipping auto-approve", event_id=event_id, exc_info=e)
+        return None
+    return "approved" if on_roster < capacity else "waitlisted"
+
+
+def _roster_decision_fields(decision: Optional[str]) -> Dict[str, Any]:
+    """Fields an auto-approve decision writes onto the volunteer doc."""
+    if decision == "approved":
+        return {
+            'isSelected': True,
+            'status': 'approved',
+            'auto_approved': True,
+            'auto_approved_at': _get_current_timestamp(),
+        }
+    if decision == "waitlisted":
+        return {'status': 'waitlisted', 'auto_approved': False}
+    return {}
+
+
+def _after_hacker_auto_approve(volunteer_id: str, event_id: str, email: str, decision: str) -> None:
+    """Bust the admin roster cache and leave a Slack audit trail, mirroring
+    update_volunteer_selection. Never allowed to fail the submit."""
+    try:
+        from services.hackathons_service import get_volunteer_by_event
+        get_volunteer_by_event.cache_clear()
+    except Exception as e:
+        warning(logger, "Failed to clear get_volunteer_by_event cache",
+                volunteer_id=volunteer_id, event_id=event_id, exc_info=e)
+
+    if _notifications_disabled():
+        return
+    try:
+        from common.utils.slack import send_slack_audit
+        send_slack_audit(
+            action="auto_approve_hacker",
+            message=(
+                f"Hacker {email} was auto-{'approved onto the roster' if decision == 'approved' else 'waitlisted (event at capacity)'} "
+                f"for {event_id} (volunteer {volunteer_id})"
+            ),
+            payload={
+                "volunteer_id": volunteer_id,
+                "event_id": event_id,
+                "decision": decision,
+            },
+        )
+    except Exception as e:
+        warning(logger, "Failed to send auto-approve Slack audit",
+                volunteer_id=volunteer_id, exc_info=e)
 
 
 def _calendar_event_name(event: Optional[Dict[str, Any]]) -> str:
@@ -1216,20 +1371,18 @@ def create_or_update_volunteer(
             warning(logger, "reCAPTCHA verification failed", email=email)
             return {"error": "reCAPTCHA verification failed"}
 
+    # ONE hackathon lookup serves the required-questions check, the hacker
+    # auto-approve decision and the confirmation email/.ics context below.
+    hackathon_record = _load_hackathon_record(event_id)
+    constraints = (hackathon_record or {}).get('constraints') or {}
+
     # Validate required question answers for hacker applications
     if volunteer_data.get('volunteer_type') == 'hacker':
         submitted_answers = volunteer_data.get('requiredQuestionAnswers', [])
         if submitted_answers:
             try:
-                db_temp = get_db()
-                hackathon_docs = db_temp.collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
-                hackathon_data = None
-                for doc in hackathon_docs:
-                    hackathon_data = doc.to_dict()
-                    break
-
-                if hackathon_data:
-                    questions = hackathon_data.get('constraints', {}).get('hacker_required_questions', {}).get('questions', [])
+                if hackathon_record:
+                    questions = (constraints.get('hacker_required_questions') or {}).get('questions', [])
                     if questions:
                         if len(submitted_answers) != len(questions):
                             warning(logger, "Required question answer count mismatch", email=email, event_id=event_id)
@@ -1262,8 +1415,9 @@ def create_or_update_volunteer(
     existing = find_volunteer_by_caller_identity(user_id, event_id, volunteer_type)
 
     # Title / venue / timezone / dates for the confirmation email and its .ics
-    # invites. One lookup serves both branches below.
-    event_ctx = _hackathon_for_confirmation(event_id)
+    # invites — derived from the record loaded above.
+    event_ctx = _confirmation_event_from_record(hackathon_record, event_id)
+    roster_outcome = None
     
     if existing:
         # Update existing record
@@ -1289,6 +1443,16 @@ def create_or_update_volunteer(
         # the stored value forward so docs predating the field still get one.
         update_data['isSelected'] = existing.get('isSelected', False)
 
+        # Hacker auto-approve (Nov 2026): an applicant still waiting on review
+        # who updates while the switch is on goes onto the roster too. Never
+        # un-approves, and never overrides a denied/withdrew/no_show decision.
+        # At capacity the stored status is left alone (they stay pending).
+        existing_status = str(existing.get('status') or '').strip().lower()
+        if not existing.get('isSelected') and existing_status not in _AUTO_APPROVE_BLOCKED_STATUSES:
+            if _hacker_roster_decision(volunteer_type, event_id, constraints) == "approved":
+                roster_outcome = "approved"
+                update_data.update(_roster_decision_fields("approved"))
+
         # Log volunteer_data
         logger.debug(f"volunteer_data: {volunteer_data}")
         logger.debug(f"Updating volunteer record {volunteer_id} with complete data including new fields {update_data}")
@@ -1309,6 +1473,8 @@ def create_or_update_volunteer(
         
         # Clear all related caches
         _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+        if roster_outcome:
+            _after_hacker_auto_approve(volunteer_id, event_id, email, roster_outcome)
         
         # Send admin notification about the update
         try:
@@ -1337,7 +1503,7 @@ def create_or_update_volunteer(
                 
             send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
                                               shifts=split_availability_slots(volunteer_data.get('availability', '')),
-                                              event=event_ctx)
+                                              event=event_ctx, roster_outcome=roster_outcome)
 
             info(logger, "Sent notifications about updated volunteer", email=email)
         except Exception as e:
@@ -1364,6 +1530,10 @@ def create_or_update_volunteer(
         
         # Add volunteer data
         volunteer_doc.update(volunteer_data)
+
+        # Hacker auto-approve (Nov 2026) — see _hacker_roster_decision.
+        roster_outcome = _hacker_roster_decision(volunteer_type, event_id, constraints)
+        volunteer_doc.update(_roster_decision_fields(roster_outcome))
         
         # Try to get Slack user ID
         try:
@@ -1378,6 +1548,8 @@ def create_or_update_volunteer(
         
         # Clear all related caches 
         _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+        if roster_outcome:
+            _after_hacker_auto_approve(volunteer_id, event_id, email, roster_outcome)
 
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
@@ -1414,7 +1586,7 @@ def create_or_update_volunteer(
                 
             send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
                                               shifts=split_availability_slots(volunteer_data.get('availability', '')),
-                                              event=event_ctx)
+                                              event=event_ctx, roster_outcome=roster_outcome)
             send_admin_notification_email(volunteer_doc)
             send_slack_volunteer_notification(volunteer_doc)
             info(logger, "Sent notifications for new volunteer", email=email)
