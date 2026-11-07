@@ -934,3 +934,100 @@ def test_get_my_roles_for_event_empty_when_nothing_matches(mock_get_db, mock_ids
     mock_get_db.return_value = mock_db
     assert get_my_roles_for_event("propel-1", "EVT") == {"roles": []}
     assert get_my_roles_for_event("", "EVT") == {"roles": []}
+
+
+# ---------------------------------------------------------------------------
+# Confirmation email — role-specific "what happens next" blocks
+# ---------------------------------------------------------------------------
+
+def _send_confirmation_capturing_html(volunteer_type, shifts=None):
+    """Run send_volunteer_confirmation_email with Resend stubbed and return the html."""
+    import os
+    from services import volunteers_service
+    sent = {}
+
+    def fake_send(params):
+        sent.update(params)
+        return {"id": "re_test"}
+
+    with patch("services.volunteers_service._notifications_disabled", return_value=False), \
+         patch.dict(os.environ, {"RESEND_WELCOME_EMAIL_KEY": "re_dummy"}), \
+         patch("services.volunteers_service.resend.Emails.send", side_effect=fake_send):
+        result = volunteers_service.send_volunteer_confirmation_email(
+            "Sam", "Doe", "sam@example.com", volunteer_type, None, "fall-2026", volunteer_id=None,
+            shifts=shifts,
+        )
+    assert result == "re_test"
+    return sent
+
+
+def test_confirmation_email_volunteer_links_to_the_volunteer_guide():
+    sent = _send_confirmation_capturing_html("volunteer")
+    assert "https://www.ohack.dev/about/volunteers" in sent["html"]
+    assert "check-in QR code" in sent["html"]
+    # Event volunteers aren't staff-reviewed: no pending-review framing.
+    assert "[Pending Review]" not in sent["subject"]
+    assert "pending review" not in sent["html"].lower()
+
+
+def test_confirmation_email_mentor_keeps_mentor_block_and_pending_banner():
+    sent = _send_confirmation_capturing_html("mentor")
+    assert "https://www.ohack.dev/about/mentors" in sent["html"]
+    assert "https://www.ohack.dev/about/volunteers" not in sent["html"]
+    assert sent["subject"].startswith("[Pending Review]")
+
+
+VOLUNTEER_AVAILABILITY = (
+    "Saturday, Nov 14: Doors Open & Registration - 📋 Check-in Registration (8:00am - 11:00am MST), "
+    "Saturday, Nov 14: Afternoon Support - 🧹 Cleanup Crew (2:30pm - 5:00pm MST), "
+    "Saturday, Nov 14: Midnight Run - 🍕 Food Service (11:30pm - 12:30am MST)"
+)
+
+
+def test_split_availability_slots_keeps_each_shift_whole():
+    from services.volunteers_service import split_availability_slots
+    slots = split_availability_slots(VOLUNTEER_AVAILABILITY)
+    assert len(slots) == 3
+    assert slots[0].startswith("Saturday, Nov 14: Doors Open & Registration")
+    assert split_availability_slots("I'm around all weekend") == []
+    assert split_availability_slots("") == []
+
+
+def test_calendar_attachments_use_the_volunteer_shift_hours():
+    """Volunteer shifts carry explicit hours; they used to be dropped (not in the
+    mentor mapping) or mis-timed ("Afternoon Support" → the mentor 1-3pm block)."""
+    result = get_calendar_email_attachment_from_availability(
+        VOLUNTEER_AVAILABILITY, "vol@example.com", volunteer_type="volunteer", year=2026
+    )
+    assert len(result) == 3
+    contents = [a["content"] for a in result]
+    assert "DTSTART:20261114T080000MST" in contents[0]
+    assert "DTEND:20261114T110000MST" in contents[0]
+    assert "DTSTART:20261114T143000MST" in contents[1]
+    assert "DTEND:20261114T170000MST" in contents[1]
+    # Midnight run spans into the next day.
+    assert "DTSTART:20261114T233000MST" in contents[2]
+    assert "DTEND:20261115T003000MST" in contents[2]
+    assert all("ATTENDEE:MAILTO:vol@example.com" in c for c in contents)
+
+
+def test_calendar_attachments_mentor_named_slots_still_use_the_mapping():
+    result = get_calendar_email_attachment_from_availability(
+        "Saturday, Nov 14: 🌅 Early Morning (7am - 9am MST)", "m@example.com",
+        volunteer_type="mentor", year=2026,
+    )
+    assert len(result) == 1
+    assert "DTSTART:20261114T070000MST" in result[0]["content"]
+
+
+def test_confirmation_email_lists_the_shifts_as_text():
+    from services.volunteers_service import split_availability_slots
+    sent = _send_confirmation_capturing_html("volunteer", shifts=split_availability_slots(VOLUNTEER_AVAILABILITY))
+    assert "Your shifts" in sent["html"]
+    assert "Doors Open &amp; Registration - 📋 Check-in Registration (8:00am - 11:00am MST)" in sent["html"]
+    assert "Midnight Run" in sent["html"]
+
+
+def test_confirmation_email_without_shifts_has_no_shift_block():
+    sent = _send_confirmation_capturing_html("judge", shifts=[])
+    assert "Your shifts" not in sent["html"]
