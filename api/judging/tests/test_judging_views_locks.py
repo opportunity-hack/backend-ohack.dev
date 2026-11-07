@@ -223,3 +223,28 @@ def test_public_locks_route_uses_public_view(views, client, monkeypatch):
     res = client.get("/api/judge/locks/fall-2026", headers=HEADERS)
     assert res.status_code == 200
     assert seen["public"] is True
+
+
+# ---------------------------------------------------------------------------
+# Public judging schedule (Nov 2026). Lives here, not in
+# test_public_schedule.py, because importing the views boots PropelAuth —
+# this file's `views` fixture stubs common.auth first (CI has no real
+# PROPEL_AUTH_URL; the un-stubbed import failed the develop deploy).
+# ---------------------------------------------------------------------------
+
+def test_schedule_route_is_public_and_maps_errors(views, client, monkeypatch):
+    # No auth decorator on the route: the stubbed decorators would set
+    # g.propelauth_current_user, so a public route never touches it.
+    view = client.application.view_functions["api-judging.get_public_schedule_api"]
+    assert not hasattr(view, "__wrapped__")
+
+    monkeypatch.setattr(views, "get_public_judging_schedule", lambda e: {
+        "event_id": e, "published": False, "rounds": {"round1": [], "round2": []}})
+    res = client.get("/api/judge/schedule/fall-2026")  # no Authorization header
+    assert res.status_code == 200 and res.get_json()["published"] is False
+
+    monkeypatch.setattr(views, "get_public_judging_schedule", lambda e: {"error": "event_not_found"})
+    assert client.get("/api/judge/schedule/nope").status_code == 404
+
+    monkeypatch.setattr(views, "get_public_judging_schedule", lambda e: {"error": "read_failed"})
+    assert client.get("/api/judge/schedule/fall-2026").status_code == 500
