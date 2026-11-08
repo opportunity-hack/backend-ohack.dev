@@ -1088,8 +1088,15 @@ Let's make a difference! :muscle: :heart:
     # Lazy import: teams_service must never import gateway_keys at module top.
     try:
         from api.teams.gateway_keys import provision_team_gateway_key
-        provision_team_gateway_key(team_id)
-        logger.info("Gateway API key provisioned for team %s", team_id)
+        meta = provision_team_gateway_key(team_id)
+        partial = (meta or {}).get("partial_failure")
+        if partial:
+            logger.warning(
+                "Gateway %s mint failed for team %s (non-blocking; admin retry mints it): %s",
+                partial.get("label"), team_id, partial.get("error"),
+            )
+        else:
+            logger.info("Gateway API keys provisioned for team %s", team_id)
     except Exception as e:
         logger.warning("Gateway key provisioning failed for team %s (non-blocking): %s", team_id, e)
 
