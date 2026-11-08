@@ -763,42 +763,18 @@ def single_add_volunteer(event_id, json, volunteer_type, propel_id):
 
 
 @limits(calls=50, period=ONE_MINUTE)
-def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
-    db = _get_db()
-    logger.info(f"update_hackathon_volunteers for event_id={event_id} propel_id={propel_id}")
-    logger.info("JSON: " + str(json))
-    send_slack_audit(action="update_hackathon_volunteers", message="Updating", payload=json)
+def volunteer_was_checked_in(doc_dict) -> bool:
+    """A volunteer doc counts as checked in only when `checkedIn` is literally True."""
+    return bool(doc_dict) and doc_dict.get("checkedIn") is True
 
-    if "id" not in json:
-        logger.error("Missing id field")
-        return Message("Missing id field")
 
-    # Review fields ride this PATCH; the roster bit (`isSelected`) and the
-    # UI routing key (`type`) are stripped — see validate_volunteer_admin_patch.
-    try:
-        json = validate_volunteer_admin_patch(json)
-    except ValueError as e:
-        logger.error(f"update_hackathon_volunteers rejected payload: {e}")
-        return Message(str(e))
-
-    volunteer_id = json["id"]
-
-    admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
-
-    doc_ref = db.collection("volunteers").document(volunteer_id)
-    doc = doc_ref.get()
-    doc_dict = doc.to_dict()
-    doc_volunteer_type = doc_dict.get("volunteer_type", "participant").lower()
-
-    if doc_ref is None:
-        return Message("No volunteer for Hackathon Found")
-
-    json["updated_by"] = admin_name
-    json["updated_timestamp"] = datetime.now().isoformat()
-
-    doc_ref.update(json)
-
-    slack_user_id = doc.to_dict().get('slack_user_id') if doc_dict else None
+def send_checkin_welcome(doc_dict, event_id, volunteer_id, checking_in=True, was_checked_in=False):
+    """Slack welcome for a FIRST check-in: invite to #hackathon-welcome, post
+    there, and DM role guidance. Shared by the legacy admin PATCH
+    (`update_hackathon_volunteers`) and `api/checkin` so the copy can't drift.
+    Repeat check-ins only log."""
+    doc_volunteer_type = (doc_dict or {}).get("volunteer_type", "participant").lower()
+    slack_user_id = doc_dict.get('slack_user_id') if doc_dict else None
 
     if not slack_user_id:
         logger.warning(f"Volunteer {volunteer_id} has no slack_user_id; skipping Slack welcome message")
@@ -845,7 +821,7 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
 🚀 Ready to code for good? Let's build technology that makes a real difference for nonprofits and people in the world!
 """
 
-    if json.get("checkedIn") is True and "checkedIn" not in doc_dict.keys() and doc_dict.get("checkedIn") != True:
+    if checking_in and not was_checked_in:
         if slack_user_id:
             logger.info(f"Volunteer {volunteer_id} just checked in, sending welcome message to {slack_user_id}")
             invite_user_to_channel(slack_user_id, "hackathon-welcome")
@@ -865,6 +841,47 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
             logger.warning(f"Volunteer {volunteer_id} checked in but no slack_user_id — skipping Slack welcome")
     else:
         logger.info(f"Volunteer {volunteer_id} checked in again, no welcome message sent.")
+
+
+def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
+    db = _get_db()
+    logger.info(f"update_hackathon_volunteers for event_id={event_id} propel_id={propel_id}")
+    logger.info("JSON: " + str(json))
+    send_slack_audit(action="update_hackathon_volunteers", message="Updating", payload=json)
+
+    if "id" not in json:
+        logger.error("Missing id field")
+        return Message("Missing id field")
+
+    # Review fields ride this PATCH; the roster bit (`isSelected`) and the
+    # UI routing key (`type`) are stripped — see validate_volunteer_admin_patch.
+    try:
+        json = validate_volunteer_admin_patch(json)
+    except ValueError as e:
+        logger.error(f"update_hackathon_volunteers rejected payload: {e}")
+        return Message(str(e))
+
+    volunteer_id = json["id"]
+
+    admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
+
+    doc_ref = db.collection("volunteers").document(volunteer_id)
+    doc = doc_ref.get()
+    doc_dict = doc.to_dict()
+
+    if doc_ref is None:
+        return Message("No volunteer for Hackathon Found")
+
+    json["updated_by"] = admin_name
+    json["updated_timestamp"] = datetime.now().isoformat()
+
+    doc_ref.update(json)
+
+    send_checkin_welcome(
+        doc_dict, event_id, volunteer_id,
+        checking_in=json.get("checkedIn") is True,
+        was_checked_in=volunteer_was_checked_in(doc_dict),
+    )
 
     get_volunteer_by_event.cache_clear()
 

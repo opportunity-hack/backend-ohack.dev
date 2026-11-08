@@ -22,10 +22,19 @@ from werkzeug.local import LocalProxy
 DEFAULT_FAKE_USER = types.SimpleNamespace(user_id="fake-propel-uuid", email="fake@example.com")
 
 
+CHECKIN_PERMISSIONS = ("volunteer.admin", "checkin.admin")
+
+
 def _module(auth_ns):
     stub = types.ModuleType("common.auth")
     stub.auth = auth_ns
     stub.auth_user = LocalProxy(lambda: getattr(g, "propelauth_current_user", None))
+    stub.getOrgId = lambda req: req.headers.get("X-Org-Id")
+    stub.CHECKIN_PERMISSIONS = CHECKIN_PERMISSIONS
+    # Module-level any-of gate (common.auth.require_any_permission) — same
+    # behaviour as the namespace's org-permission decorator in each flavour.
+    stub.require_any_permission = auth_ns.require_org_member_with_permission
+    stub.user_has_any_permission = lambda user, perms: True
     return stub
 
 
@@ -82,10 +91,20 @@ def rejecting_auth_module(user=DEFAULT_FAKE_USER):
 
         return wrapper
 
-    return _module(
+    def require_any_permission(_perms, req_to_org_id=None):
+        # The real one stacks require_user (401) under the org/permission
+        # check (403) — mirror that order.
+        def decorator(fn):
+            return require_user(require_org_member_with_permission(_perms, req_to_org_id)(fn))
+
+        return decorator
+
+    stub = _module(
         types.SimpleNamespace(
             require_user=require_user,
             require_org_member_with_permission=require_org_member_with_permission,
             optional_user=optional_user,
         )
     )
+    stub.require_any_permission = require_any_permission
+    return stub
