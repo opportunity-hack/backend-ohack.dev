@@ -276,11 +276,19 @@ def rotate_gateway_key_api(teamid):
     """
     Admin endpoint to rotate a team's AI gateway key (leak recovery).
     Deletes the old key in LiteLLM and mints a fresh one under the same alias.
+    Body: { "key": "key1" | "key2" } - defaults to "key1" when absent.
+    Only the named key is rotated; the other key is left alone.
     """
     logger.info(f"POST /team/{teamid}/gateway-key/rotate called")
     if auth_user and auth_user.user_id:
+        body = request.get_json(silent=True) or {}
+        key_name = body.get("key", "key1")
+        if key_name not in ("key1", "key2"):
+            return {"error": "invalid_key", "expected": ["key1", "key2"]}, 400
         try:
-            return rotate_team_gateway_key(teamid), 200
+            return rotate_team_gateway_key(teamid, key_name), 200
+        except ValueError as e:
+            return {"error": str(e)}, 400
         except RuntimeError as e:
             logger.warning(f"Gateway key rotate refused for team {teamid}: {e}")
             return {"error": str(e)}, 404

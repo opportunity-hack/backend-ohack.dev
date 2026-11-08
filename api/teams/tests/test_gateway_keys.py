@@ -107,13 +107,67 @@ def _ok_generate(key="sk-team-plain-1"):
     return fake_post
 
 
+def _alias_generate():
+    """Stub /key/generate returning a distinct key per alias, so Key 1 and
+    Key 2 plaintexts can be told apart in assertions."""
+    def fake_post(url, json=None, headers=None, timeout=None):
+        assert url.endswith("/key/generate")
+        assert headers["Authorization"] == "Bearer test-master-key"
+        key = (
+            "sk-key2-plain"
+            if json["key_alias"].endswith("-frontier")
+            else "sk-key1-plain"
+        )
+        resp = MagicMock()
+        resp.json.return_value = {"key": key}
+        resp.raise_for_status.return_value = None
+        fake_post.calls.append(json)
+        return resp
+
+    fake_post.calls = []
+    return fake_post
+
+
+def _fernet_for_test():
+    return Fernet(os.environ["GATEWAY_KEY_ENCRYPTION_KEY"])
+
+
+def _seed_key1_only(module, fake_db, team_id="team-1"):
+    """A doc with only Key 1 active, as if provisioned before Key 2 existed."""
+    fake_db.collections.setdefault("team_gateway_keys", {})[team_id] = {
+        "team_id": team_id,
+        "key_alias": "fall26-team-1",
+        "status": "active",
+        "key_ciphertext": _fernet_for_test().encrypt(b"sk-key1-plain").decode(),
+        "models": ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"],
+        "max_budget": 15.0,
+        "expires": "2026-11-16T07:00:00Z",
+        "provisioned_at": "2026-11-07T00:00:00+00:00",
+    }
+
+
+def _seed_key2_only(module, fake_db, team_id="team-1"):
+    """A doc with only Key 2 active (Key 1 lost, e.g. a failed rotation)."""
+    fake_db.collections.setdefault("team_gateway_keys", {})[team_id] = {
+        "team_id": team_id,
+        "key_alias": "fall26-team-1",
+        "status": "missing",
+        "key2_status": "active",
+        "key2_ciphertext": _fernet_for_test().encrypt(b"sk-key2-plain").decode(),
+        "key2_alias": "fall26-team-1-frontier",
+        "key2_models": ["muse-wonder", "kimi-k3"],
+        "key2_max_budget": 20.0,
+        "key2_provisioned_at": "2026-11-07T00:00:00+00:00",
+    }
+
+
 # ---------------------------------------------------------------------------
 # provision_team_gateway_key
 # ---------------------------------------------------------------------------
 
-def test_provision_mints_key_with_expected_body(service, monkeypatch):
+def test_provision_mints_both_keys_with_expected_bodies(service, monkeypatch):
     module, fake_db = service
-    fake_post = _ok_generate()
+    fake_post = _alias_generate()
     monkeypatch.setattr(module.requests, "post", fake_post)
 
     meta = module.provision_team_gateway_key("team-1")
@@ -121,31 +175,48 @@ def test_provision_mints_key_with_expected_body(service, monkeypatch):
     assert meta["key_alias"] == "fall26-team-1"
     assert meta["models"] == ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"]
     assert meta["max_budget"] == 15.0
-    assert len(fake_post.calls) == 1
-    body = fake_post.calls[0]
-    assert body["key_alias"] == "fall26-team-1"
-    assert body["max_budget"] == 15.0
-    assert "budget_duration" not in body  # lifetime cap, never resets
-    assert body["expires"] == "2026-11-16T07:00:00Z"
+    assert len(fake_post.calls) == 2
+    key1_body, key2_body = fake_post.calls
+    assert key1_body["key_alias"] == "fall26-team-1"
+    assert key1_body["models"] == ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"]
+    assert key1_body["max_budget"] == 15.0
+    assert "budget_duration" not in key1_body  # lifetime cap, never resets
+    assert key1_body["expires"] == "2026-11-16T07:00:00Z"
+    assert key2_body["key_alias"] == "fall26-team-1-frontier"
+    assert key2_body["models"] == ["muse-wonder", "kimi-k3"]
+    assert key2_body["max_budget"] == 20.0
+    assert "budget_duration" not in key2_body
+    assert key2_body["expires"] == "2026-11-16T07:00:00Z"
+    assert key2_body["metadata"]["ohack_team_id"] == "team-1"
+    assert key2_body["metadata"]["event"] == "fall-2026"
+    assert key2_body["metadata"]["provisioned_by"] == "ohack-backend"
+    assert key2_body["metadata"]["key_label"] == "key2"
 
     doc = fake_db.collections["team_gateway_keys"]["team-1"]
     assert doc["status"] == "active"
-    assert "sk-team-plain-1" not in json.dumps(doc)  # plaintext never stored raw
-    decrypted = Fernet(os.environ["GATEWAY_KEY_ENCRYPTION_KEY"]).decrypt(
-        doc["key_ciphertext"].encode()
-    ).decode()
-    assert decrypted == "sk-team-plain-1"
+    assert doc["key2_status"] == "active"
+    assert doc["key2_alias"] == "fall26-team-1-frontier"
+    assert doc["key2_models"] == ["muse-wonder", "kimi-k3"]
+    assert doc["key2_max_budget"] == 20.0
+    assert "sk-key1-plain" not in json.dumps(doc)  # plaintext never stored raw
+    assert "sk-key2-plain" not in json.dumps(doc)
+    fernet = _fernet_for_test()
+    assert fernet.decrypt(doc["key_ciphertext"].encode()).decode() == "sk-key1-plain"
+    assert fernet.decrypt(doc["key2_ciphertext"].encode()).decode() == "sk-key2-plain"
+    assert [k["label"] for k in meta["keys"]] == ["Key 1", "Key 2"]
+    assert meta["keys"][1]["key_alias"] == "fall26-team-1-frontier"
+    assert meta["keys"][1]["status"] == "active"
 
 
 def test_provision_is_idempotent(service, monkeypatch):
     module, fake_db = service
-    fake_post = _ok_generate()
+    fake_post = _alias_generate()
     monkeypatch.setattr(module.requests, "post", fake_post)
 
     first = module.provision_team_gateway_key("team-1")
     second = module.provision_team_gateway_key("team-1")
 
-    assert len(fake_post.calls) == 1  # second call minted nothing
+    assert len(fake_post.calls) == 2  # second call minted nothing
     assert first == second
 
 
@@ -161,6 +232,78 @@ def test_provision_cleans_pending_doc_on_failure(service, monkeypatch):
         module.provision_team_gateway_key("team-1")
 
     assert "team-1" not in fake_db.collections["team_gateway_keys"]
+
+
+def test_provision_key2_failure_keeps_key1_and_retry_provisions_key2(service, monkeypatch):
+    module, fake_db = service
+    calls = []
+
+    def flaky_post(url, json=None, headers=None, timeout=None):
+        calls.append(json)
+        if json["key_alias"].endswith("-frontier") and len(calls) <= 2:
+            raise RuntimeError("LiteLLM down for Key 2")
+        resp = MagicMock()
+        resp.json.return_value = {
+            "key": "sk-key2-plain" if json["key_alias"].endswith("-frontier") else "sk-key1-plain"
+        }
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(module.requests, "post", flaky_post)
+
+    with pytest.raises(RuntimeError):
+        module.provision_team_gateway_key("team-1")
+
+    # Key 1 survived; Key 2 is recorded missing, not lost with the doc.
+    doc = fake_db.collections["team_gateway_keys"]["team-1"]
+    assert doc["status"] == "active"
+    assert _fernet_for_test().decrypt(doc["key_ciphertext"].encode()).decode() == "sk-key1-plain"
+    assert doc["key2_status"] == "missing"
+    assert doc["key2_alias"] == "fall26-team-1-frontier"
+
+    # Retry mints only Key 2.
+    before = len(calls)
+    meta = module.provision_team_gateway_key("team-1")
+    assert len(calls) == before + 1
+    assert calls[-1]["key_alias"] == "fall26-team-1-frontier"
+    doc = fake_db.collections["team_gateway_keys"]["team-1"]
+    assert doc["key2_status"] == "active"
+    assert _fernet_for_test().decrypt(doc["key2_ciphertext"].encode()).decode() == "sk-key2-plain"
+    assert meta["keys"][0]["status"] == "active"
+    assert meta["keys"][1]["status"] == "active"
+
+
+def test_provision_mints_only_missing_key2(service, monkeypatch):
+    module, fake_db = service
+    _seed_key1_only(module, fake_db)
+    fake_post = _alias_generate()
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    meta = module.provision_team_gateway_key("team-1")
+
+    assert len(fake_post.calls) == 1
+    assert fake_post.calls[0]["key_alias"] == "fall26-team-1-frontier"
+    doc = fake_db.collections["team_gateway_keys"]["team-1"]
+    assert _fernet_for_test().decrypt(doc["key_ciphertext"].encode()).decode() == "sk-key1-plain"
+    assert doc["key2_status"] == "active"
+    assert meta["keys"][0]["status"] == "active"
+    assert meta["keys"][1]["status"] == "active"
+
+
+def test_provision_mints_only_missing_key1(service, monkeypatch):
+    module, fake_db = service
+    _seed_key2_only(module, fake_db)
+    fake_post = _alias_generate()
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    meta = module.provision_team_gateway_key("team-1")
+
+    assert len(fake_post.calls) == 1
+    assert fake_post.calls[0]["key_alias"] == "fall26-team-1"
+    doc = fake_db.collections["team_gateway_keys"]["team-1"]
+    assert doc["status"] == "active"
+    assert doc["key2_status"] == "active"
+    assert meta["keys"][0]["status"] == "active"
 
 
 def test_provision_requires_master_key(service, monkeypatch):
@@ -216,6 +359,88 @@ def test_rotate_deletes_then_regenerates_same_alias(service, monkeypatch):
         doc["key_ciphertext"].encode()
     ).decode()
     assert decrypted == "sk-team-plain-2"
+    # Rotating Key 1 leaves Key 2 untouched.
+    assert Fernet(os.environ["GATEWAY_KEY_ENCRYPTION_KEY"]).decrypt(
+        doc["key2_ciphertext"].encode()
+    ).decode() == "sk-team-plain-1"
+    assert [k["label"] for k in meta["keys"]] == ["Key 1", "Key 2"]
+    assert meta["keys"][1]["status"] == "active"
+
+
+def test_rotate_key2_deletes_then_regenerates_frontier_alias_and_leaves_key1(service, monkeypatch):
+    module, fake_db = service
+    calls = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        calls.append((url, json))
+        resp = MagicMock()
+        if url.endswith("/key/delete"):
+            assert json == {"keys": ["sk-key2-plain"]}
+            resp.json.return_value = {}
+        else:
+            assert url.endswith("/key/generate")
+            assert json["key_alias"] == "fall26-team-1-frontier"
+            assert json["models"] == ["muse-wonder", "kimi-k3"]
+            assert json["max_budget"] == 20.0
+            assert json["metadata"]["key_label"] == "key2"
+            resp.json.return_value = {"key": "sk-key2-new"}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    seed = _alias_generate()
+    monkeypatch.setattr(module.requests, "post", seed)
+    module.provision_team_gateway_key("team-1")
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    meta = module.rotate_team_gateway_key("team-1", key="key2")
+
+    assert meta["keys"][1]["key_alias"] == "fall26-team-1-frontier"
+    assert meta["keys"][1]["status"] == "active"
+    assert calls[0][0].endswith("/key/delete")
+    assert calls[1][0].endswith("/key/generate")
+    doc = fake_db.collections["team_gateway_keys"]["team-1"]
+    fernet = _fernet_for_test()
+    assert fernet.decrypt(doc["key2_ciphertext"].encode()).decode() == "sk-key2-new"
+    assert doc["key2_rotated_at"]
+    # Rotating Key 2 leaves Key 1 untouched.
+    assert fernet.decrypt(doc["key_ciphertext"].encode()).decode() == "sk-key1-plain"
+
+
+def test_rotate_default_is_key1(service, monkeypatch):
+    module, fake_db = service
+    generate_aliases = []
+
+    def fake_post(url, json=None, headers=None, timeout=None):
+        resp = MagicMock()
+        if url.endswith("/key/delete"):
+            resp.json.return_value = {}
+        else:
+            generate_aliases.append(json["key_alias"])
+            resp.json.return_value = {"key": "sk-key1-new"}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    seed = _alias_generate()
+    monkeypatch.setattr(module.requests, "post", seed)
+    module.provision_team_gateway_key("team-1")
+    monkeypatch.setattr(module.requests, "post", fake_post)
+
+    module.rotate_team_gateway_key("team-1")  # no key arg: Key 1, as before
+
+    assert generate_aliases == ["fall26-team-1"]
+
+
+def test_rotate_key2_refuses_without_active_key2(service, monkeypatch):
+    module, fake_db = service
+    _seed_key1_only(module, fake_db)
+    with pytest.raises(RuntimeError, match="No active gateway key"):
+        module.rotate_team_gateway_key("team-1", key="key2")
+
+
+def test_rotate_rejects_unknown_key_name(service):
+    module, _ = service
+    with pytest.raises(ValueError, match="Unknown gateway key"):
+        module.rotate_team_gateway_key("team-1", key="key3")
 
 
 def test_rotate_refuses_without_active_key(service):
@@ -295,6 +520,73 @@ def test_get_returns_plaintext_and_spend_for_member(service, monkeypatch):
     assert payload["key"] == "sk-team-plain-1"
     assert payload["spend"] == 3.5
     assert payload["key_alias"] == "fall26-team-1"
+    assert [k["label"] for k in payload["keys"]] == ["Key 1", "Key 2"]
+    assert payload["keys"][0]["key"] == "sk-team-plain-1"
+    assert payload["keys"][0]["spend"] == 3.5
+    assert payload["keys"][0]["status"] == "active"
+    assert payload["keys"][1]["key"] == "sk-team-plain-1"
+    assert payload["keys"][1]["spend"] == 3.5
+    assert payload["keys"][1]["key_alias"] == "fall26-team-1-frontier"
+    assert payload["keys"][1]["max_budget"] == 20.0
+
+
+def test_get_returns_200_with_key2_missing_when_only_key1_exists(service, monkeypatch):
+    module, fake_db = service
+    _team_exists(monkeypatch, module, fake_db)
+    _seed_key1_only(module, fake_db)
+    monkeypatch.setattr(module, "user_is_on_team", lambda propel, team: True)
+
+    def fake_info(url, json=None, headers=None, timeout=None):
+        assert url.endswith("/key/info")
+        resp = MagicMock()
+        resp.json.return_value = {"info": {"spend": 1.0}}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(module.requests, "post", fake_info)
+
+    payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
+
+    assert status == 200
+    assert payload["key"] == "sk-key1-plain"
+    assert payload["spend"] == 1.0
+    key2 = payload["keys"][1]
+    assert key2["label"] == "Key 2"
+    assert key2["status"] == "missing"
+    assert key2["key"] is None
+    assert key2["spend"] is None
+    assert key2["key_alias"] == "fall26-team-1-frontier"
+    assert key2["models"] == ["muse-wonder", "kimi-k3"]
+    assert key2["max_budget"] == 20.0
+
+
+def test_get_decrypt_failure_on_one_key_does_not_500(service, monkeypatch):
+    module, fake_db = service
+    _team_exists(monkeypatch, module, fake_db)
+    seed = _alias_generate()
+    monkeypatch.setattr(module.requests, "post", seed)
+    module.provision_team_gateway_key("team-1")
+    # Corrupt Key 2's ciphertext; Key 1 must still come back.
+    fake_db.collections["team_gateway_keys"]["team-1"]["key2_ciphertext"] = "not-a-fernet-token"
+    monkeypatch.setattr(module, "user_is_on_team", lambda propel, team: True)
+
+    def fake_info(url, json=None, headers=None, timeout=None):
+        assert url.endswith("/key/info")
+        resp = MagicMock()
+        resp.json.return_value = {"info": {"spend": 2.0}}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(module.requests, "post", fake_info)
+
+    payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
+
+    assert status == 200
+    assert payload["keys"][0]["key"] == "sk-key1-plain"
+    assert payload["keys"][0]["status"] == "active"
+    assert payload["keys"][1]["status"] == "error"
+    assert payload["keys"][1]["key"] is None
+    assert payload["keys"][1]["spend"] is None
 
 
 def test_get_spend_none_when_info_fails(service, monkeypatch):
@@ -411,6 +703,62 @@ def test_get_gateway_key_route_serves_member(client, monkeypatch):
     assert res.get_json()["key"] == "sk-team-plain-1"
 
 
+def test_rotate_gateway_key_route_passes_key2_and_defaults_key1(client, monkeypatch):
+    monkeypatch.setattr(
+        "services.hackathon_planning_service.is_admin", lambda user: False
+    )
+    seen = {}
+
+    def fake_rotate(team_id, key="key1"):
+        seen["team_id"] = team_id
+        seen["key"] = key
+        return {"keys": [{"label": "Key 1"}, {"label": "Key 2"}]}
+
+    monkeypatch.setattr("api.teams.teams_views.rotate_team_gateway_key", fake_rotate)
+
+    res = client.post(
+        "/api/team/team-1/gateway-key/rotate",
+        headers=HEADERS, json={"key": "key2"},
+    )
+    assert res.status_code == 200
+    assert seen == {"team_id": "team-1", "key": "key2"}
+
+    res = client.post("/api/team/team-1/gateway-key/rotate", headers=HEADERS)
+    assert res.status_code == 200
+    assert seen["key"] == "key1"  # no body: existing callers rotate Key 1
+
+
+def test_rotate_gateway_key_route_400s_invalid_key(client, monkeypatch):
+    monkeypatch.setattr(
+        "services.hackathon_planning_service.is_admin", lambda user: False
+    )
+    res = client.post(
+        "/api/team/team-1/gateway-key/rotate",
+        headers=HEADERS, json={"key": "key9"},
+    )
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "invalid_key"
+
+
+def test_retry_gateway_key_route_provisions(client, monkeypatch):
+    monkeypatch.setattr(
+        "services.hackathon_planning_service.is_admin", lambda user: False
+    )
+    seen = {}
+
+    def fake_provision(team_id):
+        seen["team_id"] = team_id
+        return {"keys": [{"label": "Key 1"}, {"label": "Key 2"}]}
+
+    monkeypatch.setattr("api.teams.teams_views.provision_team_gateway_key", fake_provision)
+
+    res = client.post("/api/team/team-1/gateway-key/retry", headers=HEADERS)
+
+    assert res.status_code == 200
+    assert seen == {"team_id": "team-1"}
+    assert len(res.get_json()["keys"]) == 2
+
+
 def test_gateway_key_routes_registered(client):
     # The volunteer.admin decorator is stubbed as passthrough in tests; this
     # asserts the routes exist and are wired to the blueprint.
@@ -445,9 +793,19 @@ def test_list_statuses_reports_active_pending_and_missing(service, monkeypatch):
     assert out["team-active"]["status"] == "active"
     assert out["team-active"]["key_alias"] == "fall26-team-active"
     assert out["team-active"]["max_budget"] == module.GATEWAY_MAX_BUDGET
+    assert out["team-active"]["key2_status"] == "active"
+    assert out["team-active"]["key2_alias"] == "fall26-team-active-frontier"
+    assert out["team-active"]["key2_max_budget"] == 20.0
     assert out["team-pending"]["status"] == "pending"
+    assert out["team-pending"]["key2_status"] == "missing"
     assert out["team-broken"]["status"] == "missing"
-    assert out["team-unknown"] == {"status": "missing"}
+    assert out["team-broken"]["key2_status"] == "missing"
+    assert out["team-unknown"] == {
+        "status": "missing",
+        "key2_status": "missing",
+        "key2_alias": None,
+        "key2_max_budget": 20.0,
+    }
     assert "" not in out
     # Nothing secret leaves this function.
     dumped = json.dumps(out)
