@@ -306,6 +306,10 @@ def retry_gateway_key_api(teamid):
     Admin endpoint to (re)provision a team's AI gateway keys. Idempotent:
     returns both keys' metadata when they already exist. Covers the
     case where approve_team's best-effort mint failed.
+    When one key mints and the other fails, this still answers 200 with the
+    true per-key statuses plus `partial_failure: {key, label, error}` so the
+    admin UI can show "Key 1 ready, Key 2 failed" instead of a bare error.
+    502 only when no key could be minted at all.
     """
     logger.info(f"POST /team/{teamid}/gateway-key/retry called")
     if auth_user and auth_user.user_id:

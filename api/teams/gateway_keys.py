@@ -217,10 +217,13 @@ def provision_team_gateway_key(team_id):
     """Mint LiteLLM keys for a team. Idempotent per key: an existing active
     key is returned as-is, nothing is minted twice.
 
-    If Key 2 mint fails after Key 1 succeeds, Key 1 stays active, Key 2 is
-    recorded as missing, and the error is raised so the retry endpoint can
-    re-run it. Only when no key at all is usable is the pending doc removed
-    (the pre-Key 2 behavior).
+    If one key mints and the other fails, the live key stays active, the
+    failed key is recorded as missing, and the metadata is RETURNED (not
+    raised) with a ``partial_failure`` entry so the retry endpoint can tell
+    the admin UI the true state ("Key 1 ready, Key 2 failed"). Raising
+    here would hide the live key behind a 502. Only when no key at all is
+    usable is the pending doc removed and the error raised (the pre-Key 2
+    behavior).
     """
     alias = _key_alias(team_id)
     ref = _doc_ref(team_id)
@@ -249,6 +252,7 @@ def provision_team_gateway_key(team_id):
             "created_at": _utcnow_iso(),
         })
     logger.info("Provisioning gateway keys for team %s", team_id)
+    partial_failure = None
     try:
         if not key1_active:
             _mint_one(team_id, ref, fernet, _KEY_SPECS[0])
@@ -256,30 +260,38 @@ def provision_team_gateway_key(team_id):
         if not key2_active:
             _mint_one(team_id, ref, fernet, _KEY_SPECS[1])
             key2_active = True
-    except Exception:
+    except Exception as e:
         if not key1_active and not key2_active:
             ref.delete()
             logger.warning(
                 "Gateway key mint failed for team %s; pending doc removed",
                 team_id,
             )
-        else:
-            failed = _KEY_SPECS[0] if not key1_active else _KEY_SPECS[1]
-            ref.set({
-                failed["status_field"]: "missing",
-                failed["alias_field"]: failed["alias_fn"](team_id),
-                failed["models_field"]: list(failed["models"]),
-                failed["budget_field"]: failed["max_budget"],
-            }, merge=True)
-            logger.warning(
-                "Gateway %s mint failed for team %s; other key kept active",
-                failed["label"], team_id,
-            )
-        raise
+            raise
+        failed = _KEY_SPECS[0] if not key1_active else _KEY_SPECS[1]
+        ref.set({
+            failed["status_field"]: "missing",
+            failed["alias_field"]: failed["alias_fn"](team_id),
+            failed["models_field"]: list(failed["models"]),
+            failed["budget_field"]: failed["max_budget"],
+        }, merge=True)
+        logger.warning(
+            "Gateway %s mint failed for team %s; other key kept active: %s",
+            failed["label"], team_id, e,
+        )
+        partial_failure = {
+            "key": failed["key"],
+            "label": failed["label"],
+            "error": str(e),
+        }
 
     data = ref.get().to_dict() or {}
-    logger.info("Gateway keys active for team %s", team_id)
-    return _metadata(team_id, data)
+    meta = _metadata(team_id, data)
+    if partial_failure:
+        meta["partial_failure"] = partial_failure
+    else:
+        logger.info("Gateway keys active for team %s", team_id)
+    return meta
 
 
 def _key_spend_best_effort(plaintext_key, team_id):

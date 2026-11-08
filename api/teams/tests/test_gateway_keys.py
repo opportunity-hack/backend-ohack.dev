@@ -265,8 +265,14 @@ def test_provision_key2_failure_keeps_key1_and_retry_provisions_key2(service, mo
 
     monkeypatch.setattr(module.requests, "post", flaky_post)
 
-    with pytest.raises(RuntimeError):
-        module.provision_team_gateway_key("team-1")
+    # No raise: Key 1 is live, so the caller gets the true per-key state
+    # plus a partial_failure marker instead of a 502-shaped exception.
+    meta = module.provision_team_gateway_key("team-1")
+    assert meta["keys"][0]["status"] == "active"
+    assert meta["keys"][1]["status"] == "missing"
+    assert meta["partial_failure"]["key"] == "key2"
+    assert meta["partial_failure"]["label"] == "Key 2"
+    assert "LiteLLM down for Key 2" in meta["partial_failure"]["error"]
 
     # Key 1 survived; Key 2 is recorded missing, not lost with the doc.
     doc = fake_db.collections["team_gateway_keys"]["team-1"]
@@ -285,6 +291,7 @@ def test_provision_key2_failure_keeps_key1_and_retry_provisions_key2(service, mo
     assert _fernet_for_test().decrypt(doc["key2_ciphertext"].encode()).decode() == "sk-key2-plain"
     assert meta["keys"][0]["status"] == "active"
     assert meta["keys"][1]["status"] == "active"
+    assert "partial_failure" not in meta
 
 
 def test_provision_mints_only_missing_key2(service, monkeypatch):
@@ -770,6 +777,32 @@ def test_retry_gateway_key_route_provisions(client, monkeypatch):
     assert res.status_code == 200
     assert seen == {"team_id": "team-1"}
     assert len(res.get_json()["keys"]) == 2
+
+
+def test_retry_gateway_key_route_returns_200_on_partial_failure(client, monkeypatch):
+    # Key 1 minted, Key 2 failed: the admin UI must learn the true state, so
+    # the route answers 200 with per-key statuses + partial_failure, not 502.
+    monkeypatch.setattr(
+        "services.hackathon_planning_service.is_admin", lambda user: False
+    )
+    monkeypatch.setattr(
+        "api.teams.teams_views.provision_team_gateway_key",
+        lambda team_id: {
+            "team_id": team_id,
+            "keys": [
+                {"label": "Key 1", "status": "active"},
+                {"label": "Key 2", "status": "missing"},
+            ],
+            "partial_failure": {"key": "key2", "label": "Key 2", "error": "LiteLLM down"},
+        },
+    )
+
+    res = client.post("/api/team/team-1/gateway-key/retry", headers=HEADERS)
+
+    assert res.status_code == 200
+    body = res.get_json()
+    assert body["keys"][1]["status"] == "missing"
+    assert body["partial_failure"]["key"] == "key2"
 
 
 def test_gateway_key_routes_registered(client):
