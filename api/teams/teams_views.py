@@ -276,19 +276,17 @@ def rotate_gateway_key_api(teamid):
     """
     Admin endpoint to rotate a team's AI gateway key (leak recovery).
     Deletes the old key in LiteLLM and mints a fresh one under the same alias.
-    Body: { "key": "key1" | "key2" } - defaults to "key1" when absent.
-    Only the named key is rotated; the other key is left alone.
+    Body: { "key": "key1" | "key2" } - required; missing or unknown values
+    return 400. Only the named key is rotated; the other key is left alone.
     """
     logger.info(f"POST /team/{teamid}/gateway-key/rotate called")
     if auth_user and auth_user.user_id:
         body = request.get_json(silent=True) or {}
-        key_name = body.get("key", "key1")
+        key_name = body.get("key")
         if key_name not in ("key1", "key2"):
-            return {"error": "invalid_key", "expected": ["key1", "key2"]}, 400
+            return {"error": "invalid_key"}, 400
         try:
             return rotate_team_gateway_key(teamid, key_name), 200
-        except ValueError as e:
-            return {"error": str(e)}, 400
         except RuntimeError as e:
             logger.warning(f"Gateway key rotate refused for team {teamid}: {e}")
             return {"error": str(e)}, 404
@@ -305,8 +303,8 @@ def rotate_gateway_key_api(teamid):
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def retry_gateway_key_api(teamid):
     """
-    Admin endpoint to (re)provision a team's AI gateway key. Idempotent:
-    returns the active key's metadata when one already exists. Covers the
+    Admin endpoint to (re)provision a team's AI gateway keys. Idempotent:
+    returns both keys' metadata when they already exist. Covers the
     case where approve_team's best-effort mint failed.
     """
     logger.info(f"POST /team/{teamid}/gateway-key/retry called")

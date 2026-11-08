@@ -78,7 +78,7 @@ def _utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
-# One spec per key. Key 1 fields are unprefixed (legacy); Key 2 fields are
+# One spec per key. Key 1 fields are unprefixed; Key 2 fields are
 # key2_ prefixed, all in the same Firestore doc (doc id = team id).
 _KEY_SPECS = (
     {
@@ -128,35 +128,33 @@ def _is_active(data, spec):
     )
 
 
-def _public_metadata(team_id, data):
-    return {
-        "team_id": team_id,
-        "key_alias": data.get("key_alias"),
-        "models": data.get("models", GATEWAY_MODELS),
-        "max_budget": data.get("max_budget", GATEWAY_MAX_BUDGET),
-        "expires": data.get("expires", GATEWAY_KEY_EXPIRES),
-    }
-
-
-def _key_entry(team_id, data, spec, plaintext=None, spend=None):
-    """One entry of the GET/rotate/retry "keys" array. Plaintext and spend
-    are None for metadata-only responses and for missing/error keys."""
-    return {
+def _key_entry(team_id, data, spec, plaintext=None, spend=None, include_secret=True):
+    """One entry of a "keys" array. Plaintext and spend appear only in the
+    member GET response; metadata-only responses omit them entirely."""
+    entry = {
         "label": spec["label"],
         "key_alias": data.get(spec["alias_field"]) or spec["alias_fn"](team_id),
         "models": data.get(spec["models_field"]) or list(spec["models"]),
         "max_budget": data.get(spec["budget_field"], spec["max_budget"]),
         "expires": data.get("expires", GATEWAY_KEY_EXPIRES),
         "status": data.get(spec["status_field"]) or "missing",
-        "key": plaintext,
-        "spend": spend,
     }
+    if include_secret:
+        entry["key"] = plaintext
+        entry["spend"] = spend
+    return entry
 
 
-def _public_metadata_with_keys(team_id, data):
-    payload = _public_metadata(team_id, data)
-    payload["keys"] = [_key_entry(team_id, data, spec) for spec in _KEY_SPECS]
-    return payload
+def _metadata(team_id, data):
+    """Metadata-only payload for provision/rotate/retry: team id plus one
+    entry per key. No plaintext, no spend."""
+    return {
+        "team_id": team_id,
+        "keys": [
+            _key_entry(team_id, data, spec, include_secret=False)
+            for spec in _KEY_SPECS
+        ],
+    }
 
 
 def _generate_key(alias, team_id, models=None, max_budget=None, key_label=None):
@@ -235,7 +233,7 @@ def provision_team_gateway_key(team_id):
         logger.info(
             "Gateway keys already active for team %s; skipping mint", team_id
         )
-        return _public_metadata_with_keys(team_id, data)
+        return _metadata(team_id, data)
 
     # Fail fast on misconfiguration before touching Firestore or LiteLLM.
     _master_key()
@@ -281,7 +279,7 @@ def provision_team_gateway_key(team_id):
 
     data = ref.get().to_dict() or {}
     logger.info("Gateway keys active for team %s", team_id)
-    return _public_metadata_with_keys(team_id, data)
+    return _metadata(team_id, data)
 
 
 def _key_spend_best_effort(plaintext_key, team_id):
@@ -305,58 +303,55 @@ def _key_spend_best_effort(plaintext_key, team_id):
 MAX_STATUS_BATCH = 200
 
 
+def _status_entry(team_id, data, spec):
+    """One entry of the batch "keys" array: metadata only, plus the
+    provision/rotation timestamps the admin table shows. An "active"
+    doc with no ciphertext is unusable, so it reports as missing."""
+    status = data.get(spec["status_field"]) or "missing"
+    if status == "active" and not data.get(spec["ciphertext_field"]):
+        status = "missing"
+    return {
+        "label": spec["label"],
+        "key_alias": data.get(spec["alias_field"]) or spec["alias_fn"](team_id),
+        "models": data.get(spec["models_field"]) or list(spec["models"]),
+        "max_budget": data.get(spec["budget_field"], spec["max_budget"]),
+        "expires": data.get("expires", GATEWAY_KEY_EXPIRES),
+        "status": status,
+        "provisioned_at": data.get(spec["provisioned_field"]),
+        "rotated_at": data.get(spec["rotated_field"]),
+    }
+
+
 def list_gateway_key_statuses(team_ids):
     """Admin-only, metadata-only status for many teams at once (the admin
     Teams table). NEVER includes the plaintext or ciphertext — the per-team
     GET is the only route that decrypts, and only on an explicit reveal.
 
-    Statuses: ``active`` (usable key), ``pending`` (mint in flight or crashed
-    mid-mint; the next provision attempt starts clean), ``missing`` (no doc —
-    approval's best-effort mint failed or the team was approved before this
-    feature). Unknown ids are reported as ``missing`` rather than omitted so
-    the frontend can render one chip per row.
+    Each team maps to {"keys": [one status entry per key]}. Statuses:
+    ``active`` (usable key), ``pending`` (mint in flight or crashed
+    mid-mint; the next provision attempt starts clean), ``missing`` (no doc
+    or approval's best-effort mint failed). Unknown ids report both keys
+    as ``missing`` with their deterministic aliases, models, and budgets,
+    rather than being omitted, so the frontend can render one chip per row.
     """
     out = {}
     for team_id in list(dict.fromkeys(t for t in team_ids if t))[:MAX_STATUS_BATCH]:
         snap = _doc_ref(team_id).get()
-        data = snap.to_dict() if snap.exists else None
-        if not data:
-            out[team_id] = {
-                "status": "missing",
-                "key2_status": "missing",
-                "key2_alias": None,
-                "key2_max_budget": KEY2_MAX_BUDGET,
-            }
-            continue
-        status = data.get("status") or "missing"
-        if status == "active" and not data.get("key_ciphertext"):
-            status = "missing"
-        key2_status = data.get("key2_status") or "missing"
-        if key2_status == "active" and not data.get("key2_ciphertext"):
-            key2_status = "missing"
+        data = snap.to_dict() if snap.exists else {}
         out[team_id] = {
-            "status": status,
-            "key_alias": data.get("key_alias"),
-            "max_budget": data.get("max_budget", GATEWAY_MAX_BUDGET),
-            "expires": data.get("expires", GATEWAY_KEY_EXPIRES),
-            "created_at": data.get("created_at"),
-            "provisioned_at": data.get("provisioned_at"),
-            "rotated_at": data.get("rotated_at"),
-            "key2_status": key2_status,
-            "key2_alias": data.get("key2_alias"),
-            "key2_max_budget": data.get("key2_max_budget", KEY2_MAX_BUDGET),
+            "keys": [_status_entry(team_id, data, spec) for spec in _KEY_SPECS]
         }
     return out
 
 
 def get_team_gateway_key(propel_user_id, team_id, is_admin=False):
-    """Return (payload, status). The payload carries the plaintext keys and
-    is only ever returned to team members or admins.
+    """Return (payload, status). The payload is {"team_id", "keys": [...]},
+    one entry per key carrying its plaintext and spend. It is only ever
+    returned to team members or admins.
 
-    Top-level legacy fields are Key 1 (backward compatible); the "keys"
-    array carries both keys with plaintext and spend. 404 only when no key
-    is active. A decrypt failure on one key reports that key as "error"
-    and still returns the other; it never 500s the response.
+    404 only when no key is active. A decrypt failure on one key reports
+    that key as "error" and still returns the other; it never 500s the
+    response.
     """
     db = get_db()
     if not db.collection("teams").document(team_id).get().exists:
@@ -384,8 +379,6 @@ def get_team_gateway_key(propel_user_id, team_id, is_admin=False):
         fernet = None
 
     entries = []
-    key1_plaintext = None
-    key1_spend = None
     for spec, active in ((_KEY_SPECS[0], key1_active), (_KEY_SPECS[1], key2_active)):
         if not active:
             entries.append(_key_entry(team_id, data, spec))
@@ -404,18 +397,11 @@ def get_team_gateway_key(propel_user_id, team_id, is_admin=False):
             continue
         spend = _key_spend_best_effort(plaintext, team_id)
         entries.append(_key_entry(team_id, data, spec, plaintext, spend))
-        if spec["key"] == "key1":
-            key1_plaintext = plaintext
-            key1_spend = spend
 
-    payload = _public_metadata(team_id, data)
-    payload["key"] = key1_plaintext
-    payload["spend"] = key1_spend
-    payload["keys"] = entries
-    return payload, 200
+    return {"team_id": team_id, "keys": entries}, 200
 
 
-def rotate_team_gateway_key(team_id, key="key1"):
+def rotate_team_gateway_key(team_id, key):
     """Delete the team's named key in LiteLLM and mint a fresh one under the
     same alias. The alias stays stable so dashboards keep working. Only the
     named key is touched; the other key is left alone.
@@ -474,4 +460,4 @@ def rotate_team_gateway_key(team_id, key="key1"):
     }, merge=True)
     logger.info("Gateway %s rotated for team %s (alias %s)", spec["label"], team_id, alias)
     data = ref.get().to_dict() or {}
-    return _public_metadata_with_keys(team_id, data)
+    return _metadata(team_id, data)

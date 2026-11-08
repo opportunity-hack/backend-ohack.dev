@@ -172,9 +172,26 @@ def test_provision_mints_both_keys_with_expected_bodies(service, monkeypatch):
 
     meta = module.provision_team_gateway_key("team-1")
 
-    assert meta["key_alias"] == "fall26-team-1"
-    assert meta["models"] == ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"]
-    assert meta["max_budget"] == 15.0
+    assert set(meta) == {"team_id", "keys"}
+    assert meta["team_id"] == "team-1"
+    assert [k["label"] for k in meta["keys"]] == ["Key 1", "Key 2"]
+    key1_meta, key2_meta = meta["keys"]
+    assert key1_meta == {
+        "label": "Key 1",
+        "key_alias": "fall26-team-1",
+        "models": ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"],
+        "max_budget": 15.0,
+        "expires": "2026-11-16T07:00:00Z",
+        "status": "active",
+    }
+    assert key2_meta == {
+        "label": "Key 2",
+        "key_alias": "fall26-team-1-frontier",
+        "models": ["muse-wonder", "kimi-k3"],
+        "max_budget": 20.0,
+        "expires": "2026-11-16T07:00:00Z",
+        "status": "active",
+    }
     assert len(fake_post.calls) == 2
     key1_body, key2_body = fake_post.calls
     assert key1_body["key_alias"] == "fall26-team-1"
@@ -203,9 +220,6 @@ def test_provision_mints_both_keys_with_expected_bodies(service, monkeypatch):
     fernet = _fernet_for_test()
     assert fernet.decrypt(doc["key_ciphertext"].encode()).decode() == "sk-key1-plain"
     assert fernet.decrypt(doc["key2_ciphertext"].encode()).decode() == "sk-key2-plain"
-    assert [k["label"] for k in meta["keys"]] == ["Key 1", "Key 2"]
-    assert meta["keys"][1]["key_alias"] == "fall26-team-1-frontier"
-    assert meta["keys"][1]["status"] == "active"
 
 
 def test_provision_is_idempotent(service, monkeypatch):
@@ -349,9 +363,13 @@ def test_rotate_deletes_then_regenerates_same_alias(service, monkeypatch):
     module.provision_team_gateway_key("team-1")
     monkeypatch.setattr(module.requests, "post", fake_post)
 
-    meta = module.rotate_team_gateway_key("team-1")
+    meta = module.rotate_team_gateway_key("team-1", "key1")
 
-    assert meta["key_alias"] == "fall26-team-1"
+    assert set(meta) == {"team_id", "keys"}
+    assert meta["keys"][0]["key_alias"] == "fall26-team-1"
+    assert meta["keys"][0]["status"] == "active"
+    assert "key" not in meta["keys"][0]  # metadata only, no plaintext
+    assert "spend" not in meta["keys"][0]
     assert calls[0][0].endswith("/key/delete")
     assert calls[1][0].endswith("/key/generate")
     doc = fake_db.collections["team_gateway_keys"]["team-1"]
@@ -406,30 +424,6 @@ def test_rotate_key2_deletes_then_regenerates_frontier_alias_and_leaves_key1(ser
     assert fernet.decrypt(doc["key_ciphertext"].encode()).decode() == "sk-key1-plain"
 
 
-def test_rotate_default_is_key1(service, monkeypatch):
-    module, fake_db = service
-    generate_aliases = []
-
-    def fake_post(url, json=None, headers=None, timeout=None):
-        resp = MagicMock()
-        if url.endswith("/key/delete"):
-            resp.json.return_value = {}
-        else:
-            generate_aliases.append(json["key_alias"])
-            resp.json.return_value = {"key": "sk-key1-new"}
-        resp.raise_for_status.return_value = None
-        return resp
-
-    seed = _alias_generate()
-    monkeypatch.setattr(module.requests, "post", seed)
-    module.provision_team_gateway_key("team-1")
-    monkeypatch.setattr(module.requests, "post", fake_post)
-
-    module.rotate_team_gateway_key("team-1")  # no key arg: Key 1, as before
-
-    assert generate_aliases == ["fall26-team-1"]
-
-
 def test_rotate_key2_refuses_without_active_key2(service, monkeypatch):
     module, fake_db = service
     _seed_key1_only(module, fake_db)
@@ -446,7 +440,7 @@ def test_rotate_rejects_unknown_key_name(service):
 def test_rotate_refuses_without_active_key(service):
     module, _ = service
     with pytest.raises(RuntimeError, match="No active gateway key"):
-        module.rotate_team_gateway_key("team-1")
+        module.rotate_team_gateway_key("team-1", "key1")
 
 
 # ---------------------------------------------------------------------------
@@ -517,9 +511,8 @@ def test_get_returns_plaintext_and_spend_for_member(service, monkeypatch):
     payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
 
     assert status == 200
-    assert payload["key"] == "sk-team-plain-1"
-    assert payload["spend"] == 3.5
-    assert payload["key_alias"] == "fall26-team-1"
+    assert set(payload) == {"team_id", "keys"}
+    assert payload["team_id"] == "team-1"
     assert [k["label"] for k in payload["keys"]] == ["Key 1", "Key 2"]
     assert payload["keys"][0]["key"] == "sk-team-plain-1"
     assert payload["keys"][0]["spend"] == 3.5
@@ -548,8 +541,9 @@ def test_get_returns_200_with_key2_missing_when_only_key1_exists(service, monkey
     payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
 
     assert status == 200
-    assert payload["key"] == "sk-key1-plain"
-    assert payload["spend"] == 1.0
+    assert set(payload) == {"team_id", "keys"}
+    assert payload["keys"][0]["key"] == "sk-key1-plain"
+    assert payload["keys"][0]["spend"] == 1.0
     key2 = payload["keys"][1]
     assert key2["label"] == "Key 2"
     assert key2["status"] == "missing"
@@ -602,8 +596,10 @@ def test_get_spend_none_when_info_fails(service, monkeypatch):
     payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
 
     assert status == 200
-    assert payload["key"] == "sk-team-plain-1"
-    assert payload["spend"] is None
+    assert payload["keys"][0]["key"] == "sk-team-plain-1"
+    assert payload["keys"][0]["spend"] is None
+    assert payload["keys"][1]["key"] == "sk-team-plain-1"
+    assert payload["keys"][1]["spend"] is None
 
 
 def test_get_allows_admin_non_member(service, monkeypatch):
@@ -621,7 +617,8 @@ def test_get_allows_admin_non_member(service, monkeypatch):
     )
 
     assert status == 200
-    assert payload["key"] == "sk-team-plain-1"
+    assert payload["keys"][0]["key"] == "sk-team-plain-1"
+    assert payload["keys"][1]["key"] == "sk-team-plain-1"
 
 
 # ---------------------------------------------------------------------------
@@ -693,26 +690,34 @@ def test_get_gateway_key_route_serves_member(client, monkeypatch):
     monkeypatch.setattr(
         "api.teams.teams_views.get_team_gateway_key",
         lambda propel, team_id, is_admin=False: (
-            {"key": "sk-team-plain-1", "key_alias": "fall26-team-1"}, 200
+            {
+                "team_id": team_id,
+                "keys": [
+                    {"label": "Key 1", "key": "sk-team-plain-1", "key_alias": "fall26-team-1"},
+                    {"label": "Key 2", "key": "sk-team-plain-2", "key_alias": "fall26-team-1-frontier"},
+                ],
+            },
+            200,
         ),
     )
 
     res = client.get("/api/team/team-1/gateway-key", headers=HEADERS)
 
     assert res.status_code == 200
-    assert res.get_json()["key"] == "sk-team-plain-1"
+    assert res.get_json()["keys"][0]["key"] == "sk-team-plain-1"
+    assert res.get_json()["keys"][1]["key"] == "sk-team-plain-2"
 
 
-def test_rotate_gateway_key_route_passes_key2_and_defaults_key1(client, monkeypatch):
+def test_rotate_gateway_key_route_passes_key_name_and_400s_without_it(client, monkeypatch):
     monkeypatch.setattr(
         "services.hackathon_planning_service.is_admin", lambda user: False
     )
     seen = {}
 
-    def fake_rotate(team_id, key="key1"):
+    def fake_rotate(team_id, key):
         seen["team_id"] = team_id
         seen["key"] = key
-        return {"keys": [{"label": "Key 1"}, {"label": "Key 2"}]}
+        return {"team_id": team_id, "keys": [{"label": "Key 1"}, {"label": "Key 2"}]}
 
     monkeypatch.setattr("api.teams.teams_views.rotate_team_gateway_key", fake_rotate)
 
@@ -723,9 +728,17 @@ def test_rotate_gateway_key_route_passes_key2_and_defaults_key1(client, monkeypa
     assert res.status_code == 200
     assert seen == {"team_id": "team-1", "key": "key2"}
 
-    res = client.post("/api/team/team-1/gateway-key/rotate", headers=HEADERS)
+    res = client.post(
+        "/api/team/team-1/gateway-key/rotate",
+        headers=HEADERS, json={"key": "key1"},
+    )
     assert res.status_code == 200
-    assert seen["key"] == "key1"  # no body: existing callers rotate Key 1
+    assert seen["key"] == "key1"
+
+    # No body: the key name is required now, there is no default.
+    res = client.post("/api/team/team-1/gateway-key/rotate", headers=HEADERS)
+    assert res.status_code == 400
+    assert res.get_json()["error"] == "invalid_key"
 
 
 def test_rotate_gateway_key_route_400s_invalid_key(client, monkeypatch):
@@ -790,28 +803,49 @@ def test_list_statuses_reports_active_pending_and_missing(service, monkeypatch):
         ["team-active", "team-pending", "team-broken", "team-unknown", "team-active", ""]
     )
 
-    assert out["team-active"]["status"] == "active"
-    assert out["team-active"]["key_alias"] == "fall26-team-active"
-    assert out["team-active"]["max_budget"] == module.GATEWAY_MAX_BUDGET
-    assert out["team-active"]["key2_status"] == "active"
-    assert out["team-active"]["key2_alias"] == "fall26-team-active-frontier"
-    assert out["team-active"]["key2_max_budget"] == 20.0
-    assert out["team-pending"]["status"] == "pending"
-    assert out["team-pending"]["key2_status"] == "missing"
-    assert out["team-broken"]["status"] == "missing"
-    assert out["team-broken"]["key2_status"] == "missing"
-    assert out["team-unknown"] == {
+    active = out["team-active"]["keys"]
+    assert [k["label"] for k in active] == ["Key 1", "Key 2"]
+    assert active[0]["status"] == "active"
+    assert active[0]["key_alias"] == "fall26-team-active"
+    assert active[0]["max_budget"] == module.GATEWAY_MAX_BUDGET
+    assert active[0]["provisioned_at"]
+    assert active[1]["status"] == "active"
+    assert active[1]["key_alias"] == "fall26-team-active-frontier"
+    assert active[1]["max_budget"] == 20.0
+    pending = out["team-pending"]["keys"]
+    assert pending[0]["status"] == "pending"
+    assert pending[1]["status"] == "missing"
+    broken = out["team-broken"]["keys"]
+    assert broken[0]["status"] == "missing"
+    assert broken[1]["status"] == "missing"
+    unknown = out["team-unknown"]["keys"]
+    assert unknown[0] == {
+        "label": "Key 1",
+        "key_alias": "fall26-team-unknown",
+        "models": ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"],
+        "max_budget": 15.0,
+        "expires": "2026-11-16T07:00:00Z",
         "status": "missing",
-        "key2_status": "missing",
-        "key2_alias": None,
-        "key2_max_budget": 20.0,
+        "provisioned_at": None,
+        "rotated_at": None,
+    }
+    assert unknown[1] == {
+        "label": "Key 2",
+        "key_alias": "fall26-team-unknown-frontier",
+        "models": ["muse-wonder", "kimi-k3"],
+        "max_budget": 20.0,
+        "expires": "2026-11-16T07:00:00Z",
+        "status": "missing",
+        "provisioned_at": None,
+        "rotated_at": None,
     }
     assert "" not in out
-    # Nothing secret leaves this function.
+    # Nothing secret leaves this function, and no plaintext field exists.
     dumped = json.dumps(out)
     assert "sk-secret-1" not in dumped
     assert "key_ciphertext" not in dumped
-    assert "key" not in out["team-active"]
+    assert all("key" not in entry for entry in out["team-active"]["keys"])
+    assert all("spend" not in entry for entry in out["team-active"]["keys"])
 
 
 def test_list_statuses_caps_batch(service, monkeypatch):
@@ -826,7 +860,10 @@ def test_admin_gateway_keys_route_returns_statuses(client, monkeypatch):
 
     def fake_list(team_ids):
         seen["ids"] = team_ids
-        return {t: {"status": "active" if t == "a" else "missing"} for t in team_ids}
+        return {
+            t: {"keys": [{"label": "Key 1", "status": "active" if t == "a" else "missing"}]}
+            for t in team_ids
+        }
 
     monkeypatch.setattr("api.teams.teams_views.list_gateway_key_statuses", fake_list)
 
@@ -834,14 +871,15 @@ def test_admin_gateway_keys_route_returns_statuses(client, monkeypatch):
 
     assert res.status_code == 200
     assert seen["ids"] == ["a", "b", "c"]
-    assert res.get_json()["keys"]["a"]["status"] == "active"
+    assert res.get_json()["keys"]["a"]["keys"][0]["status"] == "active"
 
 
 def test_admin_gateway_keys_route_is_not_shadowed_by_admin_teamid(client, monkeypatch):
     # /admin/<teamid> exists; the static /admin/gateway-keys must win.
     called = {"detail": False}
     monkeypatch.setattr(
-        "api.teams.teams_views.list_gateway_key_statuses", lambda ids: {i: {"status": "missing"} for i in ids}
+        "api.teams.teams_views.list_gateway_key_statuses",
+        lambda ids: {i: {"keys": [{"label": "Key 1", "status": "missing"}]} for i in ids},
     )
     import services.teams_service as ts
     monkeypatch.setattr(ts, "get_team_admin", lambda tid: called.__setitem__("detail", True) or None)
