@@ -10,6 +10,7 @@ import functools
 import importlib
 import json
 import os
+import re
 import sys
 import types
 from unittest.mock import MagicMock
@@ -162,6 +163,28 @@ def _seed_key2_only(module, fake_db, team_id="team-1"):
 
 
 # ---------------------------------------------------------------------------
+# _key_duration
+# ---------------------------------------------------------------------------
+
+def test_key_duration_is_seconds_until_expiry(service):
+    module, _ = service
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 11, 13, 7, 0, 0, tzinfo=timezone.utc)
+    # 3 days before 2026-11-16T07:00:00Z → exactly 259200 seconds.
+    assert module._key_duration(now=now) == "259200s"
+
+
+def test_key_duration_refuses_past_expiry(service):
+    module, _ = service
+    from datetime import datetime, timezone
+
+    now = datetime(2026, 11, 16, 7, 0, 1, tzinfo=timezone.utc)
+    with pytest.raises(RuntimeError, match="in the past"):
+        module._key_duration(now=now)
+
+
+# ---------------------------------------------------------------------------
 # provision_team_gateway_key
 # ---------------------------------------------------------------------------
 
@@ -198,12 +221,16 @@ def test_provision_mints_both_keys_with_expected_bodies(service, monkeypatch):
     assert key1_body["models"] == ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"]
     assert key1_body["max_budget"] == 15.0
     assert "budget_duration" not in key1_body  # lifetime cap, never resets
-    assert key1_body["expires"] == "2026-11-16T07:00:00Z"
+    # LiteLLM has no `expires` on /key/generate (silently dropped — keys never
+    # expired); expiry travels as a `duration` in seconds until GATEWAY_KEY_EXPIRES.
+    assert "expires" not in key1_body
+    assert re.fullmatch(r"\d+s", key1_body["duration"])
     assert key2_body["key_alias"] == "fall26-team-1-frontier"
     assert key2_body["models"] == ["muse-wonder", "kimi-k3"]
     assert key2_body["max_budget"] == 20.0
     assert "budget_duration" not in key2_body
-    assert key2_body["expires"] == "2026-11-16T07:00:00Z"
+    assert "expires" not in key2_body
+    assert key2_body["duration"] == key1_body["duration"]
     assert key2_body["metadata"]["ohack_team_id"] == "team-1"
     assert key2_body["metadata"]["event"] == "fall-2026"
     assert key2_body["metadata"]["provisioned_by"] == "ohack-backend"

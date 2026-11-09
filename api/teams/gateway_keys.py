@@ -29,6 +29,9 @@ GATEWAY_MAX_BUDGET = 15.0
 KEY2_MODELS = ["muse-wonder", "kimi-k3"]
 KEY2_MAX_BUDGET = 20.0
 # Keys die on their own after the event; no post-event cleanup script needed.
+# LiteLLM's /key/generate has NO `expires` field (it is silently dropped) —
+# expiry is set by sending `duration` (e.g. "600000s"), which LiteLLM turns
+# into expires = now + duration. `_key_duration()` derives it from this instant.
 GATEWAY_KEY_EXPIRES = "2026-11-16T07:00:00Z"
 KEY_ALIAS_PREFIX = "fall26-"
 
@@ -76,6 +79,23 @@ def _doc_ref(team_id):
 
 def _utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
+
+
+def _key_duration(now=None, expires=GATEWAY_KEY_EXPIRES):
+    """Seconds from `now` until `expires`, as the LiteLLM duration string
+    ("<n>s") that /key/generate and /key/update accept. Raises once the
+    expiry instant has passed — a key minted then would be dead on arrival,
+    and provisioning is best-effort in approve_team, so failing loudly beats
+    handing a team an unusable key."""
+    now = now or datetime.now(timezone.utc)
+    until = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+    seconds = int((until - now).total_seconds())
+    if seconds <= 0:
+        raise RuntimeError(
+            f"GATEWAY_KEY_EXPIRES ({expires}) is in the past; refusing to mint "
+            "a gateway key that would expire immediately"
+        )
+    return f"{seconds}s"
 
 
 # One spec per key. Key 1 fields are unprefixed; Key 2 fields are
@@ -176,7 +196,9 @@ def _generate_key(alias, team_id, models=None, max_budget=None, key_label=None):
         # pre-provisioned key design.
         "models": models,
         "max_budget": max_budget,
-        "expires": GATEWAY_KEY_EXPIRES,
+        # `duration`, not `expires`: LiteLLM ignores an `expires` field on
+        # /key/generate, which left every key non-expiring (found Nov 8 2026).
+        "duration": _key_duration(),
         "metadata": metadata,
     }
     r = requests.post(
