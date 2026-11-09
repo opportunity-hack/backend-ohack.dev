@@ -1,0 +1,47 @@
+name: PR size & description check
+
+# Friendly, comment-only nudge toward small PRs with short titles and
+# descriptions under {{PR_BODY_MAX_WORDS}} words. It never fails the PR.
+# Seeded by Opportunity Hack ({{EVENT_ID}}).
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: write
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            const marker = "<!-- ohack-pr-lint -->";
+            const title = pr.title || "";
+            const body = pr.body || "";
+            const words = body.trim() ? body.trim().split(/\s+/).length : 0;
+            const changed = (pr.additions || 0) + (pr.deletions || 0);
+            const notes = [];
+            if (title.length > {{PR_TITLE_MAX}}) notes.push(`**Title is ${title.length} characters** — aim for under {{PR_TITLE_MAX}}, imperative (\`Add volunteer sign-up form\`).`);
+            if (words > {{PR_BODY_MAX_WORDS}}) notes.push(`**Description is ${words} words** — aim for under {{PR_BODY_MAX_WORDS}}: what changed, why, how to test.`);
+            if (words === 0) notes.push(`**No description** — two sentences on what and why help judges and teammates review faster.`);
+            if (changed > {{PR_MAX_LINES}}) notes.push(`**${changed} changed lines** — PRs under {{PR_MAX_LINES}} lines get reviewed and merged faster; consider splitting the next one.`);
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: pr.number, per_page: 100,
+            });
+            const mine = comments.find(c => (c.body || "").includes(marker));
+
+            if (notes.length === 0) {
+              if (mine) await github.rest.issues.deleteComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: mine.id });
+              return;
+            }
+            const text = `${marker}\n👋 Quick PR hygiene check (nothing is blocked):\n\n- ${notes.join("\n- ")}\n\n_Small PRs with short, clear descriptions are what judges and recruiters read. See \`AGENTS.md\`._`;
+            if (mine) {
+              await github.rest.issues.updateComment({ owner: context.repo.owner, repo: context.repo.repo, comment_id: mine.id, body: text });
+            } else {
+              await github.rest.issues.createComment({ owner: context.repo.owner, repo: context.repo.repo, issue_number: pr.number, body: text });
+            }

@@ -53,8 +53,18 @@ def create_github_repo(
         nonprofit_name,
         nonprofit_id,
         org_name,
-        devpost_url
-        ):        
+        devpost_url,
+        seed_files=None,
+        ):
+    """Create (or reuse) the team repo under `org_name`.
+
+    `seed_files` — an optional list of {"path", "message", "content"} from
+    common.utils.team_repo_seed.build_seed_files. When given, those files
+    (README, AGENTS.md, Claude Code hooks, PR template/lint, .gitignore,
+    .env.example, LICENSE) are committed instead of the legacy README
+    below. The legacy README is kept only as the fallback when the seed
+    could not be built.
+    """
     g = Github(os.getenv('GITHUB_TOKEN'))
     org = get_github_organization(g, org_name)
     
@@ -85,15 +95,40 @@ def create_github_repo(
                 raise ValueError(e.data['message'])
 
 
-        # Add MIT License to repo
-        repo.create_file(
-            path="LICENSE",
-            message="Add MIT License",
-            content="MIT License"
-        )
+        if seed_files:
+            for f in seed_files:
+                try:
+                    repo.create_file(path=f["path"], message=f["message"], content=f["content"])
+                except GithubException as e:
+                    # One bad file (e.g. a 422 on a path) must not abort the
+                    # approval — the repo exists and the team can still work.
+                    logger.error("Seeding %s into %s failed: %s", f["path"], repository_name, e)
+        else:
+            _seed_legacy_files(repo, hackathon_event_id, slack_name_of_creator,
+                               team_name, team_slack_channel, nonprofit_name, nonprofit_id, devpost_url)
 
-        # Add README.md to repo with hackathon, nonprofit, team, slack_channel, problem statement info, slack_name_of_creator
-        repo.create_file(
+    # Update repo description with hackathon, nonprofit, team, problem statement info
+    repo.edit(description=f"{team_name} for {nonprofit_name} — {hackathon_event_id} Opportunity Hack")
+
+    # Return the repo name
+    return {
+        "repo_name": repo.name,
+        "full_url": f"https://github.com/{org_name}/{repo.name}"
+    }
+
+
+def _seed_legacy_files(repo, hackathon_event_id, slack_name_of_creator,
+                       team_name, team_slack_channel, nonprofit_name, nonprofit_id, devpost_url):
+    """Pre-Nov-2026 README/LICENSE seed. Only used when build_seed_files failed."""
+    # Add MIT License to repo
+    repo.create_file(
+        path="LICENSE",
+        message="Add MIT License",
+        content="MIT License"
+    )
+
+    # Add README.md to repo with hackathon, nonprofit, team, slack_channel, problem statement info, slack_name_of_creator
+    repo.create_file(
             path="README.md",
             message="Add README.md",
             content=f'''
@@ -187,15 +222,6 @@ Examples of winning DevPost submissions:
 - [1st place 2018](https://devpost.com/software/matthews-crossing-data-manager-oj4ica)
 '''
         )
-    
-    # Update repo description with hackathon, nonprofit, team, problem statement info
-    repo.edit(description=f"Repository for {hackathon_event_id} Hackathon, {team_name} Team")
-    
-    # Return the repo name
-    return {
-        "repo_name": repo.name,
-        "full_url": f"https://github.com/{org_name}/{repo.name}"
-    }
 
 
 def does_repo_exist(repo_name, hackathon_event_id, org_name, org=None):
