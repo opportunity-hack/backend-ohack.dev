@@ -1113,7 +1113,7 @@ def approve_team(admin_user_id, json):
 *Approved by:* {admin_name}
 
 :github_parrot: *GitHub Repository:* {repo['full_url']}
-All code goes here! Remember, we're building for the public good (MIT license).
+:rotating_light: *This is your team's ONE repo — ALL code goes here.* Please don't create your own repo (personal or org): judges, your Team Dashboard, the public project page and the nonprofit only see this one, so work pushed anywhere else won't count. Add every teammate as a collaborator. We're building for the public good (MIT license).
 
 :question: *Need help?* 
 Join <#C01E5CGDQ74> for questions and updates.

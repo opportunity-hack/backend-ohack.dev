@@ -153,6 +153,17 @@ def test_readme_carries_real_links_channels_and_demo_time():
     assert "DevPost is not required" in readme
 
 
+def test_readme_and_agents_insist_on_the_one_repository():
+    files = {f["path"]: f["content"] for f in seed.build_seed_files(_ctx())}
+    readme_head = files["README.md"].split("## Final day")[0]
+    assert "ONE repository" in readme_head  # above the fold, before the timeline
+    assert "don't create" in readme_head
+    agents = files["AGENTS.md"]
+    assert agents.index("The one repository rule") < agents.index("## Who this is for")
+    assert "Never suggest, scaffold or" in agents
+    assert "move it here" in agents
+
+
 def test_problem_statement_channel_wins_over_nonprofit_channel():
     readme = next(f for f in seed.build_seed_files(
         _ctx(problem_statement_slack_channel="#npo-cic-portal")
