@@ -209,6 +209,47 @@ def test_session_clock_hook_has_the_real_epochs_baked_in():
     assert 'TZ_NAME="America/Phoenix"' in clock
 
 
+def _guard_pattern(files):
+    """The ERE the seeded guard greps added lines with (same syntax in `re`)."""
+    guard = files[".claude/hooks/guard-secrets.sh"]
+    return re.compile(re.search(r"^pattern='(.*)'$", guard, re.M).group(1))
+
+
+def test_secret_guard_catches_real_looking_keys():
+    pattern = _guard_pattern({f["path"]: f["content"] for f in seed.build_seed_files(_ctx())})
+    for line in [
+        '+OPENAI_API_KEY=sk-abcdefghijklmnopqrstuv',
+        '+const key = "sk-proj-abcdefghijklmnop_qrstuv";',
+        '+token: ghp_' + "a" * 36,
+        '+AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE',
+        '+SLACK=xoxb-1234567890-abcdefghij',
+        '+-----BEGIN RSA PRIVATE KEY-----',
+    ]:
+        assert pattern.search(line), line
+
+
+def test_secret_guard_ignores_ordinary_kebab_case_code():
+    # Regression: an unanchored `sk-` matched inside task-/risk-/desk- words and
+    # blocked normal commits ("BLOCKED: this would publish a secret").
+    pattern = _guard_pattern({f["path"]: f["content"] for f in seed.build_seed_files(_ctx())})
+    for line in [
+        '+import TaskDetail from "./task-detail-component";',
+        '+<div class="task-management-dashboard">',
+        '+  risk-assessment-form-page',
+        '+  href="/help-desk-ticket-submission-form"',
+    ]:
+        assert not pattern.search(line), line
+
+
+def test_seeded_env_example_does_not_trip_the_secret_guard():
+    files = {f["path"]: f["content"] for f in seed.build_seed_files(_ctx())}
+    pattern = _guard_pattern(files)
+    for line in files[".env.example"].splitlines():
+        # as an added line, commented or uncommented
+        assert not pattern.search("+" + line), line
+        assert not pattern.search("+" + line.lstrip("# ")), line
+
+
 def test_pr_lint_workflow_uses_the_shared_limits_and_never_fails_the_pr():
     files = {f["path"]: f["content"] for f in seed.build_seed_files(_ctx())}
     wf = files[".github/workflows/pr-lint.yml"]
