@@ -1,0 +1,21 @@
+name: 🌡️ Environment drift
+# Weekly: compare test.api + api /api/health (non-secret config booleans,
+# cache backend, commit) against docs/environments.expected.json.
+on:
+  schedule:
+    - cron: "0 16 * * 1" # Mondays 9 AM Arizona
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Compare /api/health to the expected file
+        run: python scripts/check_environments.py --samples 10

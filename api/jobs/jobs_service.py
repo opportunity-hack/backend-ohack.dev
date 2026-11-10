@@ -82,7 +82,10 @@ def _project(doc: Dict[str, Any], fields) -> Dict[str, Any]:
 # Public listings
 # ---------------------------------------------------------------------------
 
-@cached(cache=TTLCache(maxsize=1, ttl=300), lock=threading.Lock())
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=1, ttl=10), lock=threading.Lock())
 def get_public_listings():
     """Published + closed listings, newest first. Draft/hidden never leak."""
     db = get_db()
@@ -96,7 +99,10 @@ def get_public_listings():
     return results
 
 
-@cached(cache=TTLCache(maxsize=50, ttl=300), lock=threading.Lock())
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=50, ttl=10), lock=threading.Lock())
 def get_public_listing(slug: str) -> Optional[Dict[str, Any]]:
     """Full public doc for one listing; None for draft/hidden/unknown.
     Closed listings still resolve so shared links render a calm closed state."""
