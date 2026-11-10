@@ -46,6 +46,7 @@ PUBLIC_VOLUNTEER_DENYLIST = frozenset({
     "additionalInfo", "whyJudge", "otherBackground",
     # check-in audit (admin-only attendance data)
     "checkedIn", "checkedInBy", "checkedInAt",
+    "checkin_reset_history",
     # admin-only enrichment
     "certificates",
     # judge intro video + LMS training cert links (review team only)

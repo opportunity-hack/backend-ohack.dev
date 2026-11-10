@@ -43,6 +43,9 @@ STAFF_OWNED_VOLUNTEER_FIELDS = frozenset({
     'isSelected',
     'isCheckedIn', 'checkedIn', 'checkInTime', 'checkInTimeList',
     'checkOutTime', 'checkoutTimeList',
+    'checkedInAt', 'checkedInBy',
+    # Audit trail written by api/checkin reset_checkins().
+    'checkin_reset_history',
     'deposit_status', 'deposit_refund_id', 'deposit_refund_amount_cents',
     'deposit_refunded_at', 'deposit_refunded_by', 'deposit_refund_status_msg',
     'certificates', 'sent_emails',
@@ -2514,69 +2517,143 @@ def get_my_roles_for_event(propel_user_id: str, event_id: str) -> Dict[str, Any]
 
 
 
+MENTOR_CHECKIN_DEFAULT_TIMEZONE = "America/Phoenix"
+
+
+def mentor_checkin_window(hackathon: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    When mentors may check themselves in for an event:
+    opens 00:00 on `start_date`, closes 23:59:59 on `end_date`, both in the
+    event's own timezone (`hackathon.timezone`, default America/Phoenix).
+
+    Returns {"state": "upcoming"|"open"|"closed", "opens_at", "closes_at"}
+    (ISO strings with offset, or None when the date is unknown). Missing dates
+    leave that side of the window open — same reading as the survey mode
+    (api.surveys.surveys_service.compute_event_mode), whose date parser is
+    reused so the two can't disagree about when an event starts.
+    """
+    from api.surveys.surveys_service import _parse_event_date
+
+    hackathon = hackathon or {}
+    tz_name = hackathon.get("timezone") or MENTOR_CHECKIN_DEFAULT_TIMEZONE
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone(MENTOR_CHECKIN_DEFAULT_TIMEZONE)
+
+    def _date_part(value):
+        # Tolerate "2026-11-14T09:00:00" as well as the usual "2026-11-14".
+        return value[:10] if isinstance(value, str) else None
+
+    opens = _parse_event_date(_date_part(hackathon.get("start_date")), tz, end_of_day=False)
+    closes = _parse_event_date(_date_part(hackathon.get("end_date")), tz, end_of_day=True)
+    current = now.astimezone(tz) if now is not None else datetime.now(tz)
+
+    if opens is not None and current < opens:
+        state = "upcoming"
+    elif closes is not None and current > closes:
+        state = "closed"
+    else:
+        state = "open"
+    return {
+        "state": state,
+        "opens_at": opens.isoformat() if opens is not None else None,
+        "closes_at": closes.isoformat() if closes is not None else None,
+    }
+
+
+def _find_mentor_snapshot(db, user_id: str, event_id: str):
+    """
+    The caller's mentor doc for an event, through the SAME three-way identity
+    resolution as GET /api/mentor/application (propel UUID -> verified email
+    -> legacy OAuth id). The check-in routes used the propel-UUID-only lookup,
+    so a mentor matched by email saw their application but got a 404 from
+    /status and could not check in. Returns (snapshot, data) or (None, None).
+    """
+    snap = _find_volunteer_snapshot(db, user_id, event_id, 'mentor')
+    if snap is None:
+        return None, None
+    data = snap.to_dict() or {}
+    data['id'] = snap.id
+    return snap, data
+
+
 def get_mentor_checkin_status(user_id: str, event_id: str) -> Dict[str, Any]:
     """
-    Get the current check-in status for a mentor.
-    
-    Args:
-        user_id: The mentor's user ID
-        event_id: The event ID
-        
-    Returns:
-        Dictionary containing check-in status information
+    Current check-in status for the calling mentor, plus whether they are
+    approved (`isSelected`) and the event's check-in window, so the page never
+    has to guess dates client-side.
     """
     db = get_db()
-    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
-    
+    _snap, volunteer = _find_mentor_snapshot(db, user_id, event_id)
+
     if not volunteer:
         return {
             'success': False,
             'error': 'Mentor record not found'
         }
-    
+
     return {
         'success': True,
         'isCheckedIn': volunteer.get('isCheckedIn', False),
-        'checkInTime': volunteer.get('checkInTime', None),        
-        'timeSlot': volunteer.get('timeSlot', None)
+        'checkInTime': volunteer.get('checkInTime', None),
+        'timeSlot': volunteer.get('timeSlot', None),
+        'isSelected': bool(volunteer.get('isSelected')),
+        'window': mentor_checkin_window(_hackathon_summary(db, event_id)),
     }
+
+
+def _checkin_refusal(code: str, message: str, **extra) -> Dict[str, Any]:
+    """A check-in the backend refuses on purpose (no write, no Slack)."""
+    return {'success': False, 'error': code, 'message': message, **extra}
 
 
 def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None) -> Dict[str, Any]:
     """
     Check in a mentor for an event.
-    
-    Args:
-        user_id: The mentor's user ID
-        event_id: The event ID
-        time_slot: Optional time slot for the check-in
-        
-    Returns:
-        Dictionary containing check-in status information
+
+    Refuses, in this order, with no write and no Slack:
+      not_approved      — the mentor application isn't approved (isSelected)
+      checkin_not_open  — the event hasn't started yet (carries opens_at)
+      checkin_closed    — the event's last day is over (carries closes_at)
     """
     db = get_db()
-    # Get the volunteer record
-    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
-    
+    _snap, volunteer = _find_mentor_snapshot(db, user_id, event_id)
+
     if not volunteer:
         return {
             'success': False,
             'error': 'Mentor record not found'
         }
-    
+
+    if not volunteer.get('isSelected'):
+        return _checkin_refusal(
+            'not_approved', "Your mentor application hasn't been approved yet.")
+
+    window = mentor_checkin_window(_hackathon_summary(db, event_id))
+    if window['state'] == 'upcoming':
+        return _checkin_refusal(
+            'checkin_not_open', "Mentor check-in opens when the event starts.",
+            opens_at=window['opens_at'])
+    if window['state'] == 'closed':
+        return _checkin_refusal(
+            'checkin_closed', "Mentor check-in has closed for this event.",
+            closes_at=window['closes_at'])
+
+    volunteer_ref = db.collection('volunteers').document(volunteer['id'])
+
     # Check if mentor is already checked in
     if volunteer.get('isCheckedIn', False):
         # Update the time slot if provided
         if time_slot:
-            volunteer_ref = db.collection('volunteers').document(volunteer['id'])
             volunteer_ref.update({
                 'timeSlot': time_slot,
                 'updated_timestamp': _get_current_timestamp()
             })
-            
+
             # Clear caches
-            _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
-            
+            _clear_volunteer_caches(user_id, volunteer.get('email'), event_id, 'mentor')
+
             return {
                 'success': True,
                 'message': 'Updated check-in time slot',
@@ -2584,7 +2661,7 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
                 'timeSlot': time_slot,
                 'slackNotificationSent': False  # No need to send notification for update
             }
-        
+
         return {
             'success': True,
             'message': 'Already checked in',
@@ -2592,11 +2669,10 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
             'timeSlot': volunteer.get('timeSlot'),
             'slackNotificationSent': False
         }
-    
+
     # Perform check-in
     current_time = _get_current_timestamp()
-    volunteer_ref = db.collection('volunteers').document(volunteer['id'])
-    
+
     update_data = {
         'isCheckedIn': True, # This is meant just to track mentor Check-in status TODO: change this to mentorIsCheckedIn
         'checkedIn': True, # This field is meant for in-person check-in, we'll also set it here
@@ -2606,22 +2682,22 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
         'checkInTimeList': firestore.ArrayUnion([current_time]),
         'updated_timestamp': current_time
     }
-    
+
     if time_slot:
         update_data['timeSlot'] = time_slot
-    
+
     volunteer_ref.update(update_data)
-    
+
     # Clear caches
-    _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
-    
+    _clear_volunteer_caches(user_id, volunteer.get('email'), event_id, 'mentor')
+
     # Send Slack notification
     slack_notification_sent = False
     try:
         slack_notification_sent = send_mentor_checkin_notification(volunteer, time_slot)
     except Exception as e:
         exception(logger, "Failed to send check-in notification", exc_info=e)
-    
+
     return {
         'success': True,
         'message': 'Checked in successfully',
@@ -2633,25 +2709,19 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
 
 def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
     """
-    Check out a mentor from an event.
-    
-    Args:
-        user_id: The mentor's user ID
-        event_id: The event ID
-        
-    Returns:
-        Dictionary containing check-out status information
+    Check out a mentor from an event. Always allowed while checked in — even
+    after the event (someone still checked in at the end can leave) and even
+    if their approval was later withdrawn.
     """
     db = get_db()
-    # Get the volunteer record
-    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
-    
+    _snap, volunteer = _find_mentor_snapshot(db, user_id, event_id)
+
     if not volunteer:
         return {
             'success': False,
             'error': 'Mentor record not found'
         }
-    
+
     # Check if mentor is checked in
     if not volunteer.get('isCheckedIn', False):
         return {
@@ -2698,7 +2768,7 @@ def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
     volunteer_ref.update(update_data)
     
     # Clear caches
-    _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
+    _clear_volunteer_caches(user_id, volunteer.get('email'), event_id, 'mentor')
     
     # Send Slack notification
     slack_notification_sent = False
