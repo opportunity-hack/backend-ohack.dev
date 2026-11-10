@@ -26,6 +26,12 @@ ENV PATH="/app/venv/bin:$PATH"
 
 # Copy project
 COPY . /app/
+
+# Commit sha reported by /api/health. Passed by .github/workflows/main.yml
+# (`fly deploy --build-arg COMMIT_SHA=...`); declared after the pip layer so
+# a new sha doesn't bust the dependency cache.
+ARG COMMIT_SHA=""
+ENV COMMIT_SHA=${COMMIT_SHA}
 # Run the application: gthread worker class allows concurrent I/O-bound requests
 # without head-of-line blocking from a single sync worker.
 CMD ["venv/bin/gunicorn", "api.wsgi:app", "--log-file=-", "--log-level", "info", "--preload", "--worker-class", "gthread", "--workers", "2", "--threads", "8", "--timeout", "120"]

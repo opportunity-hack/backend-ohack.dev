@@ -1,0 +1,51 @@
+{
+  "_comment": [
+    "Expected non-secret configuration per backend environment, compared weekly",
+    "against GET /api/health by .github/workflows/environment-drift.yml",
+    "(scripts/check_environments.py). Booleans mean 'the env var is set' — never",
+    "values. Volatile fields (commit_sha, worker_pid, machine_id, region) are",
+    "reported but not compared. Update this file in the same PR as a deliberate",
+    "secret/config change. Human-readable table: frontend repo docs/environments.md."
+  ],
+  "environments": {
+    "staging": {
+      "url": "https://test.api.ohack.dev/api/health",
+      "expected": {
+        "status": "ok",
+        "environment": "staging",
+        "app": "backend-ohack-staging",
+        "cache_backend": "local",
+        "captcha_configured": false,
+        "resend_configured": false,
+        "stripe_configured": false,
+        "cron_token_configured": false,
+        "hacker_deposit_webhook_configured": false
+      },
+      "deliberately_different": {
+        "captcha_configured": "Unset on staging: verify_recaptcha() returns True when the secret is missing, so test.ohack.dev forms skip reCAPTCHA. Open decision (plan decision 2).",
+        "resend_configured": "Unset on staging: no participant emails from test. Open decision (plan decision 2).",
+        "stripe_configured": "Unset on staging: admin deposit refunds can't run on test. Open decision (plan decision 2).",
+        "cron_token_configured": "Unset on staging. The hourly deadline-reminder workflow targets api.ohack.dev (vars.BACKEND_URL), so staging only needs it if that cron is pointed at test.api. Open decision (plan decision 3)."
+      }
+    },
+    "production": {
+      "url": "https://api.ohack.dev/api/health",
+      "expected": {
+        "status": "ok",
+        "environment": "production",
+        "app": "backend-ohack-prod",
+        "cache_backend": "local",
+        "captcha_configured": true,
+        "resend_configured": true,
+        "stripe_configured": true,
+        "cron_token_configured": true,
+        "hacker_deposit_webhook_configured": false
+      },
+      "deliberately_different": {},
+      "known_gaps": {
+        "cache_backend": "No REDIS_URL in either app (Nov 2026): every cache is per process, up to 4 copies in prod (2 machines x 2 workers). Decided: no Redis for now — read_after_write caches are <=10s instead (common/utils/cache_registry.py).",
+        "hacker_deposit_webhook_configured": "STRIPE_HACKER_DEPOSIT_WEBHOOK_SECRET is set in NEITHER app: POST /api/webhooks/stripe/hacker-deposit can't verify signatures. Harmless while deposits are disabled; set it (and flip this to true) before enabling deposits."
+      }
+    }
+  }
+}

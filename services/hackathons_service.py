@@ -150,7 +150,10 @@ def remove_nonprofit_from_hackathon(json):
     }
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=20), lock=threading.Lock())
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
     logger.debug(f"get_single_hackathon_id start id={id}")
@@ -161,7 +164,7 @@ def get_single_hackathon_id(id):
         logger.warning("get_single_hackathon_id end (no results)")
         return {}
     else:
-        # Pass the snapshot (not the reference) so this function's own 20s
+        # Pass the snapshot (not the reference) so this function's own 10s
         # TTL governs freshness rather than doc_to_json's reference cache.
         result = doc_to_json(docid=doc.id, doc=doc.get())
         if result is None:
@@ -610,7 +613,12 @@ def _enrich_teams_users_batch(teams, db):
 _PRIVATE_HACKATHON_FIELDS = ("reminders_sent",)
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
+# Was 600s: a mentor/team/admin write cleared only one worker's copy, so the
+# event page served the pre-write teams for up to 10 min from the others.
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
     logger.debug(f"get_single_hackathon_event start hackathon_id={hackathon_id}")

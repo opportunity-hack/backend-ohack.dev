@@ -262,7 +262,10 @@ def save_helping_status(propel_user_id, d):
 # the user docs in a single get_all. Public, PII-free (same fields the team
 # rosters already expose), cached briefly and cleared on every toggle.
 # ---------------------------------------------------------------------------
-HELPERS_CACHE_TTL = 60
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+HELPERS_CACHE_TTL = 10
 HELPER_TYPES = ("hacker", "mentor")
 _helpers_cache: TTLCache = TTLCache(maxsize=512, ttl=HELPERS_CACHE_TTL)
 _helpers_cache_lock = threading.Lock()

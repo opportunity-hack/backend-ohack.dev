@@ -47,7 +47,10 @@ logger = get_logger("judging_service")
 # panel/assignment/lock write below is wrapped in @_clears_public_schedule.
 # ---------------------------------------------------------------------------
 
-_PUBLIC_SCHEDULE_CACHE = TTLCache(maxsize=100, ttl=60)
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+_PUBLIC_SCHEDULE_CACHE = TTLCache(maxsize=100, ttl=10)
 _PUBLIC_SCHEDULE_LOCK = threading.Lock()
 
 
