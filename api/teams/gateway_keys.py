@@ -32,7 +32,12 @@ KEY2_MAX_BUDGET = 20.0
 # LiteLLM's /key/generate has NO `expires` field (it is silently dropped) —
 # expiry is set by sending `duration` (e.g. "600000s"), which LiteLLM turns
 # into expires = now + duration. `_key_duration()` derives it from this instant.
-GATEWAY_KEY_EXPIRES = "2026-11-16T07:00:00Z"
+# 2026-11-16T01:00:00Z = Sun Nov 15, 6:00 PM Arizona time (MST, UTC-7, no DST),
+# right after the awards. Was 07:00Z (midnight at the end of Sunday) until
+# Nov 10 2026; keys minted before that are moved with hack-llm
+# scripts/set_key_expiry.py, and `_effective_expires()` reports the new time
+# for their stored docs without a data migration.
+GATEWAY_KEY_EXPIRES = "2026-11-16T01:00:00Z"
 KEY_ALIAS_PREFIX = "fall26-"
 
 
@@ -81,6 +86,27 @@ def _utcnow_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
+def _parse_iso(value):
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _effective_expires(stored):
+    """The expiry to REPORT for a key: the earlier of the stored `expires`
+    (stamped at mint time) and the current GATEWAY_KEY_EXPIRES. Keys minted
+    before the expiry moved earlier still carry the old stamp; LiteLLM is
+    re-swept to the constant with scripts/set_key_expiry.py, so the earlier
+    instant is the truthful one. Unparseable/missing stored values fall back
+    to the constant. Read-only: nothing is written back."""
+    if not stored:
+        return GATEWAY_KEY_EXPIRES
+    try:
+        if _parse_iso(stored) <= _parse_iso(GATEWAY_KEY_EXPIRES):
+            return stored
+    except (TypeError, ValueError, AttributeError):
+        pass
+    return GATEWAY_KEY_EXPIRES
+
+
 def _key_duration(now=None, expires=GATEWAY_KEY_EXPIRES):
     """Seconds from `now` until `expires`, as the LiteLLM duration string
     ("<n>s") that /key/generate and /key/update accept. Raises once the
@@ -88,7 +114,7 @@ def _key_duration(now=None, expires=GATEWAY_KEY_EXPIRES):
     and provisioning is best-effort in approve_team, so failing loudly beats
     handing a team an unusable key."""
     now = now or datetime.now(timezone.utc)
-    until = datetime.fromisoformat(expires.replace("Z", "+00:00"))
+    until = _parse_iso(expires)
     seconds = int((until - now).total_seconds())
     if seconds <= 0:
         raise RuntimeError(
@@ -156,7 +182,7 @@ def _key_entry(team_id, data, spec, plaintext=None, spend=None, include_secret=T
         "key_alias": data.get(spec["alias_field"]) or spec["alias_fn"](team_id),
         "models": data.get(spec["models_field"]) or list(spec["models"]),
         "max_budget": data.get(spec["budget_field"], spec["max_budget"]),
-        "expires": data.get("expires", GATEWAY_KEY_EXPIRES),
+        "expires": _effective_expires(data.get("expires")),
         "status": data.get(spec["status_field"]) or "missing",
     }
     if include_secret:
@@ -349,7 +375,7 @@ def _status_entry(team_id, data, spec):
         "key_alias": data.get(spec["alias_field"]) or spec["alias_fn"](team_id),
         "models": data.get(spec["models_field"]) or list(spec["models"]),
         "max_budget": data.get(spec["budget_field"], spec["max_budget"]),
-        "expires": data.get("expires", GATEWAY_KEY_EXPIRES),
+        "expires": _effective_expires(data.get("expires")),
         "status": status,
         "provisioned_at": data.get(spec["provisioned_field"]),
         "rotated_at": data.get(spec["rotated_field"]),
