@@ -168,3 +168,32 @@ def test_hacker_submit_returns_the_saved_doc(views, client, monkeypatch):
 
     assert res.status_code == 200
     assert res.get_json()["data"]["isSelected"] is True
+
+
+# ---------------------------------------------------------------------------
+# Mentor self check-in refusals map to readable 403/409 bodies (Nov 2026).
+
+@pytest.mark.parametrize("result,status", [
+    ({"success": False, "error": "not_approved", "message": "Your mentor application hasn't been approved yet."}, 403),
+    ({"success": False, "error": "checkin_not_open", "message": "opens later", "opens_at": "2026-11-14T00:00:00-07:00"}, 409),
+    ({"success": False, "error": "checkin_closed", "message": "closed", "closes_at": "2026-11-15T23:59:59-07:00"}, 409),
+])
+def test_mentor_checkin_refusals(views, client, monkeypatch, result, status):
+    monkeypatch.setattr(views, "mentor_checkin", lambda u, e, t: result)
+    r = client.post("/api/mentor/checkin/fall-2026/in", headers=HEADERS, json={})
+    assert r.status_code == status
+    assert r.json["error"] == result["error"] and r.json["message"] == result["message"]
+    for key in ("opens_at", "closes_at"):
+        if key in result:
+            assert r.json[key] == result[key]
+
+
+def test_mentor_checkin_status_carries_approval_and_window(views, client, monkeypatch):
+    window = {"state": "upcoming", "opens_at": "a", "closes_at": "b"}
+    monkeypatch.setattr(views, "get_mentor_checkin_status", lambda u, e: {
+        "success": True, "isCheckedIn": False, "checkInTime": None, "timeSlot": None,
+        "isSelected": True, "window": window,
+    })
+    r = client.get("/api/mentor/checkin/fall-2026/status", headers=HEADERS)
+    assert r.status_code == 200
+    assert r.json["data"]["isSelected"] is True and r.json["data"]["window"] == window

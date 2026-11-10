@@ -644,6 +644,15 @@ def get_hacker_applications(event_id):
 
 
 # Mentor Check-in API Endpoints
+
+# mentor_checkin() refusal codes -> HTTP status. not_approved is a permission
+# problem (403); the two window codes are "not now" (409).
+_CHECKIN_REFUSAL_STATUS = {
+    'not_approved': 403,
+    'checkin_not_open': 409,
+    'checkin_closed': 409,
+}
+
 @bp.route('/mentor/checkin/<event_id>/status', methods=['GET'])
 @auth.require_user
 def get_mentor_checkin_status_endpoint(event_id):
@@ -662,7 +671,9 @@ def get_mentor_checkin_status_endpoint(event_id):
             return _success_response({
                 'isCheckedIn': status.get('isCheckedIn', False),
                 'checkInTime': status.get('checkInTime'),
-                'timeSlot': status.get('timeSlot')
+                'timeSlot': status.get('timeSlot'),
+                'isSelected': status.get('isSelected', False),
+                'window': status.get('window'),
             }, "Check-in status retrieved successfully")
         else:
             return _error_response(status.get('error', "Failed to retrieve check-in status"), 404)
@@ -694,8 +705,21 @@ def mentor_checkin_endpoint(event_id):
                 'timeSlot': result.get('timeSlot'),
                 'slackNotificationSent': result.get('slackNotificationSent', False)
             }, "Checked in successfully")
-        else:
-            return _error_response(result.get('error', "Failed to check in"), 400)
+        code = result.get('error')
+        if code in _CHECKIN_REFUSAL_STATUS:
+            # Deliberate refusals carry a machine-readable `error` the page
+            # uses to settle into the matching state (approval / window).
+            body = {
+                "success": False,
+                "error": code,
+                "message": result.get('message'),
+                "status_code": _CHECKIN_REFUSAL_STATUS[code],
+            }
+            for key in ('opens_at', 'closes_at'):
+                if key in result:
+                    body[key] = result[key]
+            return jsonify(body), _CHECKIN_REFUSAL_STATUS[code]
+        return _error_response(code or "Failed to check in", 400)
     except Exception as e:
         logger.error(f"Error during mentor check-in: {str(e)}")
         return _error_response(f"Failed to check in: {str(e)}")
