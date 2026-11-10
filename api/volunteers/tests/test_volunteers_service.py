@@ -1001,15 +1001,17 @@ def test_calendar_attachments_use_the_volunteer_shift_hours():
     )
     assert len(result) == 3
     contents = [a["content"] for a in result]
-    # "MST" in the slot text → America/Phoenix TZID (the old "…T080000MST"
-    # suffix isn't valid iCalendar; clients treated it as floating time).
-    assert "DTSTART;TZID=America/Phoenix:20261114T080000" in contents[0]
-    assert "DTEND;TZID=America/Phoenix:20261114T110000" in contents[0]
-    assert "DTSTART;TZID=America/Phoenix:20261114T143000" in contents[1]
-    assert "DTEND;TZID=America/Phoenix:20261114T170000" in contents[1]
-    # Midnight run spans into the next day.
-    assert "DTSTART;TZID=America/Phoenix:20261114T233000" in contents[2]
-    assert "DTEND;TZID=America/Phoenix:20261115T003000" in contents[2]
+    # No hackathon timezone passed: "MST" in the slot text → America/Phoenix
+    # (UTC-7), written as UTC instants. (The old "…T080000MST" suffix isn't
+    # valid iCalendar; clients treated it as floating time.)
+    assert "DTSTART:20261114T150000Z" in contents[0]
+    assert "DTEND:20261114T180000Z" in contents[0]
+    assert "DTSTART:20261114T213000Z" in contents[1]
+    assert "DTEND:20261115T000000Z" in contents[1]
+    # Midnight run (11:30pm–12:30am MST) spans into the next day.
+    assert "DTSTART:20261115T063000Z" in contents[2]
+    assert "DTEND:20261115T073000Z" in contents[2]
+    assert all("TZID" not in c for c in contents)
     assert all("ATTENDEE:MAILTO:vol@example.com" in c for c in contents)
 
 
@@ -1019,7 +1021,7 @@ def test_calendar_attachments_mentor_named_slots_still_use_the_mapping():
         volunteer_type="mentor", year=2026,
     )
     assert len(result) == 1
-    assert "DTSTART;TZID=America/Phoenix:20261114T070000" in result[0]["content"]
+    assert "DTSTART:20261114T140000Z" in result[0]["content"]
 
 
 def test_confirmation_email_lists_the_shifts_as_text():
@@ -1064,8 +1066,40 @@ def test_calendar_attachments_carry_the_venue_and_hackathon_timezone():
     assert "LOCATION:Engineering Center G Wing\\, 501 E Tyler Mall\\, Tempe\\, AZ" in content
     assert "Virtual" not in content
     assert "SUMMARY:Opportunity Hack Fall 2026 - Doors Open & Registration - 📋 Check-in Registration" in content
-    assert "DTSTART;TZID=America/Phoenix:20261114T080000" in content
+    assert "DTSTART:20261114T150000Z" in content
+    assert "times are MST (America/Phoenix)" in content
     assert "DTSTAMP:" in content and "Z\n" in content  # stamps are UTC
+
+
+def test_calendar_attachments_follow_the_admin_timezone_over_the_slot_label():
+    """The hackathon's `timezone` (admin Overview) is the source of truth —
+    8:00am in New York is 13:00Z even if the slot text says MST."""
+    result = get_calendar_email_attachment_from_availability(
+        "Saturday, Nov 14: Doors Open - 📋 Check-in (8:00am - 11:00am MST)", "vol@example.com",
+        volunteer_type="volunteer", year=2026, tz_name="America/New_York",
+    )
+    content = result[0]["content"]
+    assert "DTSTART:20261114T130000Z" in content
+    assert "DTEND:20261114T160000Z" in content
+    assert "times are EST (America/New_York)" in content
+
+
+def test_calendar_attachments_use_daylight_time_labels_without_a_hackathon_timezone():
+    result = get_calendar_email_attachment_from_availability(
+        "Saturday, Jul 11: Doors Open - 📋 Check-in (8:00am - 11:00am PDT)", "vol@example.com",
+        volunteer_type="volunteer", year=2026,
+    )
+    # America/Los_Angeles in July is UTC-7.
+    assert "DTSTART:20260711T150000Z" in result[0]["content"]
+
+
+def test_calendar_attachments_survive_an_invalid_hackathon_timezone():
+    result = get_calendar_email_attachment_from_availability(
+        "Saturday, Nov 14: Doors Open - 📋 Check-in (8:00am - 11:00am MST)", "vol@example.com",
+        volunteer_type="volunteer", year=2026, tz_name="Mars/Olympus_Mons",
+    )
+    # Falls back to the slot's MST → America/Phoenix.
+    assert "DTSTART:20261114T150000Z" in result[0]["content"]
 
 
 def test_calendar_attachments_omit_location_when_the_event_is_unknown():
@@ -1077,7 +1111,7 @@ def test_calendar_attachments_omit_location_when_the_event_is_unknown():
     assert "LOCATION:" not in content
     assert "Virtual" not in content
     # No hackathon timezone → the abbreviation in the slot text decides.
-    assert "DTSTART;TZID=America/Los_Angeles:20261114T070000" in content
+    assert "DTSTART:20261114T150000Z" in content  # 7am PST = 15:00Z
 
 
 def test_calendar_event_name_normalizes_hackathon_titles():
@@ -1154,3 +1188,208 @@ def test_create_volunteer_feeds_the_hackathon_into_the_email_and_invites(mock_ge
     assert ics_kwargs["tz_name"] == "America/Phoenix"
     assert ics_kwargs["year"] == 2026
     assert mock_email.call_args.kwargs["event"]["location"] == FALL_2026_EVENT["location"]
+
+
+# ---------------------------------------------------------------------------
+# Hacker auto-approve with capacity (Nov 2026)
+# ---------------------------------------------------------------------------
+
+HACKER_DATA = {"volunteer_type": "hacker", "name": "Riley Hacker"}
+
+
+def _db_with_hackathon(constraints):
+    """MagicMock db whose `hackathons` query yields one doc with `constraints`;
+    every other collection is a shared MagicMock (captures volunteer writes)."""
+    mock_db = MagicMock()
+    hackathon_doc = MagicMock()
+    hackathon_doc.to_dict.return_value = {**FALL_2026_EVENT, "constraints": constraints}
+    hackathons = MagicMock()
+    hackathons.where.return_value.limit.return_value.stream.return_value = iter([hackathon_doc])
+    volunteers = MagicMock()
+    mock_db.collection.side_effect = lambda name: hackathons if name == 'hackathons' else volunteers
+    return mock_db, volunteers
+
+
+def _submit_hacker(mock_db, existing=None, on_roster=0):
+    with patch('services.volunteers_service.get_db', return_value=mock_db), \
+         patch('services.volunteers_service.find_volunteer_by_caller_identity', return_value=existing), \
+         patch('services.volunteers_service._count_selected_hackers', return_value=on_roster), \
+         patch('services.volunteers_service.get_slack_user_by_email', return_value=None), \
+         patch('services.volunteers_service.send_admin_notification_email'), \
+         patch('services.volunteers_service.send_slack_volunteer_notification'), \
+         patch('services.hackathons_service.get_volunteer_by_event') as mock_by_event, \
+         patch('services.volunteers_service.send_volunteer_confirmation_email') as mock_email:
+        result = create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email=MOCK_EMAIL, event_id="fall-2026",
+            volunteer_data=dict(HACKER_DATA),
+        )
+    return result, mock_email, mock_by_event
+
+
+def test_auto_approve_puts_a_new_hacker_on_the_roster():
+    mock_db, volunteers = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 90})
+    result, mock_email, mock_by_event = _submit_hacker(mock_db, on_roster=12)
+
+    assert result["isSelected"] is True
+    assert result["status"] == "approved"
+    assert result["auto_approved"] is True
+    assert result["auto_approved_at"]
+    written = volunteers.document.return_value.set.call_args.args[0]
+    assert written["isSelected"] is True
+    assert mock_email.call_args.kwargs["roster_outcome"] == "approved"
+    mock_by_event.cache_clear.assert_called_once()
+
+
+def test_auto_approve_waitlists_once_capacity_is_reached():
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 90})
+    result, mock_email, _ = _submit_hacker(mock_db, on_roster=90)
+
+    assert result["isSelected"] is False
+    assert result["status"] == "waitlisted"
+    assert result["auto_approved"] is False
+    assert mock_email.call_args.kwargs["roster_outcome"] == "waitlisted"
+
+
+def test_auto_approve_without_capacity_has_no_limit():
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": None})
+    result, _, _ = _submit_hacker(mock_db, on_roster=5000)
+    assert result["isSelected"] is True
+
+
+def test_auto_approve_off_leaves_new_hackers_pending():
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": False, "hacker_capacity": 90})
+    result, mock_email, mock_by_event = _submit_hacker(mock_db)
+
+    assert result["isSelected"] is False
+    assert "status" not in result
+    assert "auto_approved" not in result
+    assert mock_email.call_args.kwargs["roster_outcome"] is None
+    mock_by_event.cache_clear.assert_not_called()
+
+
+def test_auto_approve_never_applies_to_other_roles():
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True})
+    with patch('services.volunteers_service.get_db', return_value=mock_db), \
+         patch('services.volunteers_service.find_volunteer_by_caller_identity', return_value=None), \
+         patch('services.volunteers_service.get_slack_user_by_email', return_value=None), \
+         patch('services.volunteers_service.send_admin_notification_email'), \
+         patch('services.volunteers_service.send_slack_volunteer_notification'), \
+         patch('services.volunteers_service.send_volunteer_confirmation_email'):
+        result = create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email=MOCK_EMAIL, event_id="fall-2026",
+            volunteer_data={"volunteer_type": "mentor", "name": "M"},
+        )
+    assert result["isSelected"] is False
+
+
+def test_auto_approve_promotes_a_pending_hacker_who_updates():
+    existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
+                "volunteer_type": "hacker", "isSelected": False, "status": "pending"}
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 90})
+    result, mock_email, _ = _submit_hacker(mock_db, existing=existing, on_roster=3)
+
+    assert result["isSelected"] is True
+    assert result["status"] == "approved"
+    assert result["auto_approved"] is True
+    assert mock_email.call_args.kwargs["roster_outcome"] == "approved"
+
+
+@pytest.mark.parametrize("status", ["denied", "Withdrew", "no_show"])
+def test_auto_approve_never_overrides_a_staff_decision(status):
+    existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
+                "volunteer_type": "hacker", "isSelected": False, "status": status}
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True})
+    result, mock_email, _ = _submit_hacker(mock_db, existing=existing)
+
+    assert result["isSelected"] is False
+    assert result["status"] == status
+    assert "auto_approved" not in result
+    assert mock_email.call_args.kwargs["roster_outcome"] is None
+
+
+def test_update_of_a_pending_hacker_at_capacity_keeps_their_status():
+    existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
+                "volunteer_type": "hacker", "isSelected": False, "status": "pending"}
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 2})
+    result, _, _ = _submit_hacker(mock_db, existing=existing, on_roster=2)
+
+    assert result["isSelected"] is False
+    assert result["status"] == "pending"
+
+
+def test_update_of_an_approved_hacker_does_not_recount_or_restamp():
+    existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
+                "volunteer_type": "hacker", "isSelected": True, "status": "approved"}
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 2})
+    with patch('services.volunteers_service._hacker_roster_decision') as decide:
+        result, mock_email, _ = _submit_hacker(mock_db, existing=existing, on_roster=99)
+    decide.assert_not_called()
+    assert result["isSelected"] is True
+    assert "auto_approved_at" not in result
+    assert mock_email.call_args.kwargs["roster_outcome"] is None
+
+
+def test_applicant_cannot_claim_auto_approved_fields():
+    mock_db, _ = _db_with_hackathon({})
+    with patch('services.volunteers_service.get_db', return_value=mock_db), \
+         patch('services.volunteers_service.find_volunteer_by_caller_identity', return_value=None), \
+         patch('services.volunteers_service.get_slack_user_by_email', return_value=None), \
+         patch('services.volunteers_service.send_admin_notification_email'), \
+         patch('services.volunteers_service.send_slack_volunteer_notification'), \
+         patch('services.volunteers_service.send_volunteer_confirmation_email'):
+        result = create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email=MOCK_EMAIL, event_id="fall-2026",
+            volunteer_data={**HACKER_DATA, "auto_approved": True, "auto_approved_at": "2026-11-14T08:00:00",
+                            "isSelected": True},
+        )
+    assert result["isSelected"] is False
+    assert "auto_approved" not in result
+    assert "auto_approved_at" not in result
+
+
+def test_count_selected_hackers_falls_back_without_aggregation():
+    """MockFirestore has no count(): the helper streams ids instead."""
+    from services.volunteers_service import _count_selected_hackers
+    query = MagicMock()
+    query.count.side_effect = AttributeError("no count()")
+    query.select.return_value.stream.return_value = iter([object(), object(), object()])
+    mock_db = MagicMock()
+    mock_db.collection.return_value.where.return_value.where.return_value.where.return_value = query
+    with patch('services.volunteers_service.get_db', return_value=mock_db):
+        assert _count_selected_hackers("fall-2026") == 3
+
+
+def test_confirmation_email_for_an_auto_approved_hacker():
+    import os
+    from services import volunteers_service
+    sent = {}
+    with patch("services.volunteers_service._notifications_disabled", return_value=False), \
+         patch.dict(os.environ, {"RESEND_WELCOME_EMAIL_KEY": "re_dummy"}), \
+         patch("services.volunteers_service.resend.Emails.send", side_effect=lambda p: sent.update(p) or {"id": "re_test"}):
+        volunteers_service.send_volunteer_confirmation_email(
+            "Riley", "Hacker", "r@example.com", "hacker", None, "fall-2026", event=FALL_2026_EVENT,
+            roster_outcome="approved",
+        )
+    assert sent["subject"].startswith("[Confirmed]")
+    assert "on the roster" in sent["html"]
+    assert "https://www.ohack.dev/hack/fall-2026/hacker-application" in sent["html"]
+    assert "https://www.ohack.dev/hack/fall-2026/manageteam" in sent["html"]
+    assert "review it shortly" not in sent["html"]
+
+
+def test_confirmation_email_for_a_waitlisted_hacker():
+    sent = _send_confirmation_capturing_html("hacker")  # baseline: received copy
+    assert "review it shortly" in sent["html"]
+    assert "waitlist" not in sent["html"]
+
+    import os
+    from services import volunteers_service
+    sent = {}
+    with patch("services.volunteers_service._notifications_disabled", return_value=False), \
+         patch.dict(os.environ, {"RESEND_WELCOME_EMAIL_KEY": "re_dummy"}), \
+         patch("services.volunteers_service.resend.Emails.send", side_effect=lambda p: sent.update(p) or {"id": "re_test"}):
+        volunteers_service.send_volunteer_confirmation_email(
+            "Riley", "Hacker", "r@example.com", "hacker", None, "fall-2026", roster_outcome="waitlisted",
+        )
+    assert "waitlist" in sent["html"]
+    assert "[Confirmed]" not in sent["subject"]

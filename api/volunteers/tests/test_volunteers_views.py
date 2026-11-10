@@ -140,3 +140,31 @@ def test_admin_list_routes_dispatch(views, client, monkeypatch):
     for kind in ("mentors", "sponsors", "judges", "volunteers"):
         res = client.get(f"/api/admin/{kind}/evt-1", headers=HEADERS)
         assert res.status_code == 200, (kind, res.get_json())
+
+
+def test_hacker_submit_returns_400_when_the_service_rejects(views, client, monkeypatch):
+    """A wrong eligibility answer / failed reCAPTCHA used to come back as a
+    200 "submitted successfully" with the error tucked inside data."""
+    monkeypatch.setattr(views, "send_slack_audit", MagicMock())
+    monkeypatch.setattr(views, "create_or_update_volunteer",
+                        MagicMock(return_value={"error": "You must be 18 or older."}))
+
+    res = client.post("/api/hacker/application/fall-2026/submit",
+                      json={"email": "h@example.com", "name": "H"}, headers=HEADERS)
+
+    assert res.status_code == 400
+    body = res.get_json()
+    assert body["success"] is False
+    assert body["message"] == "You must be 18 or older."
+
+
+def test_hacker_submit_returns_the_saved_doc(views, client, monkeypatch):
+    monkeypatch.setattr(views, "send_slack_audit", MagicMock())
+    monkeypatch.setattr(views, "create_or_update_volunteer",
+                        MagicMock(return_value={"id": "vol-9", "isSelected": True, "status": "approved"}))
+
+    res = client.post("/api/hacker/application/fall-2026/submit",
+                      json={"email": "h@example.com", "name": "H"}, headers=HEADERS)
+
+    assert res.status_code == 200
+    assert res.get_json()["data"]["isSelected"] is True
