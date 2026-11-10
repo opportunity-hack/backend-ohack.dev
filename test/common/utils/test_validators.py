@@ -409,3 +409,51 @@ def test_validate_hackathon_data_partial_still_skips_non_string_github_org():
     cleaned, skipped = validate_hackathon_data_partial(data)
     assert "github_org" not in cleaned
     assert any(s["field"] == "github_org" for s in skipped)
+
+
+# ---------------------------------------------------------------------------
+# Hacker application lock / auto-approve constraints (Nov 2026).
+# ---------------------------------------------------------------------------
+
+def test_partial_accepts_hacker_lock_and_auto_approve_constraints():
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({
+            "application_hacker_enabled_code": "late-hackers-2026",
+            "application_hacker_close_at_deadline": False,
+            "hacker_auto_approve": True,
+            "hacker_capacity": 90,
+        })
+    )
+    assert skipped == []
+    c = cleaned["constraints"]
+    assert c["application_hacker_enabled_code"] == "late-hackers-2026"
+    assert c["application_hacker_close_at_deadline"] is False
+    assert c["hacker_auto_approve"] is True
+    assert c["hacker_capacity"] == 90
+
+
+def test_partial_allows_empty_code_and_null_capacity():
+    cleaned, skipped = validate_hackathon_data_partial(
+        _hackathon_data({"application_hacker_enabled_code": "", "hacker_capacity": None})
+    )
+    assert skipped == []
+    assert cleaned["constraints"]["application_hacker_enabled_code"] == ""
+    assert cleaned["constraints"]["hacker_capacity"] is None
+
+
+@pytest.mark.parametrize("key,value", [
+    ("application_hacker_enabled_code", "x" * 65),
+    ("application_hacker_enabled_code", 1234),
+    ("application_hacker_close_at_deadline", "yes"),
+    ("hacker_auto_approve", 1),
+    ("hacker_capacity", 0),
+    ("hacker_capacity", 10001),
+    ("hacker_capacity", True),
+    ("hacker_capacity", "90"),
+])
+def test_partial_strips_invalid_hacker_constraints(key, value):
+    cleaned, skipped = validate_hackathon_data_partial(_hackathon_data({key: value}))
+    assert any(s["field"] == f"constraints.{key}" for s in skipped)
+    assert key not in cleaned["constraints"]
+    # The rest of the constraints still save.
+    assert cleaned["constraints"]["max_people_per_team"] == 5
