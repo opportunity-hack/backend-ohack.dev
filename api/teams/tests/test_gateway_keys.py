@@ -142,6 +142,7 @@ def _seed_key1_only(module, fake_db, team_id="team-1"):
         "key_ciphertext": _fernet_for_test().encrypt(b"sk-key1-plain").decode(),
         "models": ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"],
         "max_budget": 15.0,
+        # Minted before Nov 10 2026, when the expiry was midnight AZ.
         "expires": "2026-11-16T07:00:00Z",
         "provisioned_at": "2026-11-07T00:00:00+00:00",
     }
@@ -170,16 +171,57 @@ def test_key_duration_is_seconds_until_expiry(service):
     module, _ = service
     from datetime import datetime, timezone
 
-    now = datetime(2026, 11, 13, 7, 0, 0, tzinfo=timezone.utc)
-    # 3 days before 2026-11-16T07:00:00Z → exactly 259200 seconds.
+    now = datetime(2026, 11, 13, 1, 0, 0, tzinfo=timezone.utc)
+    # 3 days before 2026-11-16T01:00:00Z → exactly 259200 seconds.
     assert module._key_duration(now=now) == "259200s"
+
+
+def test_expiry_is_sunday_6pm_arizona(service):
+    module, _ = service
+    from datetime import datetime, timedelta, timezone
+
+    until = datetime.fromisoformat(module.GATEWAY_KEY_EXPIRES.replace("Z", "+00:00"))
+    arizona = until.astimezone(timezone(timedelta(hours=-7)))
+    assert (arizona.year, arizona.month, arizona.day, arizona.hour, arizona.minute) == (
+        2026, 11, 15, 18, 0,
+    )
+    assert arizona.strftime("%A") == "Sunday"
+
+
+def test_effective_expires_reports_the_earlier_instant(service):
+    module, _ = service
+    # Stored before the expiry moved earlier → the new (earlier) constant.
+    assert module._effective_expires("2026-11-16T07:00:00Z") == "2026-11-16T01:00:00Z"
+    # A stored value already at/before the constant is kept as-is.
+    assert module._effective_expires("2026-11-16T01:00:00Z") == "2026-11-16T01:00:00Z"
+    assert module._effective_expires("2026-11-15T20:00:00Z") == "2026-11-15T20:00:00Z"
+    # Missing or garbage → the constant.
+    assert module._effective_expires(None) == "2026-11-16T01:00:00Z"
+    assert module._effective_expires("not-a-date") == "2026-11-16T01:00:00Z"
+
+
+def test_old_stamp_reported_as_new_expiry_in_member_and_admin_reads(service, monkeypatch):
+    module, fake_db = service
+    _seed_key1_only(module, fake_db)
+    fake_db.collections.setdefault("teams", {})["team-1"] = {"name": "T"}
+    monkeypatch.setattr(module, "user_is_on_team", lambda *_: True)
+    monkeypatch.setattr(module, "_key_spend_best_effort", lambda *_: 1.0)
+
+    payload, status = module.get_team_gateway_key("u", "team-1")
+    assert status == 200
+    assert {k["expires"] for k in payload["keys"]} == {"2026-11-16T01:00:00Z"}
+
+    batch = module.list_gateway_key_statuses(["team-1"])
+    assert {k["expires"] for k in batch["team-1"]["keys"]} == {"2026-11-16T01:00:00Z"}
+    # Read-only: the stored stamp is untouched.
+    assert fake_db.collections["team_gateway_keys"]["team-1"]["expires"] == "2026-11-16T07:00:00Z"
 
 
 def test_key_duration_refuses_past_expiry(service):
     module, _ = service
     from datetime import datetime, timezone
 
-    now = datetime(2026, 11, 16, 7, 0, 1, tzinfo=timezone.utc)
+    now = datetime(2026, 11, 16, 1, 0, 1, tzinfo=timezone.utc)
     with pytest.raises(RuntimeError, match="in the past"):
         module._key_duration(now=now)
 
@@ -204,7 +246,7 @@ def test_provision_mints_both_keys_with_expected_bodies(service, monkeypatch):
         "key_alias": "fall26-team-1",
         "models": ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"],
         "max_budget": 15.0,
-        "expires": "2026-11-16T07:00:00Z",
+        "expires": "2026-11-16T01:00:00Z",
         "status": "active",
     }
     assert key2_meta == {
@@ -212,7 +254,7 @@ def test_provision_mints_both_keys_with_expected_bodies(service, monkeypatch):
         "key_alias": "fall26-team-1-frontier",
         "models": ["muse-wonder", "kimi-k3"],
         "max_budget": 20.0,
-        "expires": "2026-11-16T07:00:00Z",
+        "expires": "2026-11-16T01:00:00Z",
         "status": "active",
     }
     assert len(fake_post.calls) == 2
@@ -884,7 +926,7 @@ def test_list_statuses_reports_active_pending_and_missing(service, monkeypatch):
         "key_alias": "fall26-team-unknown",
         "models": ["muse-spark", "kimi-k2.7-code", "gpt-oss-120b"],
         "max_budget": 15.0,
-        "expires": "2026-11-16T07:00:00Z",
+        "expires": "2026-11-16T01:00:00Z",
         "status": "missing",
         "provisioned_at": None,
         "rotated_at": None,
@@ -894,7 +936,7 @@ def test_list_statuses_reports_active_pending_and_missing(service, monkeypatch):
         "key_alias": "fall26-team-unknown-frontier",
         "models": ["muse-wonder", "kimi-k3"],
         "max_budget": 20.0,
-        "expires": "2026-11-16T07:00:00Z",
+        "expires": "2026-11-16T01:00:00Z",
         "status": "missing",
         "provisioned_at": None,
         "rotated_at": None,
