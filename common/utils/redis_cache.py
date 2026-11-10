@@ -1,5 +1,7 @@
 import os
 import json
+import time
+from fnmatch import fnmatchcase
 from functools import wraps
 from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse, urlunparse
@@ -95,8 +97,30 @@ else:
         local_ttl_seconds=LOCAL_CACHE_TTL_SECONDS,
     )
 
-# Fallback local cache with 10 minute TTL
+# Fallback local cache. The TTLCache's own TTL is only the CEILING (10 min);
+# every entry also stores its own expiry so a caller's `ttl` is honoured.
+# Before Nov 2026 the per-call ttl was ignored here, so a `ttl=2` lookup (the
+# volunteer-by-user/email caches) was held for 10 minutes PER gunicorn worker:
+# after an admin changed a mentor's status, one worker kept serving the old
+# doc and refreshes of /mentor-checkin alternated between two states.
 local_cache = TTLCache(maxsize=LOCAL_CACHE_MAXSIZE, ttl=LOCAL_CACHE_TTL_SECONDS)
+_MISSING = object()
+
+
+def _local_get(key: str, default: Any = None) -> Any:
+    entry = local_cache.get(key, _MISSING)
+    if entry is _MISSING:
+        return default
+    expires_at, value = entry
+    if expires_at is not None and time.monotonic() >= expires_at:
+        local_cache.pop(key, None)
+        return default
+    return value
+
+
+def _local_set(key: str, value: Any, ttl: int) -> None:
+    expires_at = time.monotonic() + ttl if ttl and ttl > 0 else None
+    local_cache[key] = (expires_at, value)
 
 def cache_key(*args, **kwargs) -> str:
     """Generate a consistent cache key from arguments."""
@@ -125,7 +149,7 @@ def get_cached(key: str, default: Any = None) -> Any:
         except Exception as exc:
             _disable_redis("get", exc)
     
-    return local_cache.get(key, default)
+    return _local_get(key, default)
 
 def set_cached(key: str, value: Any, ttl: int = 600) -> bool:
     """
@@ -151,7 +175,7 @@ def set_cached(key: str, value: Any, ttl: int = 600) -> bool:
                 _disable_redis("set", exc)
         
         # Use local cache
-        local_cache[key] = value
+        _local_set(key, value, ttl)
         return True
     except Exception:
         return False
@@ -200,8 +224,10 @@ def clear_pattern(pattern: str) -> bool:
             except Exception as exc:
                 _disable_redis("clear_pattern", exc)
         
-        # For local cache, scan and remove matching keys
-        keys_to_delete = [k for k in local_cache if k.startswith(pattern)]
+        # For local cache, scan and remove matching keys. `pattern` is a Redis
+        # glob ("volunteer:by_event:x:mentor*") — a literal startswith() never
+        # matched the "*" and cleared nothing.
+        keys_to_delete = [k for k in list(local_cache) if fnmatchcase(k, pattern)]
         for k in keys_to_delete:
             if k in local_cache:
                 del local_cache[k]
