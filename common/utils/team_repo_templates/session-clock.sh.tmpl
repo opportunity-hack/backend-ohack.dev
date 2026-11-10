@@ -1,0 +1,31 @@
+#!/usr/bin/env bash
+# Claude Code SessionStart hook: prints the event clock into the session so
+# the assistant knows how close demo-video time and the close are.
+# Times were baked in when Opportunity Hack created this repo
+# (event {{EVENT_ID}}, timezone {{TZ_NAME}}). Safe to delete after the event.
+
+DEMO_EPOCH={{DEMO_EPOCH}}
+CLOSE_EPOCH={{CLOSE_EPOCH}}
+TZ_NAME="{{TZ_NAME}}"
+
+now=$(date +%s)
+
+left() {
+  local s=$1
+  if [ "$s" -le 0 ]; then echo "passed"; return; fi
+  printf '%dh %02dm away' $((s / 3600)) $(((s % 3600) / 60))
+}
+
+echo "OHack clock: $(TZ="$TZ_NAME" date '+%a %b %d, %I:%M %p %Z')."
+if [ "$CLOSE_EPOCH" -gt 0 ]; then
+  echo "Demo video time ({{DEMO_LOCAL}}): $(left $((DEMO_EPOCH - now)))."
+  echo "Hacking ends ({{CLOSE_LOCAL}}): $(left $((CLOSE_EPOCH - now)))."
+  if [ "$now" -ge "$DEMO_EPOCH" ] && [ "$now" -lt "$CLOSE_EPOCH" ]; then
+    echo "It's demo-video time: stop adding features, record the demo, then submit on {{DASHBOARD_URL}}."
+  elif [ "$now" -ge "$CLOSE_EPOCH" ]; then
+    echo "Hacking has ended. Anything left is post-hackathon follow-through with the nonprofit."
+  fi
+else
+  echo "Final-day times are on {{EVENT_URL}} — start the demo video about two hours before hacking ends."
+fi
+exit 0
