@@ -230,6 +230,17 @@ def add_team_to_queue():
     """
     logger.info("POST /team/queue called")
     if auth_user and auth_user.user_id:
+        # Server-side rule: only approved hackers may create a team. Checked
+        # before queue_team, which creates the Slack channel. Lazy imports —
+        # see add_devpost_to_team_api.
+        from api.teams import membership_rules
+        from services.hackathon_planning_service import is_admin
+        body = request.get_json(silent=True) or {}
+        refused = membership_rules.check_team_queue(
+            auth_user.user_id, body.get("eventId"), admin=is_admin(auth_user)
+        )
+        if refused:
+            return refused
         return queue_team(auth_user.user_id, request.get_json())
     
     logger.error("Could not obtain user details for POST /team/queue")
