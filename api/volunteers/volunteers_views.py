@@ -673,6 +673,7 @@ def get_mentor_checkin_status_endpoint(event_id):
                 'checkInTime': status.get('checkInTime'),
                 'timeSlot': status.get('timeSlot'),
                 'isSelected': status.get('isSelected', False),
+                'status': status.get('status'),
                 'window': status.get('window'),
             }, "Check-in status retrieved successfully")
         else:

@@ -2599,6 +2599,9 @@ def get_mentor_checkin_status(user_id: str, event_id: str) -> Dict[str, Any]:
         'checkInTime': volunteer.get('checkInTime', None),
         'timeSlot': volunteer.get('timeSlot', None),
         'isSelected': bool(volunteer.get('isSelected')),
+        # Review status too: this route reads Firestore directly (no cache),
+        # so the page can trust it over the application GET.
+        'status': volunteer.get('status'),
         'window': mentor_checkin_window(_hackathon_summary(db, event_id)),
     }
 

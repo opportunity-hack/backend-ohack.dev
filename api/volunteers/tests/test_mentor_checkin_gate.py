@@ -116,6 +116,7 @@ def test_email_matched_mentor_can_read_status_and_check_in(env):
     assert status["success"] is True
     assert status["isCheckedIn"] is False
     assert status["isSelected"] is True
+    assert status["status"] is None  # read straight from Firestore, uncached
     assert status["window"]["state"] in ("upcoming", "open", "closed")
 
     with _open_now():
@@ -148,6 +149,13 @@ def test_unapproved_mentor_is_refused_without_write_or_slack(env):
     assert "isCheckedIn" not in stored and "checkedIn" not in stored
     assert slack == []
     assert vs.get_mentor_checkin_status("propel-1", EVENT)["isSelected"] is False
+
+
+def test_status_carries_review_status(env):
+    db, _ = env
+    db.collection("volunteers").document("m1").set(
+        dict(MENTOR, user_id="propel-1", isSelected=False, status="denied"))
+    assert vs.get_mentor_checkin_status("propel-1", EVENT)["status"] == "denied"
 
 
 @pytest.mark.parametrize("state,code,key", [
