@@ -343,11 +343,14 @@ def provision_team_gateway_key(team_id):
 
 
 def _key_spend_best_effort(plaintext_key, team_id):
-    """Current spend for a key. Never raises; None when LiteLLM is unhappy."""
+    """Current spend for a key. Never raises; None when LiteLLM is unhappy.
+
+    LiteLLM's /key/info is GET-only with the key as a query param; a POST
+    answers 405, which silently nulled every team's spend (Nov 2026)."""
     try:
-        r = requests.post(
+        r = requests.get(
             f"{_base_url()}/key/info",
-            json={"key": plaintext_key},
+            params={"key": plaintext_key},
             headers={"Authorization": f"Bearer {_master_key()}"},
             timeout=15,
         )

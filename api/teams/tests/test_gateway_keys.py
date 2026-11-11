@@ -575,14 +575,15 @@ def test_get_returns_plaintext_and_spend_for_member(service, monkeypatch):
     _seed_active_key(module, monkeypatch)
     monkeypatch.setattr(module, "user_is_on_team", lambda propel, team: True)
 
-    def fake_info(url, json=None, headers=None, timeout=None):
+    def fake_info(url, params=None, headers=None, timeout=None):
         assert url.endswith("/key/info")
+        assert params and params["key"].startswith("sk-")
         resp = MagicMock()
         resp.json.return_value = {"info": {"spend": 3.5}}
         resp.raise_for_status.return_value = None
         return resp
 
-    monkeypatch.setattr(module.requests, "post", fake_info)
+    monkeypatch.setattr(module.requests, "get", fake_info)
 
     payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
 
@@ -605,14 +606,15 @@ def test_get_returns_200_with_key2_missing_when_only_key1_exists(service, monkey
     _seed_key1_only(module, fake_db)
     monkeypatch.setattr(module, "user_is_on_team", lambda propel, team: True)
 
-    def fake_info(url, json=None, headers=None, timeout=None):
+    def fake_info(url, params=None, headers=None, timeout=None):
         assert url.endswith("/key/info")
+        assert params and params["key"].startswith("sk-")
         resp = MagicMock()
         resp.json.return_value = {"info": {"spend": 1.0}}
         resp.raise_for_status.return_value = None
         return resp
 
-    monkeypatch.setattr(module.requests, "post", fake_info)
+    monkeypatch.setattr(module.requests, "get", fake_info)
 
     payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
 
@@ -640,14 +642,15 @@ def test_get_decrypt_failure_on_one_key_does_not_500(service, monkeypatch):
     fake_db.collections["team_gateway_keys"]["team-1"]["key2_ciphertext"] = "not-a-fernet-token"
     monkeypatch.setattr(module, "user_is_on_team", lambda propel, team: True)
 
-    def fake_info(url, json=None, headers=None, timeout=None):
+    def fake_info(url, params=None, headers=None, timeout=None):
         assert url.endswith("/key/info")
+        assert params and params["key"].startswith("sk-")
         resp = MagicMock()
         resp.json.return_value = {"info": {"spend": 2.0}}
         resp.raise_for_status.return_value = None
         return resp
 
-    monkeypatch.setattr(module.requests, "post", fake_info)
+    monkeypatch.setattr(module.requests, "get", fake_info)
 
     payload, status = module.get_team_gateway_key("caller-propel-uuid", "team-1")
 
@@ -659,13 +662,37 @@ def test_get_decrypt_failure_on_one_key_does_not_500(service, monkeypatch):
     assert payload["keys"][1]["spend"] is None
 
 
+def test_spend_lookup_uses_get_with_query_param(service, monkeypatch):
+    """LiteLLM's /key/info is GET-only; a POST answers 405 and every
+    team's spend came back null (Nov 2026)."""
+    module, _ = service
+    calls = {}
+
+    def fake_get(url, params=None, headers=None, timeout=None):
+        calls["url"], calls["params"] = url, params
+        resp = MagicMock()
+        resp.json.return_value = {"key": "hashed", "info": {"spend": 4.25}}
+        resp.raise_for_status.return_value = None
+        return resp
+
+    monkeypatch.setattr(module.requests, "get", fake_get)
+    monkeypatch.setattr(
+        module.requests, "post",
+        MagicMock(side_effect=AssertionError("/key/info must not be POSTed")),
+    )
+
+    assert module._key_spend_best_effort("sk-abc", "team-1") == 4.25
+    assert calls["url"].endswith("/key/info")
+    assert calls["params"] == {"key": "sk-abc"}
+
+
 def test_get_spend_none_when_info_fails(service, monkeypatch):
     module, fake_db = service
     _team_exists(monkeypatch, module, fake_db)
     _seed_active_key(module, monkeypatch)
     monkeypatch.setattr(module, "user_is_on_team", lambda propel, team: True)
     monkeypatch.setattr(
-        module.requests, "post",
+        module.requests, "get",
         MagicMock(side_effect=RuntimeError("LiteLLM down")),
     )
 
