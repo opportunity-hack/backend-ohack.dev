@@ -577,7 +577,7 @@ def test_get_returns_plaintext_and_spend_for_member(service, monkeypatch):
 
     def fake_info(url, params=None, headers=None, timeout=None):
         assert url.endswith("/key/info")
-        assert params and params["key"].startswith("sk-")
+        assert params and re.fullmatch(r"[0-9a-f]{64}", params["key"])  # sha256, never the sk- plaintext
         resp = MagicMock()
         resp.json.return_value = {"info": {"spend": 3.5}}
         resp.raise_for_status.return_value = None
@@ -608,7 +608,7 @@ def test_get_returns_200_with_key2_missing_when_only_key1_exists(service, monkey
 
     def fake_info(url, params=None, headers=None, timeout=None):
         assert url.endswith("/key/info")
-        assert params and params["key"].startswith("sk-")
+        assert params and re.fullmatch(r"[0-9a-f]{64}", params["key"])  # sha256, never the sk- plaintext
         resp = MagicMock()
         resp.json.return_value = {"info": {"spend": 1.0}}
         resp.raise_for_status.return_value = None
@@ -644,7 +644,7 @@ def test_get_decrypt_failure_on_one_key_does_not_500(service, monkeypatch):
 
     def fake_info(url, params=None, headers=None, timeout=None):
         assert url.endswith("/key/info")
-        assert params and params["key"].startswith("sk-")
+        assert params and re.fullmatch(r"[0-9a-f]{64}", params["key"])  # sha256, never the sk- plaintext
         resp = MagicMock()
         resp.json.return_value = {"info": {"spend": 2.0}}
         resp.raise_for_status.return_value = None
@@ -662,9 +662,12 @@ def test_get_decrypt_failure_on_one_key_does_not_500(service, monkeypatch):
     assert payload["keys"][1]["spend"] is None
 
 
-def test_spend_lookup_uses_get_with_query_param(service, monkeypatch):
+def test_spend_lookup_uses_get_with_hashed_key(service, monkeypatch):
     """LiteLLM's /key/info is GET-only; a POST answers 405 and every
-    team's spend came back null (Nov 2026)."""
+    team's spend came back null (Nov 2026). The key goes in the query string,
+    which LiteLLM's access log records, so we send its sha256 hash (LiteLLM
+    v1.97.0 looks keys up by hash and accepts one in `key=`) — never the
+    plaintext."""
     module, _ = service
     calls = {}
 
@@ -683,7 +686,32 @@ def test_spend_lookup_uses_get_with_query_param(service, monkeypatch):
 
     assert module._key_spend_best_effort("sk-abc", "team-1") == 4.25
     assert calls["url"].endswith("/key/info")
-    assert calls["params"] == {"key": "sk-abc"}
+    import hashlib
+    assert calls["params"] == {"key": hashlib.sha256(b"sk-abc").hexdigest()}
+    assert "sk-abc" not in json.dumps(calls["params"])
+
+
+def test_spend_lookup_failure_never_logs_the_key_or_url(service, monkeypatch, caplog):
+    """A requests error message embeds the full URL (query string included).
+    The warning must carry only the exception type and status code."""
+    import logging
+    import requests as real_requests
+
+    module, _ = service
+    resp = MagicMock(status_code=502)
+    err = real_requests.HTTPError(
+        "502 Server Error for url: https://ai.example/key/info?key=sk-secret-123",
+        response=resp,
+    )
+    monkeypatch.setattr(module.requests, "get", MagicMock(side_effect=err))
+
+    with caplog.at_level(logging.WARNING):
+        assert module._key_spend_best_effort("sk-secret-123", "team-1") is None
+
+    logged = "\n".join(r.getMessage() for r in caplog.records)
+    assert "team-1" in logged and "HTTPError" in logged and "502" in logged
+    assert "sk-secret-123" not in logged
+    assert "key/info?" not in logged
 
 
 def test_get_spend_none_when_info_fails(service, monkeypatch):
