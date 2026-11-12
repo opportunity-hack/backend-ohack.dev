@@ -1159,9 +1159,15 @@ def get_teams_by_hackathon_id(hackathon_id):
                 if user_ref.id in user_data_map:
                     users.append(user_data_map[user_ref.id])
             
-            # Remove unnecessary fields from team data
-            for field in ["users", "problem_statements"]:
-                team_data.pop(field, None)
+            # `users` refs are replaced by team_members below. Project refs
+            # aren't JSON-serializable, so send their ids: the admin edit
+            # dialog needs the assigned project, or its "Save project" button
+            # offered to move an approved team to a default project.
+            team_data.pop("users", None)
+            team_data["problem_statements"] = [
+                ps_id for ps_id in (_ref_id(ref) for ref in (team_data.get("problem_statements") or []))
+                if ps_id
+            ]
             
             team_data["team_members"] = users
             teams.append(team_data)
