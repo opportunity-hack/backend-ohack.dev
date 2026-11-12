@@ -70,7 +70,7 @@ Prod runs gunicorn `--worker-class gthread --workers 2 --threads 8 --timeout 120
 
 | Route | Rule | Refusal (status) |
 |---|---|---|
-| `PATCH /api/messages/team` (join) | event not ended → `team_join_enabled` not false → team active → status not in `JOINING_DISABLED_STATUSES` → approved hacker | `event_ended` / `team_join_disabled` / `team_inactive` / `team_not_joinable` (409), `not_approved_hacker` (403), `team_not_found` (404) |
+| `PATCH /api/messages/team` (join) | event not ended → `team_join_enabled` not false → team active OR waiting for review (`PENDING_REVIEW_STATUSES` = IN_REVIEW/APPROVING — queued teams are saved `active: False`, and teammates not on Slack at creation join from the team page during review; twin `isPendingReview` in `constants/teamStatus.js`) → status not in `JOINING_DISABLED_STATUSES` → approved hacker | `event_ended` / `team_join_disabled` / `team_inactive` / `team_not_joinable` (409), `not_approved_hacker` (403), `team_not_found` (404) |
 | `DELETE /api/messages/team` (leave) | event not ended → `team_join_enabled` not false | `event_ended` / `team_join_disabled` (409) |
 | `POST /api/team/queue` (create) | approved hacker (checked before the Slack channel is created) | `not_approved_hacker` (403) |
 | `POST /api/team/<id>/project` (+ `/submit`, `/devpost`, `/demo-video`) | member + submission window | already enforced: 403 `not_team_member` / 409 `submissions_closed` |
