@@ -351,6 +351,24 @@ def get_profile_by_db_id(id):
     logger.debug(f"Get User By ID Result: {res}")
     return res    
     
+# Once-per-user throttle for the side effects of an own-profile read (Slack
+# "went to profile" audit + last_login/avatar refresh). The profile cache is
+# 10s now, so without this nearly every page load (the navbar reads the
+# profile) posted to Slack and wrote the user doc. Per worker, so a user can
+# trigger it at most once per worker per window.
+_PROFILE_VISIT_THROTTLE = TTLCache(maxsize=4096, ttl=600)
+_PROFILE_VISIT_LOCK = threading.Lock()
+
+
+def _first_profile_visit_in_window(propel_id):
+    """True the first time a user reads their profile in the throttle window."""
+    with _PROFILE_VISIT_LOCK:
+        if propel_id in _PROFILE_VISIT_THROTTLE:
+            return False
+        _PROFILE_VISIT_THROTTLE[propel_id] = True
+        return True
+
+
 def _refresh_login_details(user, propel_id):
     """Best-effort login refresh (last_login + provider avatar/name).
 
@@ -383,8 +401,10 @@ def _refresh_login_details(user, propel_id):
 # read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
 # its own copy and a write clears only the worker that served it — see
 # common/utils/cache_registry.py.
+# No @limits here: ratelimit counts every caller in the process together, so
+# 100 cache misses a minute (easy at kickoff with a 10s cache) answered 429 to
+# every user on that worker.
 @cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
-@limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata(propel_id):
     """Own-profile read. Identity via the 3-tier resolver — a broken OAuth
     provider token can no longer 404 the profile page (the old path depended
@@ -396,10 +416,10 @@ def get_profile_metadata(propel_id):
         warning(logger, "Could not resolve user for profile read", propel_id=propel_id)
         return None
 
-    send_slack_audit(
-        action="login", message=f"User went to profile: {user_id} with email: {user.email_address}")
-
-    _refresh_login_details(user, propel_id)
+    if _first_profile_visit_in_window(propel_id):
+        send_slack_audit(
+            action="login", message=f"User went to profile: {user_id} with email: {user.email_address}")
+        _refresh_login_details(user, propel_id)
 
     # Re-read through the profile loader (resolves badge refs) and serialize
     full_user = get_history(user.id)
@@ -410,8 +430,8 @@ def get_profile_metadata(propel_id):
 
     return response
 
-# Caching is not needed because the parent method already is caching
-@limits(calls=100, period=ONE_MINUTE)
+# Caching is not needed because the parent method already is caching.
+# No @limits: it is on the own-profile read path (see get_profile_metadata).
 def get_history(db_id):
     logger.debug("Get History Start")
     result = get_user_profile_by_db_id(db_id)

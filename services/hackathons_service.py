@@ -656,10 +656,48 @@ def get_single_hackathon_event(hackathon_id):
     return {}
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=3600), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
+_FILTERED_HACKATHON_LISTS = ("current", "previous")
+
+
+def get_hackathon_list(is_current_only=None):
+    """Hackathon list, cached per variant.
+
+    'current' / 'previous' feed the public homepage, /hack and the archive and
+    stay on a long static cache. The unfiltered list is what the admin
+    hackathon editor loads (useHackathonAdmin) before it autosaves whole
+    constraints / countdowns / deadlines objects, so it must be read-after-
+    write: with no Redis, a save clears only the worker that served it, and a
+    reload onto another worker used to seed the editor with an hour-old copy
+    that the next autosave wrote back over the newer config.
+    """
+    if is_current_only in _FILTERED_HACKATHON_LISTS:
+        return _get_filtered_hackathon_list(is_current_only)
+    return _get_full_hackathon_list(is_current_only)
+
+
+def _clear_hackathon_list_caches():
+    _get_filtered_hackathon_list.cache_clear()
+    _get_full_hackathon_list.cache_clear()
+
+
+# Keep the cachetools-style API callers and tests use.
+get_hackathon_list.cache_clear = _clear_hackathon_list_caches
+
+
+@cached(cache=TTLCache(maxsize=10, ttl=3600), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
 @limits(calls=200, period=ONE_MINUTE)
 @log_execution_time
-def get_hackathon_list(is_current_only=None):
+def _get_filtered_hackathon_list(is_current_only):
+    return _query_hackathon_list(is_current_only)
+
+
+@cached(cache=TTLCache(maxsize=10, ttl=10), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
+@log_execution_time
+def _get_full_hackathon_list(is_current_only):
+    return _query_hackathon_list(is_current_only)
+
+
+def _query_hackathon_list(is_current_only=None):
     """
     Retrieve a list of hackathons based on specified criteria.
 
