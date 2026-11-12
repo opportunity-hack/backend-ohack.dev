@@ -49,7 +49,7 @@ MAX_SEED_LENGTH = 64
 MAX_PICKED_PRIZES = 50
 OUTCOMES = ("won", "absent")
 
-_campaign_cache = TTLCache(maxsize=1, ttl=60)
+_campaign_cache = TTLCache(maxsize=1, ttl=10)
 _campaign_cache_lock = threading.Lock()
 
 
@@ -210,7 +210,8 @@ def _user_snapshot(user):
 
 @cached(cache=_campaign_cache, lock=_campaign_cache_lock)
 def _all_campaigns():
-    """Every campaign doc (a handful per year). 60s TTL, cleared on writes."""
+    """Every campaign doc (a handful per year). 10s TTL (read_after_write — see
+    common/utils/cache_registry.py), cleared on writes."""
     out = []
     for doc in _get_db().collection(CAMPAIGNS_COLLECTION).stream():
         data = doc.to_dict() or {}

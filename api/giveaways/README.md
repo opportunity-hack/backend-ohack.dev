@@ -50,7 +50,7 @@ Errors are `{"error": <code>, "message": <copy>}`.
 - **The winner is picked on the frontend** by a pure seeded function
   (`src/lib/giveawayDraw.js`); admins are trusted, the seed makes it
   reproducible, and the server validates every recorded result.
-- Campaign reads are cached 60s (`_all_campaigns`), cleared on every admin
+- Campaign reads are cached 10s (`_all_campaigns`, `read_after_write` in `common/utils/cache_registry.py`), cleared on every admin
   write. Entries are never cached.
 - Slack audit on create, draw start, each winner, reset — not on user entries.
 - Prize images upload through `POST /api/messages/upload-image` with

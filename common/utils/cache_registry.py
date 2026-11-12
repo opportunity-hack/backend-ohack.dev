@@ -104,6 +104,11 @@ CACHES = (
     _c("api.jobs.jobs_service", "get_public_listings", "cached", 10, READ_AFTER_WRITE,
        "Admin publish/close. Was 300s."),
     _c("api.jobs.jobs_service", "get_public_listing", "cached", 10, READ_AFTER_WRITE, "Was 300s."),
+    _c("api.giveaways.giveaways_service", "_campaign_cache", "ttlcache", 10, READ_AFTER_WRITE,
+       "Giveaway campaigns: admin create/open/close/draw, then the admin list and "
+       "/profile giveaways reload. Was 60s."),
+    _c("api.giveaways.giveaways_service", "_all_campaigns", "cached", 10, READ_AFTER_WRITE,
+       "Backed by _campaign_cache."),
     _c("services.problem_statements_service", "_helpers_cache", "ttlcache", 10, READ_AFTER_WRITE,
        "'Who's helping' roster refetched right after the help toggle. Was 60s."),
 
