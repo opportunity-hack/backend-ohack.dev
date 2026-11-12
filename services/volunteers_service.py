@@ -918,6 +918,32 @@ def _hackathon_for_confirmation(event_id: Optional[str]) -> Optional[Dict[str, A
 # decision (or the applicant's own withdrawal) always wins over the switch.
 _AUTO_APPROVE_BLOCKED_STATUSES = frozenset({"denied", "withdrew", "no_show"})
 
+# Statuses that mean "nobody has decided yet". "active" is the legacy default
+# the update branch writes when a doc has no status.
+_AUTO_APPROVE_UNDECIDED_STATUSES = frozenset({"", "pending", "active"})
+
+
+def _eligible_for_auto_approve_on_update(existing: Dict[str, Any]) -> bool:
+    """Whether a hacker updating their application may be auto-approved.
+
+    Only people nobody has decided on yet, plus people the capacity check
+    itself waitlisted (auto_approved is False). Anything else is an organizer's
+    call: taking someone off the roster leaves status "approved" (often with
+    auto_approved True) and only flips isSelected, and a staff waitlist has no
+    auto_approved flag — auto-approving those put people back on the roster
+    and re-sent "You're confirmed".
+    """
+    if existing.get('isSelected'):
+        return False
+    status = str(existing.get('status') or '').strip().lower()
+    if status in _AUTO_APPROVE_BLOCKED_STATUSES:
+        return False
+    if status in _AUTO_APPROVE_UNDECIDED_STATUSES:
+        return existing.get('auto_approved') is not True
+    if status == "waitlisted":
+        return existing.get('auto_approved') is False
+    return False
+
 
 def _count_selected_hackers(event_id: str) -> int:
     """How many hackers are on the event roster (isSelected=True). Uses a
@@ -1488,10 +1514,11 @@ def create_or_update_volunteer(
 
         # Hacker auto-approve (Nov 2026): an applicant still waiting on review
         # who updates while the switch is on goes onto the roster too. Never
-        # un-approves, and never overrides a denied/withdrew/no_show decision.
-        # At capacity the stored status is left alone (they stay pending).
-        existing_status = str(existing.get('status') or '').strip().lower()
-        if not existing.get('isSelected') and existing_status not in _AUTO_APPROVE_BLOCKED_STATUSES:
+        # un-approves and never overrides an organizer's decision (denied,
+        # taken off the roster, staff waitlist) — see
+        # _eligible_for_auto_approve_on_update. At capacity the stored status
+        # is left alone (they stay pending).
+        if _eligible_for_auto_approve_on_update(existing):
             if _hacker_roster_decision(volunteer_type, event_id, constraints) == "approved":
                 roster_outcome = "approved"
                 update_data.update(_roster_decision_fields("approved"))

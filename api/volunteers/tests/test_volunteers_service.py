@@ -1307,6 +1307,33 @@ def test_auto_approve_never_overrides_a_staff_decision(status):
     assert mock_email.call_args.kwargs["roster_outcome"] is None
 
 
+@pytest.mark.parametrize("existing_fields, reapproved", [
+    # An organizer took an auto-approved hacker off the roster: isSelected is
+    # False but status/auto_approved still say approved. Never put them back.
+    ({"status": "approved", "auto_approved": True}, False),
+    ({"status": "approved"}, False),
+    ({"status": "confirmed"}, False),
+    # Waitlisted by staff (no auto_approved flag) — a decision, keep it.
+    ({"status": "waitlisted"}, False),
+    # Waitlisted by the capacity check — re-check once there's room.
+    ({"status": "waitlisted", "auto_approved": False}, True),
+    # Still waiting on review.
+    ({"status": "pending"}, True),
+    ({}, True),
+    ({"status": "active"}, True),  # legacy default the update branch used to write
+])
+def test_auto_approve_on_update_respects_staff_roster_decisions(existing_fields, reapproved):
+    existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
+                "volunteer_type": "hacker", "isSelected": False, **existing_fields}
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 90})
+    result, mock_email, _ = _submit_hacker(mock_db, existing=existing, on_roster=3)
+
+    assert result["isSelected"] is reapproved
+    assert mock_email.call_args.kwargs["roster_outcome"] == ("approved" if reapproved else None)
+    if not reapproved:
+        assert result.get("status") == existing_fields.get("status", "active")
+
+
 def test_update_of_a_pending_hacker_at_capacity_keeps_their_status():
     existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
                 "volunteer_type": "hacker", "isSelected": False, "status": "pending"}
