@@ -191,7 +191,6 @@ def get_github_profile(github_username):
 # its own copy and a write clears only the worker that served it — see
 # common/utils/cache_registry.py.
 @cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
-@limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata_old(propel_id):
     """Thin delegate to the canonical users-service profile read, preserving
     the legacy {"text": ...} envelope and auth_failed error shape.

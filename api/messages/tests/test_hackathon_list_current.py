@@ -203,3 +203,28 @@ def test_previous_query_uses_strict_grace_cutoff(frozen_time, fake_query):
     (args, kwargs) = fake_query.where_calls[0]
     assert kwargs == {}
     assert args == ("end_date", "<", "2026-11-11")
+
+
+def test_unfiltered_list_cache_is_read_after_write():
+    """The admin hackathon editor loads the unfiltered list and autosaves whole
+    objects back. A long cache there let a stale copy on another worker undo a
+    newer save, so it must stay within the read_after_write limit; the public
+    current/previous lists keep their long static cache."""
+    from common.utils.cache_registry import READ_AFTER_WRITE_MAX_TTL
+
+    assert hs._get_full_hackathon_list.cache.ttl <= READ_AFTER_WRITE_MAX_TTL
+    assert hs._get_filtered_hackathon_list.cache.ttl == 3600
+
+
+def test_variants_route_to_their_own_cache(monkeypatch):
+    calls = []
+    monkeypatch.setattr(hs, "_query_hackathon_list",
+                        lambda v: calls.append(v) or {"hackathons": []})
+    for variant in ("current", "previous", "all", None):
+        hs.get_hackathon_list(variant)
+    assert set(hs._get_filtered_hackathon_list.cache.keys()) == {"current", "previous"}
+    assert set(hs._get_full_hackathon_list.cache.keys()) == {"all", "None"}
+
+    hs.get_hackathon_list.cache_clear()
+    assert len(hs._get_filtered_hackathon_list.cache) == 0
+    assert len(hs._get_full_hackathon_list.cache) == 0
