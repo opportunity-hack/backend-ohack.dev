@@ -30,7 +30,13 @@ def _full_team(team_id="team-1"):
         "id": team_id,
         "name": "Rockets",
         "admin_notes": "flaky team",
-        "nonprofit_rankings": ["npo-a"],
+        # Project rankings (Nov 2026 shape) — staff-only like every shape
+        # before it. GET /api/team/<event>/me is covered in
+        # test_approve_team_project.py::test_my_teams_carry_the_project_and_stay_private.
+        "nonprofit_rankings": [
+            {"nonprofit_id": "npo-a", "problem_statement_id": "ps-a1", "rank": 1},
+            {"nonprofit_id": "npo-a", "problem_statement_id": "ps-a2", "rank": 2},
+        ],
         "comments": "we want npo-a",
         "communication_history": [{"text": "hi"}],
         "mentor_ratings": [{"criterion": "scope", "rating": 3}],

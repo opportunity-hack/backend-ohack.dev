@@ -112,6 +112,9 @@ CACHES = (
     _c("api.slack.slack_service", "get_user_details", "redis_cached", 10, STATIC),
     _c("services.teams_service", "_TEAM_USERS_CACHE", "ttlcache", 600, STATIC,
        "Keyed by the tuple of member ids, so join/leave is a new key; only names/avatars lag."),
+    _c("api.teams.teams_service", "_PROJECT_OPTIONS_CACHE", "ttlcache", 60, STATIC,
+       "Projects a team can rank at creation (GET /api/team/<event>/project-options); "
+       "queue_team validates against the same cached copy so the page and API agree."),
     _c("services.hackathons_service", "get_hackathon_list", "cached", 3600, STATIC),
     _c("services.hackathons_service", "get_hackathon_funnel", "cached", 300, STATIC),
     _c("services.hackathons_service", "get_hackathon_funnel_aggregate", "manual", 6 * 3600, STATIC),
