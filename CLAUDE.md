@@ -253,6 +253,10 @@ Powers the frontend's `/jobs` pages and `/admin/jobs`. Blueprint `api/jobs/jobs_
 - Emails (Resend, all behind the local `_notifications_disabled()` mirror): applicant confirmation with the **reply-within-5-days responsiveness ask** (`reply_to: questions@ohack.org`), FYI to questions@ohack.org, and warm accept/reject decision emails via `POST /api/jobs/admin/applications/<id>/decision` (`{decision, personal_note?}`; records into `sent_emails` ArrayUnion + `status_history`). Admin routes are `volunteer.admin`-gated; application PATCH allowlist is `status`/`admin_notes` only.
 - Seed: `scripts/seed_job_listings.py` (dry-run default, `--apply` writes the three Fall 2026 roles as drafts, **skips existing slugs** so admin edits survive re-runs; validates against `validate_job_listing` so seed/validator drift fails loudly).
 
+## Giveaways v2 (`api/giveaways/`, `giveaway_campaigns` + `giveaway_entries`, Nov 2026)
+
+See `api/giveaways/README.md`. One entry per person per giveaway (doc id `<giveaway_id>__<user_db_id>`, upserted), weight computed server-side (5 × filled `GIVEAWAY_PROFILE_FIELDS` — **twin of the frontend `profileFields.js`, keep in sync** — + GitHub capped at 45; a GitHub failure falls back to the stored value and returns `github_unavailable`), and a user snapshot on the entry so `GET /admin/<id>/entries` is ONE query with zero profile reads. The frontend picks winners with a seeded pure function; `draw/results` validates and records each one in a transaction (one prize per person, one winner per slot). The entry upsert is `POST`, not `PUT` (CORS allows GET/POST/PATCH/DELETE only). The legacy `giveaways` collection + `/api/messages/giveaway*` routes are untouched and unused by the current frontend. Validators: `validate_giveaway_campaign[_partial]`, `normalize_giveaway_prizes` in `common/utils/validators.py`.
+
 ## Public portfolio (profile → portfolio, Aug 2026)
 
 The public profile payload (`GET /api/users/<id_or_slug>/profile/public`) is now the "portfolio" payload. Load-bearing contracts:
