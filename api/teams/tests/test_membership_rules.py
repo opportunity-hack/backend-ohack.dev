@@ -57,6 +57,17 @@ def test_join_refused_on_inactive_team(active):
     assert _rule(team=dict(TEAM, active=active)) == rules.TEAM_INACTIVE
 
 
+@pytest.mark.parametrize("status", ["IN_REVIEW", "APPROVING"])
+def test_join_allowed_on_team_waiting_for_review(status):
+    # Queued teams are saved with active=False; teammates who weren't on Slack
+    # at creation join from the team page before organizers approve it.
+    assert _rule(team=dict(TEAM, active=False, status=status)) is None
+
+
+def test_inactive_team_past_review_still_refused():
+    assert _rule(team=dict(TEAM, active=False, status="NONPROFIT_SELECTED")) == rules.TEAM_INACTIVE
+
+
 def test_string_true_counts_as_active():
     assert _rule(team=dict(TEAM, active="True")) is None
 
