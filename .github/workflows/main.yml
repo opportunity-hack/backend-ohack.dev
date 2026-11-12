@@ -112,6 +112,7 @@ jobs:
           set -e
           for target in \
             api/broadcasts/tests \
+            api/giveaways/tests \
             api/judging/tests \
             api/peer_votes/tests \
             api/praisebot/tests \
