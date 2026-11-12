@@ -657,17 +657,23 @@ def get_hackathon_list(is_current_only=None):
     db = _get_db()
 
     query = db.collection('hackathons')
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    # Grace day: the backend runs on UTC, so a naive "today" flips at 5 PM
+    # Phoenix time and an event vanished from the homepage on the evening of
+    # its end date. Keep an event current through the day after its end date.
+    grace_cutoff = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     if is_current_only == "current":
-        logger.debug(f"Querying current events (end_date >= {today_str})")
-        query = query.where(filter=firestore.FieldFilter("end_date", ">=", today_str)).order_by("end_date", direction=firestore.Query.ASCENDING)
+        logger.debug(f"Querying current events (end_date >= {grace_cutoff})")
+        query = query.where(filter=firestore.FieldFilter("end_date", ">=", grace_cutoff)).order_by("end_date", direction=firestore.Query.ASCENDING)
 
     elif is_current_only == "previous":
         # Return the full archive so /hack can show every past hackathon (back to 2014).
         # Year chips on the frontend handle navigation; pagination is client-side.
-        logger.debug(f"Querying all previous events (end_date <= {today_str})")
-        query = query.where("end_date", "<=", today_str)
+        # Strictly earlier than the current cutoff so the two lists never
+        # overlap: an event is current through the day after its end date,
+        # and moves to previous the day after that.
+        logger.debug(f"Querying all previous events (end_date < {grace_cutoff})")
+        query = query.where("end_date", "<", grace_cutoff)
         query = query.order_by("end_date", direction=firestore.Query.DESCENDING).limit(200)
 
     else:
