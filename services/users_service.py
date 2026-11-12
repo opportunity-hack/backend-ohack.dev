@@ -379,8 +379,11 @@ def _refresh_login_details(user, propel_id):
         warning(logger, "Failed to write login refresh", propel_id=propel_id, error=str(e))
 
 
-# 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
+# GET /api/users/profile — the caller's OWN profile, read right after a save.
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata(propel_id):
     """Own-profile read. Identity via the 3-tier resolver — a broken OAuth
@@ -918,9 +921,10 @@ def _trim_event_for_portfolio(event):
     return {k: event.get(k) for k in keep if event.get(k) is not None}
 
 
-@redis_cached(prefix="portfolio:teams", ttl=900)
-def _fetch_portfolio_teams_cached(db_id):
-    """User's teams (allowlisted) with a trimmed `event` object attached."""
+def _fetch_portfolio_teams(db_id):
+    """User's teams (allowlisted) with a trimmed `event` object attached,
+    newest event first. Uncached — the own-profile "Your teams" card reads
+    this directly so a join/leave shows up on the next /profile load."""
     from db.db import fetch_user_portfolio_teams
     from common.utils.firebase import get_hackathon_by_event_id
 
@@ -941,6 +945,29 @@ def _fetch_portfolio_teams_cached(db_id):
     # Newest event first; teams with no event date sink to the end
     teams.sort(key=lambda t: ((t.get("event") or {}).get("start_date") or ""), reverse=True)
     return teams
+
+
+@redis_cached(prefix="portfolio:teams", ttl=900)
+def _fetch_portfolio_teams_cached(db_id):
+    """Public-portfolio copy of `_fetch_portfolio_teams` (15-min cache)."""
+    return _fetch_portfolio_teams(db_id)
+
+
+def get_my_teams(propel_id):
+    """Own-profile "Your teams": every team the caller is on, with its event,
+    newest event first (`GET /api/users/profile/teams`). Same allowlisted
+    team shape as the public portfolio, but read fresh (no redis cache) and
+    never gated by the `teams` privacy setting — it's the owner asking.
+    Returns None when the identity can't be resolved."""
+    user, _ = _resolve_and_ensure_user(propel_id)
+    if user is None:
+        return None
+    try:
+        teams = _fetch_portfolio_teams(user.id)
+    except Exception as e:
+        warning(logger, "Failed to load own teams", db_id=getattr(user, "id", None), error=str(e))
+        teams = []
+    return {"teams": teams}
 
 
 def _attach_teams(user, public_data, privacy_settings):
@@ -1215,12 +1242,16 @@ def get_searchable_portfolio_sitemap():
     return fetch_public_portfolio_users()
 
 
-@redis_cached(prefix="portfolio:profile", ttl=300)
+# Visibility/headline edits (incl. public -> private) must show quickly.
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@redis_cached(prefix="portfolio:profile", ttl=10)
 def get_portfolio_profile(id_or_slug):
     """Cached public portfolio payload (the fat response the profile page SSRs).
 
     Cache is keyed on the requested param (db id, slug, or alias each get their
-    own 300s entry); clear_portfolio_caches() wipes the whole prefix on any
+    own 10s entry); clear_portfolio_caches() wipes the whole prefix on any
     profile-affecting write. Misses (None) are not cached by redis_cached.
     """
     return get_privacy_filtered_profile_by_db_id(id_or_slug)

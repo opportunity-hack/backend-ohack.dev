@@ -187,8 +187,10 @@ def get_github_profile(github_username):
 
 # -------------------- User functions to be deleted ---------------------------------------- #
 
-# 10 minute cache for 100 objects LRU
-@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=100, period=ONE_MINUTE)
 def get_profile_metadata_old(propel_id):
     """Thin delegate to the canonical users-service profile read, preserving
@@ -253,9 +255,11 @@ def _lean_admin_profile(doc):
     return out
 
 
-# 5-minute TTL is enough to absorb tab refreshes / multiple admins loading the
-# page in close succession while still picking up new signups within minutes.
-@cached(cache=TTLCache(maxsize=1, ttl=300), lock=threading.Lock(), key=lambda: "all")
+# Absorbs tab refreshes / the search page's burst of reads.
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=1, ttl=10), lock=threading.Lock(), key=lambda: "all")
 def get_all_profiles():
     db = get_db()
     docs = db.collection('users').stream()
@@ -428,7 +432,10 @@ def save_profile_metadata_old(propel_id, json):
     return Message("Saved Profile Metadata")
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock(), key=lambda id: id)
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock(), key=lambda id: id)
 def get_user_by_id_old(id):
     """Thin delegate to the privacy-safe public profile getter. Deliberate
     deltas vs the old body: no longer leaks `github` (privacy-gated field),

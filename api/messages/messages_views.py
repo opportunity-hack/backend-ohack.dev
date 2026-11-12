@@ -39,6 +39,8 @@ from services.news_service import (
 from services.feedback_service import save_feedback, get_user_feedback
 from services.giveaway_service import save_giveaway, get_user_giveaway, get_all_giveaways
 from services.onboarding_service import save_onboarding_feedback
+# Server-side join/leave rules (Nov 2026) — logic lives in api/teams/.
+from api.teams.membership_rules import check_team_membership_request
 from services.teams_service import (
     get_teams_list,
     get_team,
@@ -488,7 +490,10 @@ def add_team():
 @auth.require_user
 def remove_user_from_team():
     logger.info("DELETE /team called")
-    if auth_user and auth_user.user_id:        
+    if auth_user and auth_user.user_id:
+        refused = check_team_membership_request(auth_user, request.get_json(silent=True), "leave")
+        if refused:
+            return refused
         return vars(unjoin_team(auth_user.user_id, request.get_json()))
     else:
         error(logger, "Could not obtain user details for DELETE /team")
@@ -500,6 +505,9 @@ def remove_user_from_team():
 def add_user_to_team():
     logger.info("PATCH /team called")
     if auth_user and auth_user.user_id:
+        refused = check_team_membership_request(auth_user, request.get_json(silent=True), "join")
+        if refused:
+            return refused
         return vars(join_team(auth_user.user_id, request.get_json()))
     else:
         error(logger, "Could not obtain user details for PATCH /team")

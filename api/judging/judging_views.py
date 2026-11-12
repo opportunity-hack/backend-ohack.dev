@@ -29,7 +29,13 @@ from api.judging.judging_service import (
     set_round_lock,
     get_judging_progress,
     bulk_create_judge_assignments,
+    get_public_judging_schedule,
     JUDGING_ROUNDS,
+)
+from api.judging.judge_identity import (
+    resolve_judge_id,
+    caller_judge_ids,
+    may_act_as,
 )
 
 logger = get_logger("judging_views")
@@ -58,6 +64,30 @@ def _round_locked_response(event_id, round_name):
     }, 409
 
 
+def _forbidden_other_judge(user_id, requested_judge_id, what):
+    error(logger, f"Judge attempting to access another judge's {what}",
+          user_id=user_id, requested_judge_id=requested_judge_id)
+    return {"error": "Forbidden"}, 403
+
+
+def _merge_assignment_lists(results):
+    """Union of get_judge_assignments() results for several stored judge ids
+    (one person, several identity shapes). One entry per event; when two ids
+    both hold assignments for the same event, keep the fuller one."""
+    by_event = {}
+    order = []
+    for result in results:
+        for h in result.get("hackathons", []) or []:
+            eid = h.get("event_id")
+            size = (h.get("round1_teams") or 0) + (h.get("round2_teams") or 0)
+            if eid not in by_event:
+                order.append(eid)
+                by_event[eid] = (size, h)
+            elif size > by_event[eid][0]:
+                by_event[eid] = (size, h)
+    return {"hackathons": [by_event[e][1] for e in order]}
+
+
 def _actor_display_name(user_id):
     """Best-effort human name for lock audit rows; never raises."""
     try:
@@ -81,12 +111,19 @@ def get_assignments(judge_id):
 
     # Verify judge can only access their own assignments
     if user_id != judge_id:
-        error(logger, "Judge attempting to access another judge's assignments",
-              user_id=user_id, requested_judge_id=judge_id)
-        return {"error": "Forbidden"}, 403
+        return _forbidden_other_judge(user_id, judge_id, "assignments")
 
-    debug(logger, "Getting judge assignments", judge_id=judge_id)
-    result = get_judge_assignments(judge_id)
+    # No event in this route, so collect every stored judge id this caller
+    # owns (usually just their login id) and union the assignments.
+    judge_ids = caller_judge_ids(user_id)
+    debug(logger, "Getting judge assignments", judge_id=judge_id, identities=len(judge_ids))
+    results = [get_judge_assignments(jid) for jid in judge_ids]
+    if len(results) == 1:
+        result = results[0]
+    elif all("error" in r for r in results):
+        result = results[0]
+    else:
+        result = _merge_assignment_lists([r for r in results if "error" not in r])
 
     if "error" in result:
         return result, 500
@@ -104,15 +141,14 @@ def get_teams(judge_id, event_id):
     if not user_id:
         return {"error": "Unauthorized"}, 401
 
+    resolved_id = resolve_judge_id(user_id, event_id)
     # Verify judge can only access their own teams
-    if user_id != judge_id:
-        error(logger, "Judge attempting to access another judge's teams",
-              user_id=user_id, requested_judge_id=judge_id)
-        return {"error": "Forbidden"}, 403
+    if not may_act_as(user_id, judge_id, resolved_id):
+        return _forbidden_other_judge(user_id, judge_id, "teams")
 
     debug(logger, "Getting judge teams",
-          judge_id=judge_id, event_id=event_id)
-    result = get_judge_teams(judge_id, event_id)
+          judge_id=resolved_id, event_id=event_id)
+    result = get_judge_teams(resolved_id, event_id)
 
     if "error" in result:
         return result, 500
@@ -130,8 +166,14 @@ def get_team_api(team_id):
     if not user_id:
         return {"error": "Unauthorized"}, 401
 
-    # Verify judge is assigned to this team
-    if not is_judge_assigned_to_team(user_id, team_id):
+    # Verify judge is assigned to this team. The login id is checked first;
+    # the caller's other stored judge ids only when that fails (no event id
+    # in this route, so it can't be resolved per event).
+    assigned = is_judge_assigned_to_team(user_id, team_id) or any(
+        is_judge_assigned_to_team(jid, team_id)
+        for jid in caller_judge_ids(user_id)[1:]
+    )
+    if not assigned:
         error(logger, "Judge attempting to access unassigned team",
               judge_id=user_id, team_id=team_id)
         return {"error": "Forbidden: Judge not assigned to this team"}, 403
@@ -170,24 +212,23 @@ def submit_score():
             return {"error": f"Missing required field: {field}"}, 400
 
     # Verify judge can only submit scores for themselves
-    if user_id != data['judge_id']:
-        error(logger, "Judge attempting to submit score for another judge",
-              user_id=user_id, requested_judge_id=data['judge_id'])
-        return {"error": "Forbidden"}, 403
+    resolved_id = resolve_judge_id(user_id, data['event_id'])
+    if not may_act_as(user_id, data['judge_id'], resolved_id):
+        return _forbidden_other_judge(user_id, data['judge_id'], "scores")
 
     if data['round'] not in JUDGING_ROUNDS:
         return {"error": "invalid_round"}, 400
 
     # Verify judge is assigned to this team for THIS event + round (a
     # Round-1-only judge must not be able to post a Round 2 score).
-    if not is_judge_assigned_for_round(user_id, data['event_id'], data['team_id'], data['round']):
+    if not is_judge_assigned_for_round(resolved_id, data['event_id'], data['team_id'], data['round']):
         error(logger, "Judge attempting to score unassigned team/round",
               judge_id=user_id, team_id=data['team_id'], event_id=data['event_id'],
               round_name=data['round'])
         return {"error": "Forbidden: Judge not assigned to this team for this round"}, 403
 
     if is_round_locked(data['event_id'], data['round']):
-        info(logger, "Score rejected: round locked", judge_id=user_id,
+        info(logger, "Score rejected: round locked", judge_id=resolved_id,
              team_id=data['team_id'], event_id=data['event_id'], round_name=data['round'])
         return _round_locked_response(data['event_id'], data['round'])
 
@@ -195,7 +236,7 @@ def submit_score():
           team_id=data['team_id'], event_id=data['event_id'])
 
     result = submit_judge_score(
-        judge_id=data['judge_id'],
+        judge_id=resolved_id,
         team_id=data['team_id'],
         event_id=data['event_id'],
         round_name=data['round'],
@@ -218,7 +259,11 @@ def get_judge_event_api(judge_id, event_id):
     if not user_id:
         return {"error": "Unauthorized"}, 401
     
-    result = get_judge_event_details(judge_id, event_id)
+    # Admin pages call this with STORED judge ids (assignment.judge_id) —
+    # those are looked up as given. Only a caller asking about themselves by
+    # login id is resolved to their stored judge id.
+    lookup_id = resolve_judge_id(user_id, event_id) if judge_id == user_id else judge_id
+    result = get_judge_event_details(lookup_id, event_id)
 
     if "error" in result:
         return result, 500
@@ -235,15 +280,14 @@ def get_scores(judge_id, event_id):
     if not user_id:
         return {"error": "Unauthorized"}, 401
 
+    resolved_id = resolve_judge_id(user_id, event_id)
     # Verify judge can only access their own scores
-    if user_id != judge_id:
-        error(logger, "Judge attempting to access another judge's scores",
-              user_id=user_id, requested_judge_id=judge_id)
-        return {"error": "Forbidden"}, 403
+    if not may_act_as(user_id, judge_id, resolved_id):
+        return _forbidden_other_judge(user_id, judge_id, "scores")
 
     debug(logger, "Getting judge scores",
-          judge_id=judge_id, event_id=event_id)
-    result = get_judge_scores(judge_id, event_id)
+          judge_id=resolved_id, event_id=event_id)
+    result = get_judge_scores(resolved_id, event_id)
 
     if "error" in result:
         return result, 500
@@ -273,16 +317,15 @@ def save_draft():
             return {"error": f"Missing required field: {field}"}, 400
 
     # Verify judge can only save drafts for themselves
-    if user_id != data['judge_id']:
-        error(logger, "Judge attempting to save draft for another judge",
-              user_id=user_id, requested_judge_id=data['judge_id'])
-        return {"error": "Forbidden"}, 403
+    resolved_id = resolve_judge_id(user_id, data['event_id'])
+    if not may_act_as(user_id, data['judge_id'], resolved_id):
+        return _forbidden_other_judge(user_id, data['judge_id'], "drafts")
 
     if data['round'] not in JUDGING_ROUNDS:
         return {"error": "invalid_round"}, 400
 
     # Same round-scoped assignment check as /score.
-    if not is_judge_assigned_for_round(user_id, data['event_id'], data['team_id'], data['round']):
+    if not is_judge_assigned_for_round(resolved_id, data['event_id'], data['team_id'], data['round']):
         error(logger, "Judge attempting to save draft for unassigned team/round",
               judge_id=user_id, team_id=data['team_id'], event_id=data['event_id'],
               round_name=data['round'])
@@ -295,7 +338,7 @@ def save_draft():
           team_id=data['team_id'], event_id=data['event_id'])
 
     result = save_draft_score(
-        judge_id=data['judge_id'],
+        judge_id=resolved_id,
         team_id=data['team_id'],
         event_id=data['event_id'],
         round_name=data['round'],
@@ -320,22 +363,21 @@ def get_draft_by_path(judge_id, team_id, event_id, round_name):
     if not user_id:
         return {"error": "Unauthorized"}, 401
 
+    resolved_id = resolve_judge_id(user_id, event_id)
     # Verify judge can only access their own drafts
-    if user_id != judge_id:
-        error(logger, "Judge attempting to access another judge's draft",
-              user_id=user_id, requested_judge_id=judge_id)
-        return {"error": "Forbidden"}, 403
+    if not may_act_as(user_id, judge_id, resolved_id):
+        return _forbidden_other_judge(user_id, judge_id, "draft")
 
     # Verify judge is assigned to this team
-    if not is_judge_assigned_to_team(user_id, team_id):
+    if not is_judge_assigned_to_team(resolved_id, team_id):
         error(logger, "Judge attempting to access draft for unassigned team",
-              judge_id=user_id, team_id=team_id)
+              judge_id=resolved_id, team_id=team_id)
         return {"error": "Forbidden: Judge not assigned to this team"}, 403
 
-    debug(logger, "Getting draft score", judge_id=judge_id,
+    debug(logger, "Getting draft score", judge_id=resolved_id,
           team_id=team_id, event_id=event_id, round_name=round_name)
 
-    result = get_draft_score(judge_id, team_id, event_id, round_name)
+    result = get_draft_score(resolved_id, team_id, event_id, round_name)
 
     if "error" in result:
         return result, 500
@@ -443,25 +485,24 @@ def get_individual_score(judge_id, team_id, event_id, round_name):
     if not user_id:
         return {"error": "Unauthorized"}, 401
 
+    resolved_id = resolve_judge_id(user_id, event_id)
     # Verify judge can only access their own scores
-    if user_id != judge_id:
-        error(logger, "Judge attempting to access another judge's score",
-              user_id=user_id, requested_judge_id=judge_id)
-        return {"error": "Forbidden"}, 403
+    if not may_act_as(user_id, judge_id, resolved_id):
+        return _forbidden_other_judge(user_id, judge_id, "score")
 
     # Verify judge is assigned to this team
-    if not is_judge_assigned_to_team(user_id, team_id):
+    if not is_judge_assigned_to_team(resolved_id, team_id):
         error(logger, "Judge attempting to access score for unassigned team",
-              judge_id=user_id, team_id=team_id)
+              judge_id=resolved_id, team_id=team_id)
         return {"error": "Forbidden: Judge not assigned to this team"}, 403
 
     is_draft = request.args.get('draft', 'false').lower() == 'true'
 
     debug(logger, "Getting individual judge score",
-          judge_id=judge_id, team_id=team_id, event_id=event_id,
+          judge_id=resolved_id, team_id=team_id, event_id=event_id,
           round_name=round_name, is_draft=is_draft)
 
-    result = get_individual_judge_score(judge_id, team_id, event_id, round_name, is_draft)
+    result = get_individual_judge_score(resolved_id, team_id, event_id, round_name, is_draft)
 
     if "error" in result:
         return result, 500
@@ -692,4 +733,23 @@ def bulk_assignments_api():
     )
     if not result.get("success"):
         return result, 400
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Public judging schedule (Nov 2026)
+# ---------------------------------------------------------------------------
+
+@bp.route("/schedule/<event_id>", methods=["GET"])
+def get_public_schedule_api(event_id):
+    """Panels, rooms, judges and assigned teams for the public
+    /hack/<event_id>/judging page. No auth (like the peer-vote summary):
+    empty until constraints.judging_schedule_published is true, and only
+    public judge fields are ever emitted."""
+    info(logger, "API called: GET /schedule/{event_id}", event_id=event_id)
+    result = get_public_judging_schedule(event_id)
+    if result.get("error") == "event_not_found":
+        return result, 404
+    if result.get("error"):
+        return result, 500
     return result

@@ -51,6 +51,14 @@ def clear_cache():
     get_hackathon_list.cache_clear()
     get_hackathon_funnel.cache_clear()
     delete_cached(_FUNNEL_AGG_CACHE_KEY)
+    # The public judging schedule reads constraints.judging_schedule_published
+    # through get_single_hackathon_event; drop it too so the admin publish
+    # switch shows at once. Lazy import: api.judging imports this module.
+    try:
+        from api.judging.judging_service import clear_public_schedule_cache
+        clear_public_schedule_cache()
+    except Exception as e:  # never fail a hackathon save over a cache
+        logger.warning(f"clear_public_schedule_cache failed: {e}")
 
 
 def add_nonprofit_to_hackathon(json):
@@ -142,7 +150,10 @@ def remove_nonprofit_from_hackathon(json):
     }
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=20), lock=threading.Lock())
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_id(id):
     logger.debug(f"get_single_hackathon_id start id={id}")
@@ -153,7 +164,7 @@ def get_single_hackathon_id(id):
         logger.warning("get_single_hackathon_id end (no results)")
         return {}
     else:
-        # Pass the snapshot (not the reference) so this function's own 20s
+        # Pass the snapshot (not the reference) so this function's own 10s
         # TTL governs freshness rather than doc_to_json's reference cache.
         result = doc_to_json(docid=doc.id, doc=doc.get())
         if result is None:
@@ -602,7 +613,12 @@ def _enrich_teams_users_batch(teams, db):
 _PRIVATE_HACKATHON_FIELDS = ("reminders_sent",)
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=600), lock=threading.Lock())
+# Was 600s: a mentor/team/admin write cleared only one worker's copy, so the
+# event page served the pre-write teams for up to 10 min from the others.
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=100, ttl=10), lock=threading.Lock())
 @limits(calls=2000, period=ONE_MINUTE)
 def get_single_hackathon_event(hackathon_id):
     logger.debug(f"get_single_hackathon_event start hackathon_id={hackathon_id}")
@@ -755,42 +771,18 @@ def single_add_volunteer(event_id, json, volunteer_type, propel_id):
 
 
 @limits(calls=50, period=ONE_MINUTE)
-def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
-    db = _get_db()
-    logger.info(f"update_hackathon_volunteers for event_id={event_id} propel_id={propel_id}")
-    logger.info("JSON: " + str(json))
-    send_slack_audit(action="update_hackathon_volunteers", message="Updating", payload=json)
+def volunteer_was_checked_in(doc_dict) -> bool:
+    """A volunteer doc counts as checked in only when `checkedIn` is literally True."""
+    return bool(doc_dict) and doc_dict.get("checkedIn") is True
 
-    if "id" not in json:
-        logger.error("Missing id field")
-        return Message("Missing id field")
 
-    # Review fields ride this PATCH; the roster bit (`isSelected`) and the
-    # UI routing key (`type`) are stripped — see validate_volunteer_admin_patch.
-    try:
-        json = validate_volunteer_admin_patch(json)
-    except ValueError as e:
-        logger.error(f"update_hackathon_volunteers rejected payload: {e}")
-        return Message(str(e))
-
-    volunteer_id = json["id"]
-
-    admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
-
-    doc_ref = db.collection("volunteers").document(volunteer_id)
-    doc = doc_ref.get()
-    doc_dict = doc.to_dict()
-    doc_volunteer_type = doc_dict.get("volunteer_type", "participant").lower()
-
-    if doc_ref is None:
-        return Message("No volunteer for Hackathon Found")
-
-    json["updated_by"] = admin_name
-    json["updated_timestamp"] = datetime.now().isoformat()
-
-    doc_ref.update(json)
-
-    slack_user_id = doc.to_dict().get('slack_user_id') if doc_dict else None
+def send_checkin_welcome(doc_dict, event_id, volunteer_id, checking_in=True, was_checked_in=False):
+    """Slack welcome for a FIRST check-in: invite to #hackathon-welcome, post
+    there, and DM role guidance. Shared by the legacy admin PATCH
+    (`update_hackathon_volunteers`) and `api/checkin` so the copy can't drift.
+    Repeat check-ins only log."""
+    doc_volunteer_type = (doc_dict or {}).get("volunteer_type", "participant").lower()
+    slack_user_id = doc_dict.get('slack_user_id') if doc_dict else None
 
     if not slack_user_id:
         logger.warning(f"Volunteer {volunteer_id} has no slack_user_id; skipping Slack welcome message")
@@ -837,7 +829,7 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
 🚀 Ready to code for good? Let's build technology that makes a real difference for nonprofits and people in the world!
 """
 
-    if json.get("checkedIn") is True and "checkedIn" not in doc_dict.keys() and doc_dict.get("checkedIn") != True:
+    if checking_in and not was_checked_in:
         if slack_user_id:
             logger.info(f"Volunteer {volunteer_id} just checked in, sending welcome message to {slack_user_id}")
             invite_user_to_channel(slack_user_id, "hackathon-welcome")
@@ -857,6 +849,47 @@ def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
             logger.warning(f"Volunteer {volunteer_id} checked in but no slack_user_id — skipping Slack welcome")
     else:
         logger.info(f"Volunteer {volunteer_id} checked in again, no welcome message sent.")
+
+
+def update_hackathon_volunteers(event_id, volunteer_type, json, propel_id):
+    db = _get_db()
+    logger.info(f"update_hackathon_volunteers for event_id={event_id} propel_id={propel_id}")
+    logger.info("JSON: " + str(json))
+    send_slack_audit(action="update_hackathon_volunteers", message="Updating", payload=json)
+
+    if "id" not in json:
+        logger.error("Missing id field")
+        return Message("Missing id field")
+
+    # Review fields ride this PATCH; the roster bit (`isSelected`) and the
+    # UI routing key (`type`) are stripped — see validate_volunteer_admin_patch.
+    try:
+        json = validate_volunteer_admin_patch(json)
+    except ValueError as e:
+        logger.error(f"update_hackathon_volunteers rejected payload: {e}")
+        return Message(str(e))
+
+    volunteer_id = json["id"]
+
+    admin_email, admin_user_id, admin_last_login, admin_profile_image, admin_name, admin_nickname = get_propel_user_details_by_id(propel_id)
+
+    doc_ref = db.collection("volunteers").document(volunteer_id)
+    doc = doc_ref.get()
+    doc_dict = doc.to_dict()
+
+    if doc_ref is None:
+        return Message("No volunteer for Hackathon Found")
+
+    json["updated_by"] = admin_name
+    json["updated_timestamp"] = datetime.now().isoformat()
+
+    doc_ref.update(json)
+
+    send_checkin_welcome(
+        doc_dict, event_id, volunteer_id,
+        checking_in=json.get("checkedIn") is True,
+        was_checked_in=volunteer_was_checked_in(doc_dict),
+    )
 
     get_volunteer_by_event.cache_clear()
 

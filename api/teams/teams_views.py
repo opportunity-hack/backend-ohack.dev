@@ -230,6 +230,17 @@ def add_team_to_queue():
     """
     logger.info("POST /team/queue called")
     if auth_user and auth_user.user_id:
+        # Server-side rule: only approved hackers may create a team. Checked
+        # before queue_team, which creates the Slack channel. Lazy imports —
+        # see add_devpost_to_team_api.
+        from api.teams import membership_rules
+        from services.hackathon_planning_service import is_admin
+        body = request.get_json(silent=True) or {}
+        refused = membership_rules.check_team_queue(
+            auth_user.user_id, body.get("eventId"), admin=is_admin(auth_user)
+        )
+        if refused:
+            return refused
         return queue_team(auth_user.user_id, request.get_json())
     
     logger.error("Could not obtain user details for POST /team/queue")
@@ -276,11 +287,17 @@ def rotate_gateway_key_api(teamid):
     """
     Admin endpoint to rotate a team's AI gateway key (leak recovery).
     Deletes the old key in LiteLLM and mints a fresh one under the same alias.
+    Body: { "key": "key1" | "key2" } - required; missing or unknown values
+    return 400. Only the named key is rotated; the other key is left alone.
     """
     logger.info(f"POST /team/{teamid}/gateway-key/rotate called")
     if auth_user and auth_user.user_id:
+        body = request.get_json(silent=True) or {}
+        key_name = body.get("key")
+        if key_name not in ("key1", "key2"):
+            return {"error": "invalid_key"}, 400
         try:
-            return rotate_team_gateway_key(teamid), 200
+            return rotate_team_gateway_key(teamid, key_name), 200
         except RuntimeError as e:
             logger.warning(f"Gateway key rotate refused for team {teamid}: {e}")
             return {"error": str(e)}, 404
@@ -297,9 +314,13 @@ def rotate_gateway_key_api(teamid):
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def retry_gateway_key_api(teamid):
     """
-    Admin endpoint to (re)provision a team's AI gateway key. Idempotent:
-    returns the active key's metadata when one already exists. Covers the
+    Admin endpoint to (re)provision a team's AI gateway keys. Idempotent:
+    returns both keys' metadata when they already exist. Covers the
     case where approve_team's best-effort mint failed.
+    When one key mints and the other fails, this still answers 200 with the
+    true per-key statuses plus `partial_failure: {key, label, error}` so the
+    admin UI can show "Key 1 ready, Key 2 failed" instead of a bare error.
+    502 only when no key could be minted at all.
     """
     logger.info(f"POST /team/{teamid}/gateway-key/retry called")
     if auth_user and auth_user.user_id:

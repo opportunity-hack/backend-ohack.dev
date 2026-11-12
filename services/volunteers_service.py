@@ -5,6 +5,7 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 import pytz
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from functools import lru_cache
 from ratelimiter import RateLimiter
 from db.db import get_db
@@ -18,6 +19,7 @@ from common.utils.redis_cache import redis_cached, delete_cached, clear_pattern,
 from common.utils.oauth_providers import SLACK_PREFIX, normalize_slack_user_id, is_oauth_user_id, is_slack_user_id, extract_slack_user_id
 import os
 import requests
+import html
 import resend
 import stripe
 import markdown
@@ -41,9 +43,14 @@ STAFF_OWNED_VOLUNTEER_FIELDS = frozenset({
     'isSelected',
     'isCheckedIn', 'checkedIn', 'checkInTime', 'checkInTimeList',
     'checkOutTime', 'checkoutTimeList',
+    'checkedInAt', 'checkedInBy',
+    # Audit trail written by api/checkin reset_checkins().
+    'checkin_reset_history',
     'deposit_status', 'deposit_refund_id', 'deposit_refund_amount_cents',
     'deposit_refunded_at', 'deposit_refunded_by', 'deposit_refund_status_msg',
     'certificates', 'sent_emails',
+    # Written only by the hacker auto-approve hook (_apply_roster_decision).
+    'auto_approved', 'auto_approved_at',
 })
 
 def _notifications_disabled() -> bool:
@@ -275,7 +282,8 @@ def verify_recaptcha(token: str) -> bool:
 
 def send_volunteer_confirmation_email(first_name: str, last_name: str, email: str, volunteer_type: str,
     calendar_attachments: Optional[List[Dict[str, Any]]] = None, event_id: Optional[str] = None,
-    volunteer_id: Optional[str] = None) -> Optional[str]:
+    volunteer_id: Optional[str] = None, shifts: Optional[List[str]] = None,
+    event: Optional[Dict[str, Any]] = None, roster_outcome: Optional[str] = None) -> Optional[str]:
     """
     Send a confirmation email to the volunteer who submitted the form.
     
@@ -286,6 +294,12 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
         volunteer_type: Type of volunteer (mentor, sponsor, judge)
         calendar_attachments: Optional list of calendar attachments
         event_id: Event ID for generating links
+        shifts: Optional human-readable shift/time-slot lines (see
+            split_availability_slots) rendered as a "Your shifts" list
+        event: Optional hackathon summary (see _hackathon_for_confirmation)
+            rendered as a "Your event" block — title, dates, venue, event link
+        roster_outcome: "approved" | "waitlisted" | None — set when hacker
+            auto-approve decided this application (see _hacker_roster_decision)
         
     Returns:
         True if email was sent successfully, False otherwise
@@ -304,6 +318,10 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
     try:
         volunteer_type_readable = volunteer_type.capitalize()
         is_reviewed_role = volunteer_type.lower() in ("mentor", "judge")
+        is_hacker = volunteer_type.lower() == "hacker"
+        confirmed = is_hacker and roster_outcome == "approved"
+        waitlisted = is_hacker and roster_outcome == "waitlisted"
+        event_slug_raw = str((event or {}).get("event_id") or event_id or "")
         # Format the name properly, handling empty strings
         full_name = first_name + " " + last_name if first_name and last_name else first_name or last_name or "Volunteer"
 
@@ -317,6 +335,49 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
             </div>"""
             info(logger, "Including calendar attachments in email", email=email, attachment_count=len(calendar_attachments))
 
+        # Which event, when and where — from the hackathon record, so an
+        # in-person event never reads as "Virtual" (the old .ics default).
+        event_block = ""
+        if event and (event.get("title") or event.get("location")):
+            event_title = html.escape(_calendar_event_name(event))
+            event_dates = html.escape(_format_event_date_range(event.get("start_date"), event.get("end_date")))
+            event_location = html.escape(str(event.get("location") or "").strip())
+            event_slug = html.escape(str(event.get("event_id") or event_id or ""))
+            dates_line = (
+                f'<p style="margin: 6px 0 0 0; font-size: 15px; color: #2c3e50;">📅 {event_dates}</p>'
+                if event_dates else ""
+            )
+            location_line = (
+                f'<p style="margin: 4px 0 0 0; font-size: 15px; color: #2c3e50;">📍 {event_location}</p>'
+                if event_location else ""
+            )
+            event_link = (
+                f'<p style="margin: 10px 0 0 0; font-size: 14px;"><a href="https://www.ohack.dev/hack/{event_slug}" style="color: #1B3A6B; font-weight: bold; text-decoration: none;">Event page: schedule, venue &amp; parking →</a></p>'
+                if event_slug else ""
+            )
+            event_block = f"""
+            <div style="background-color: #f8f9fa; padding: 16px 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #E2552E;">
+                <p style="margin: 0 0 6px 0; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; color: #777;">Your event</p>
+                <p style="margin: 0; font-size: 17px; font-weight: bold; color: #1B3A6B;">{event_title}</p>
+                {dates_line}
+                {location_line}
+                {event_link}
+            </div>"""
+
+        # The shifts/time slots they picked, as text. Mentors and volunteers both
+        # choose structured slots; judges send free text (no block then).
+        shifts_block = ""
+        if shifts:
+            shift_items = "".join(
+                f'<li style="margin: 6px 0; color: #2c3e50;">{html.escape(shift)}</li>' for shift in shifts
+            )
+            shifts_block = f"""
+            <div style="background-color: #f8f9fa; padding: 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1B3A6B;">
+                <h3 style="color: #1B3A6B; margin: 0 0 10px 0; font-size: 18px;">🗓️ Your shifts</h3>
+                <ul style="margin: 0; padding-left: 20px; font-size: 15px;">{shift_items}</ul>
+                <p style="margin: 12px 0 0 0; font-size: 14px; color: #555;">Need to change a shift? Reopen your application on the event page and update your availability.</p>
+            </div>"""
+
         # Pending-review banner (mentor + judge only — these roles are reviewed by staff)
         pending_review_banner = ""
         if is_reviewed_role:
@@ -325,6 +386,33 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <h3 style="color: #92400e; margin: 0 0 8px 0; font-size: 18px;">⏳ Your application is pending review</h3>
                 <p style="margin: 0 0 8px 0; font-size: 15px; color: #78350f;">
                     Our staff reviews every {volunteer_type_readable.lower()} application by hand. <strong>Reviews typically take up to a week.</strong> You don't need to do anything else right now — we'll email you when your application is approved or if we have follow-up questions.
+                </p>
+            </div>"""
+
+        # Hacker auto-approve outcome (Nov 2026). Confirmed hackers get their
+        # check-in QR + team links up front; waitlisted ones a calm "we'll email
+        # you" — never a rejection.
+        roster_banner = ""
+        if confirmed:
+            slug = html.escape(event_slug_raw)
+            roster_banner = f"""
+            <div style="background-color: #e8f5e9; padding: 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #27ae60;">
+                <h3 style="color: #1e7e34; margin: 0 0 8px 0; font-size: 18px;">✅ You're confirmed — you're on the roster</h3>
+                <p style="margin: 0 0 12px 0; font-size: 15px; color: #2c3e50;">
+                    There's nothing else to wait for. Your application page now shows your personal <strong>check-in QR code</strong> — have it ready on your phone when you arrive. Next, find or set up your team.
+                </p>
+                <p style="margin: 0; font-size: 15px;">
+                    <a href="https://www.ohack.dev/hack/{slug}/hacker-application" style="color: #1B3A6B; font-weight: bold; text-decoration: none;">Your check-in QR code →</a>
+                    &nbsp;&nbsp;
+                    <a href="https://www.ohack.dev/hack/{slug}/manageteam" style="color: #1B3A6B; font-weight: bold; text-decoration: none;">Set up your team →</a>
+                </p>
+            </div>"""
+        elif waitlisted:
+            roster_banner = """
+            <div style="background-color: #fff8e1; padding: 18px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #f59e0b;">
+                <h3 style="color: #92400e; margin: 0 0 8px 0; font-size: 18px;">⏳ You're on the waitlist</h3>
+                <p style="margin: 0; font-size: 15px; color: #78350f;">
+                    The event has reached capacity, so we've saved your application on the waitlist. If a spot opens up we'll email you right away — thank you for wanting to build with us.
                 </p>
             </div>"""
 
@@ -350,6 +438,24 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                     </a>
                 </div>
             </div>"""
+        elif volunteer_type.lower() == "volunteer":
+            # Event volunteers (check-in, food, cleanup, photo, judging support).
+            # Not staff-reviewed like mentors/judges, but organizers still put
+            # them on the roster before the event — the guide explains what
+            # "approved" unlocks (QR code, roster, share card) and how check-in
+            # works for anyone on the registration shift.
+            volunteer_specific_content = """
+            <div style="background-color: #eef2f8; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #1B3A6B;">
+                <h3 style="color: #1B3A6B; margin-top: 0;">🙌 What happens next as an event volunteer</h3>
+                <p style="margin-bottom: 12px;">Organizers confirm volunteers before the event. Once you're on the roster, your application page shows your personal <strong>check-in QR code</strong> — have it ready on your phone when you arrive.</p>
+                <p style="margin-bottom: 15px;">Signed up for the registration shift? The volunteer guide walks through exactly how check-in works, what to do when someone isn't on the list, and a before/during/after checklist for every role.</p>
+                <div style="text-align: center;">
+                    <a href="https://www.ohack.dev/about/volunteers"
+                       style="background-color: #1B3A6B; color: white; padding: 12px 25px; text-decoration: none; border-radius: 6px; font-weight: bold; display: inline-block; font-size: 16px;">
+                        📖 Read the Volunteer Guide
+                    </a>
+                </div>
+            </div>"""
         elif volunteer_type.lower() == "judge":
             volunteer_specific_content = """
             <div style="background-color: #fff3cd; padding: 20px; border-radius: 8px; margin: 20px 0; border-left: 4px solid #ffc107;">
@@ -365,16 +471,21 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
             </div>"""
 
         subject_prefix = "[Pending Review] " if is_reviewed_role else ""
-        intro_line = (
-            f"Thanks for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack — your application has been received."
-            if is_reviewed_role
-            else f"Thank you for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. We've received your information and our team will review it shortly."
-        )
+        subject = f"{subject_prefix}Thanks for your Opportunity Hack {volunteer_type_readable} application"
+        if is_reviewed_role:
+            intro_line = f"Thanks for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack — your application has been received."
+        elif confirmed:
+            subject = "[Confirmed] You're in — Opportunity Hack Hacker application"
+            intro_line = "Thanks for applying as a <strong>Hacker</strong> for Opportunity Hack — you're in, and we can't wait to build with you."
+        elif waitlisted:
+            intro_line = "Thanks for applying as a <strong>Hacker</strong> for Opportunity Hack — we've received your application."
+        else:
+            intro_line = f"Thank you for applying as a <strong>{volunteer_type_readable}</strong> for Opportunity Hack. We've received your information and our team will review it shortly."
 
         params = {
             "from": "Opportunity Hack <welcome@notifs.ohack.org>",
             "to": [email],
-            "subject": f"{subject_prefix}Thanks for your Opportunity Hack {volunteer_type_readable} application",
+            "subject": subject,
             "html": f"""
             <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; border-radius: 5px;">
                 <div style="text-align: center; margin-bottom: 20px;">
@@ -383,7 +494,10 @@ def send_volunteer_confirmation_email(first_name: str, last_name: str, email: st
                 <h2 style="color: #3498db; text-align: center;">Thanks for your Opportunity Hack {volunteer_type_readable} application!</h2>
                 <p style="font-size: 16px;">Hello {full_name},</p>
                 <p style="font-size: 16px;">{intro_line}</p>
+                {event_block}
+                {roster_banner}
                 {pending_review_banner}
+                {shifts_block}
                 {calendar_note}
                 {volunteer_specific_content}
                 <p style="font-size: 16px;">In the meantime, feel free to explore our website and learn more about our mission and past events.</p>
@@ -634,14 +748,284 @@ def send_slack_volunteer_notification(volunteer_data: Dict[str, Any], is_update:
         exception(logger, "Error sending Slack notification", exc_info=e, email=email, volunteer_type=volunteer_type)
         return False
 
+_STRUCTURED_SLOT_RE = re.compile(r'[A-Za-z]+day,\s*[A-Za-z]{3,}\s+\d{1,2}')
+_EXPLICIT_RANGE_RE = re.compile(
+    r'(\d{1,2})(?::(\d{2}))?\s*([ap]m)\s*[-–]\s*(\d{1,2})(?::(\d{2}))?\s*([ap]m)',
+    re.IGNORECASE,
+)
+
+
+def split_availability_slots(availability: Optional[str]) -> List[str]:
+    """Split a structured availability string into its slot strings.
+
+    Returns [] for empty or free-text availability (judges). The slot strings
+    are the exact human-readable text the forms produce, e.g.
+    "Saturday, Nov 14: Doors Open & Registration - 📋 Check-in Registration (8:00am - 11:00am MST)"
+    or "Saturday, Nov 14: 🌅 Early Morning (7am - 9am MST)".
+    """
+    if not availability or not _STRUCTURED_SLOT_RE.search(availability):
+        return []
+    # Split on commas that are followed by a weekday — the comma inside
+    # "Saturday, Nov 14" must not split.
+    parts = re.split(r',\s*(?=[A-Za-z]+day,)', availability)
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _parse_explicit_time_range(text: str) -> Optional[Dict[str, str]]:
+    """"(8:00am - 11:00am MST)" → {"start": "08:00", "end": "11:00"}; None if absent."""
+    match = _EXPLICIT_RANGE_RE.search(text or "")
+    if not match:
+        return None
+
+    def to_24h(hour: str, minute: Optional[str], meridiem: str) -> str:
+        h = int(hour) % 12
+        if meridiem.lower() == "pm":
+            h += 12
+        return f"{h:02d}:{int(minute or 0):02d}"
+
+    sh, sm, sap, eh, em, eap = match.groups()
+    return {"start": to_24h(sh, sm, sap), "end": to_24h(eh, em, eap)}
+
+
+# Event timezone for the .ics invites. The hackathon's own `timezone` (admin
+# Overview section) is the source of truth: the application forms label every
+# slot with that zone's abbreviation ("(8:00am - 11:00am MST)"). The
+# abbreviation is only a hint for when the hackathon record can't be read, and
+# DEFAULT_EVENT_TIMEZONE mirrors the frontend's DEFAULT_EVENT_TIMEZONE
+# (src/lib/timezoneUtils.js) — the zone the forms label slots with when the
+# admin never set one.
+DEFAULT_EVENT_TIMEZONE = "America/Phoenix"
+_TZ_ABBREVIATION_TO_IANA = {
+    "MST": "America/Phoenix",
+    "MDT": "America/Denver",
+    "PST": "America/Los_Angeles",
+    "PDT": "America/Los_Angeles",
+    "CST": "America/Chicago",
+    "CDT": "America/Chicago",
+    "EST": "America/New_York",
+    "EDT": "America/New_York",
+}
+# The abbreviation closing a slot's parenthesised time range: "(… 11:00am MST)".
+_SLOT_TZ_ABBR_RE = re.compile(r"\s([A-Z]{2,4})\s*\)")
+
+
+def _resolve_event_tz(tz_name: Optional[str], availability: Optional[str] = None) -> ZoneInfo:
+    """The zone a slot's wall-clock times are in: the hackathon's `timezone`
+    first, then the abbreviation in the slot text, then the default. An
+    invalid zone name never fails a submit — it logs and falls back."""
+    if tz_name:
+        try:
+            return ZoneInfo(tz_name)
+        except (ZoneInfoNotFoundError, ValueError, KeyError):
+            warning(logger, "Invalid hackathon timezone; falling back", tz_name=tz_name)
+    for abbr in _SLOT_TZ_ABBR_RE.findall(availability or ""):
+        if abbr in _TZ_ABBREVIATION_TO_IANA:
+            return ZoneInfo(_TZ_ABBREVIATION_TO_IANA[abbr])
+    return ZoneInfo(DEFAULT_EVENT_TIMEZONE)
+
+_CONFIRMATION_HACKATHON_FIELDS = ("title", "location", "timezone", "start_date", "end_date")
+
+_SEASON_RE = re.compile(
+    r"\b(spring|summer|fall|autumn|winter)\b(?:\s+[A-Za-z]+){0,2}\s+(20\d{2})\b"
+    r"|\b(20\d{2})\s+(spring|summer|fall|autumn|winter)\b",
+    re.IGNORECASE,
+)
+
+
+def _ical_escape(text: Any) -> str:
+    """RFC 5545 TEXT escaping — a venue like "G Wing, 501 E Tyler Mall, Tempe, AZ"
+    carries commas that would otherwise end the property value."""
+    return (
+        str(text or "")
+        .replace("\\", "\\\\")
+        .replace(";", "\\;")
+        .replace(",", "\\,")
+        .replace("\r\n", "\\n")
+        .replace("\n", "\\n")
+    )
+
+
+def _load_hackathon_record(event_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The raw hackathon doc for ``event_id`` (one query), or None when it
+    can't be found/read. create_or_update_volunteer loads it ONCE and derives
+    both the constraints (required questions, auto-approve) and the
+    confirmation-email event summary from it."""
+    if not event_id:
+        return None
+    try:
+        docs = get_db().collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
+        for doc in docs:
+            return doc.to_dict() or {}
+    except Exception as e:
+        warning(logger, "Failed to load hackathon record", event_id=event_id, exc_info=e)
+    return None
+
+
+def _confirmation_event_from_record(record: Optional[Dict[str, Any]], event_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    if record is None:
+        return None
+    event = {k: record.get(k) for k in _CONFIRMATION_HACKATHON_FIELDS}
+    event["event_id"] = record.get("event_id") or event_id
+    return event
+
+
+def _hackathon_for_confirmation(event_id: Optional[str]) -> Optional[Dict[str, Any]]:
+    """The hackathon fields the confirmation email + calendar invites need
+    (title, venue, timezone, dates). None when the event can't be found —
+    callers fall back to generic copy rather than guessing a location."""
+    return _confirmation_event_from_record(_load_hackathon_record(event_id), event_id)
+
+
+# Review statuses an applicant can never be auto-approved out of — a staff
+# decision (or the applicant's own withdrawal) always wins over the switch.
+_AUTO_APPROVE_BLOCKED_STATUSES = frozenset({"denied", "withdrew", "no_show"})
+
+
+def _count_selected_hackers(event_id: str) -> int:
+    """How many hackers are on the event roster (isSelected=True). Uses a
+    Firestore count() aggregation; falls back to streaming ids when the client
+    lacks it (MockFirestore in tests, very old SDKs)."""
+    query = (
+        get_db().collection('volunteers')
+        .where('event_id', '==', event_id)
+        .where('volunteer_type', '==', 'hacker')
+        .where('isSelected', '==', True)
+    )
+    try:
+        result = query.count(alias='n').get()
+        return int(result[0][0].value)
+    except Exception:
+        try:
+            return sum(1 for _ in query.select([]).stream())
+        except Exception:
+            return sum(1 for _ in query.stream())
+
+
+def _hacker_roster_decision(volunteer_type: Optional[str], event_id: str,
+                            constraints: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Auto-approve decision for a hacker submit/update (Nov 2026).
+
+    Returns None unless the event has ``constraints.hacker_auto_approve`` on
+    and this is a hacker application; otherwise "approved" while the roster is
+    under ``constraints.hacker_capacity`` (None/absent = no limit) and
+    "waitlisted" once it is full.
+
+    Read-then-write race: two submits landing at the same moment can both see
+    count == capacity - 1 and both get approved, so the roster can exceed the
+    cap by a handful. Accepted at walk-in volume (~10 people); admins can take
+    anyone off the roster in the Volunteer section.
+    """
+    if volunteer_type != 'hacker' or not constraints:
+        return None
+    if constraints.get('hacker_auto_approve') is not True:
+        return None
+    capacity = constraints.get('hacker_capacity')
+    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
+        return "approved"
+    try:
+        on_roster = _count_selected_hackers(event_id)
+    except Exception as e:
+        # Can't tell whether there's room — leave the application pending for
+        # a human rather than over- or under-filling the roster.
+        warning(logger, "Could not count the hacker roster; skipping auto-approve", event_id=event_id, exc_info=e)
+        return None
+    return "approved" if on_roster < capacity else "waitlisted"
+
+
+def _roster_decision_fields(decision: Optional[str]) -> Dict[str, Any]:
+    """Fields an auto-approve decision writes onto the volunteer doc."""
+    if decision == "approved":
+        return {
+            'isSelected': True,
+            'status': 'approved',
+            'auto_approved': True,
+            'auto_approved_at': _get_current_timestamp(),
+        }
+    if decision == "waitlisted":
+        return {'status': 'waitlisted', 'auto_approved': False}
+    return {}
+
+
+def _after_hacker_auto_approve(volunteer_id: str, event_id: str, email: str, decision: str) -> None:
+    """Bust the admin roster cache and leave a Slack audit trail, mirroring
+    update_volunteer_selection. Never allowed to fail the submit."""
+    try:
+        from services.hackathons_service import get_volunteer_by_event
+        get_volunteer_by_event.cache_clear()
+    except Exception as e:
+        warning(logger, "Failed to clear get_volunteer_by_event cache",
+                volunteer_id=volunteer_id, event_id=event_id, exc_info=e)
+
+    if _notifications_disabled():
+        return
+    try:
+        from common.utils.slack import send_slack_audit
+        send_slack_audit(
+            action="auto_approve_hacker",
+            message=(
+                f"Hacker {email} was auto-{'approved onto the roster' if decision == 'approved' else 'waitlisted (event at capacity)'} "
+                f"for {event_id} (volunteer {volunteer_id})"
+            ),
+            payload={
+                "volunteer_id": volunteer_id,
+                "event_id": event_id,
+                "decision": decision,
+            },
+        )
+    except Exception as e:
+        warning(logger, "Failed to send auto-approve Slack audit",
+                volunteer_id=volunteer_id, exc_info=e)
+
+
+def _calendar_event_name(event: Optional[Dict[str, Any]]) -> str:
+    """"Opportunity Hack Fall 2026" from whatever the hackathon title is
+    (mirrors the frontend's eventDisplayName so emails and share cards agree)."""
+    title = str((event or {}).get("title") or "").strip()
+    if not title:
+        return "Opportunity Hack Volunteering"
+    season = _SEASON_RE.search(title)
+    if season:
+        word = (season.group(1) or season.group(4)).capitalize()
+        year = season.group(2) or season.group(3)
+        return f"Opportunity Hack {'Fall' if word == 'Autumn' else word} {year}"
+    first = re.split(r"\s*[|:\u2013\u2014]\s*|\s+-\s+", title)[0].strip() or title
+    return first if re.search(r"opportunity\s*hack", first, re.IGNORECASE) else f"Opportunity Hack {first}"
+
+
+def _event_year(event: Optional[Dict[str, Any]]) -> Optional[int]:
+    match = re.match(r"(\d{4})-\d{2}-\d{2}", str((event or {}).get("start_date") or ""))
+    return int(match.group(1)) if match else None
+
+
+def _format_event_date_range(start: Any, end: Any) -> str:
+    """"2026-11-14" + "2026-11-15" → "Nov 14–15, 2026" (best effort; "" if unparseable)."""
+    def parse(value):
+        try:
+            return datetime.strptime(str(value or "")[:10], "%Y-%m-%d")
+        except ValueError:
+            return None
+
+    s, e = parse(start), parse(end)
+    if not s:
+        return ""
+    if not e or e.date() == s.date():
+        return f"{s.strftime('%b')} {s.day}, {s.year}"
+    if s.year != e.year:
+        return f"{s.strftime('%b')} {s.day}, {s.year} \u2013 {e.strftime('%b')} {e.day}, {e.year}"
+    if s.month != e.month:
+        return f"{s.strftime('%b')} {s.day} \u2013 {e.strftime('%b')} {e.day}, {e.year}"
+    return f"{s.strftime('%b')} {s.day}\u2013{e.day}, {e.year}"
+
+
 def get_calendar_email_attachment_from_availability(
     availability: str, 
     volunteer_email: str,
     event_name: str = "Opportunity Hack Volunteering", 
-    location: str = "Virtual",
+    location: Optional[str] = None,
     organizer_email: str = "welcome@ohack.dev",
     year: Optional[int] = None,
-    volunteer_type: Optional[str] = None
+    volunteer_type: Optional[str] = None,
+    tz_name: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """
     Parse availability string and generate calendar attachment data for email.
@@ -650,9 +1034,14 @@ def get_calendar_email_attachment_from_availability(
         availability: String containing availability information
         volunteer_email: Email of the volunteer (for proper ATTENDEE field)
         event_name: Name of the calendar event
-        location: Location of the event
+        location: Venue for the LOCATION line; omitted when unknown (it used
+            to be hardcoded to "Virtual" for every event)
         organizer_email: Email of the event organizer
         year: Year for the event (defaults to current year if not specified)
+        tz_name: IANA timezone the slot times are in (the hackathon's
+            `timezone`); falls back to the abbreviation found in the slot text.
+            Times are written as UTC instants (no TZID — a TZID without a
+            VTIMEZONE block is not valid RFC 5545 and Outlook misreads it).
         
     Returns:
         List of dictionaries containing calendar event data for email attachments
@@ -694,29 +1083,16 @@ def get_calendar_email_attachment_from_availability(
         "Late Night": {"start": "23:00", "end": "02:00"}  # Added non-emoji version
     }
     
-    # Parse timezone
-    timezone_match = re.search(r'\(.*?(\w+)\)', availability)
-    timezone = timezone_match.group(1) if timezone_match else "PST"
-    
-    # Check if there's a more explicit timezone indicator
-    if "PST" in availability:
-        timezone = "PST"
-    elif "EST" in availability:
-        timezone = "EST"
-    elif "MST" in availability:
-        timezone = "MST"
-    elif "CST" in availability:
-        timezone = "CST"
+    # The zone the slot times are in (hackathon timezone from the admin
+    # Overview section, else the slot's own abbreviation, else the default).
+    event_zone = _resolve_event_tz(tz_name, availability)
     
     # Split into individual time slots - need to be smarter about comma splitting
     # The issue is that "Sunday, Oct 12: ☀️ Morning" gets split on the comma between Sunday and Oct
     # We need to split on commas that are followed by a day name pattern
     
     # Use regex to split on commas that are followed by weekday patterns
-    import re
-    time_slot_pattern = r',\s*(?=[A-Za-z]+day,)'  # Split on comma followed by weekday,
-    time_slots = re.split(time_slot_pattern, availability)
-    time_slots = [slot.strip() for slot in time_slots if slot.strip()]
+    time_slots = split_availability_slots(availability)
     
     debug(logger, "Parsed time slots", time_slots=time_slots, slot_count=len(time_slots))
     
@@ -827,17 +1203,22 @@ def get_calendar_email_attachment_from_availability(
             }
             month = month_mapping.get(month_abbr, 1) # Default to January if not found
         
-        # Find the time slot in our mapping
-        slot_times = None
-        for key, value in time_slot_mapping.items():
-            # Handle exact match
-            if time_emoji_name == key:
-                slot_times = value
-                break
-            # Handle partial match (in case the emoji is missing)
-            elif time_emoji_name in key or key in time_emoji_name:
-                slot_times = value
-                break
+        # An explicit range in the slot text wins (volunteer shifts carry their
+        # own hours, e.g. "(8:00am - 11:00am MST)"); otherwise fall back to the
+        # named mentor blocks.
+        slot_times = _parse_explicit_time_range(slot)
+        if slot_times:
+            info(logger, "Using explicit time range from slot", slot=slot.strip(), slot_times=slot_times)
+        else:
+            for key, value in time_slot_mapping.items():
+                # Handle exact match
+                if time_emoji_name == key:
+                    slot_times = value
+                    break
+                # Handle partial match (in case the emoji is missing)
+                elif time_emoji_name in key or key in time_emoji_name:
+                    slot_times = value
+                    break
         
         if not slot_times:
             warning(logger, "Time slot not found in mapping", time_slot=time_emoji_name)
@@ -867,11 +1248,22 @@ def get_calendar_email_attachment_from_availability(
             # Generate unique ID for the event
             event_uid = str(uuid.uuid4())
             
-            # Format dates for iCalendar (UTC format for better compatibility)
-            start_str = start_date.strftime("%Y%m%dT%H%M%S")
-            end_str = end_date.strftime("%Y%m%dT%H%M%S")
-            created_str = datetime.now().strftime("%Y%m%dT%H%M%S")
-            debug(logger, "Calendar event time range", start=start_str, end=end_str)
+            # Wall-clock time in the event zone → UTC instant. zoneinfo picks
+            # the right offset per instant, so a DST change mid-event is fine,
+            # and every calendar client shows it in the viewer's local time.
+            utc = ZoneInfo("UTC")
+            start_str = start_date.replace(tzinfo=event_zone).astimezone(utc).strftime("%Y%m%dT%H%M%SZ")
+            end_str = end_date.replace(tzinfo=event_zone).astimezone(utc).strftime("%Y%m%dT%H%M%SZ")
+            created_str = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
+            zone_label = f"{start_date.replace(tzinfo=event_zone).tzname()} ({event_zone.key})"
+            debug(logger, "Calendar event time range", start=start_str, end=end_str, zone=event_zone.key)
+            summary_text = _ical_escape(f"{event_name} - {time_emoji_name}")
+            description_text = _ical_escape(
+                f"{(volunteer_type or 'Volunteer').capitalize()} availability time slot for {weekday}, "
+                f"{month_name} {day} - {time_emoji_name} (times are {zone_label}). "
+                f"Thank you for volunteering with Opportunity Hack!"
+            )
+            location_line = f"LOCATION:{_ical_escape(location)}\n" if location else ""
             
             # Clean up emoji names for filenames
             clean_time_name = re.sub(r'[^\w\s-]', '', time_emoji_name).strip().replace(' ', '_')
@@ -884,15 +1276,14 @@ CALSCALE:GREGORIAN
 METHOD:PUBLISH
 BEGIN:VEVENT
 UID:{event_uid}@ohack.dev
-DTSTART:{start_str}{timezone}
-DTEND:{end_str}{timezone}
-DTSTAMP:{created_str}{timezone}
-CREATED:{created_str}{timezone}
-LAST-MODIFIED:{created_str}{timezone}
-SUMMARY:{event_name} - {time_emoji_name}
-DESCRIPTION:{volunteer_type} availability time slot for {weekday}, {month_name} {day} - {time_emoji_name}. Thank you for volunteering with Opportunity Hack!
-LOCATION:{location}
-ORGANIZER:MAILTO:{organizer_email}
+DTSTART:{start_str}
+DTEND:{end_str}
+DTSTAMP:{created_str}
+CREATED:{created_str}
+LAST-MODIFIED:{created_str}
+SUMMARY:{summary_text}
+DESCRIPTION:{description_text}
+{location_line}ORGANIZER:MAILTO:{organizer_email}
 ATTENDEE:MAILTO:{volunteer_email}
 STATUS:CONFIRMED
 TRANSP:OPAQUE
@@ -983,20 +1374,18 @@ def create_or_update_volunteer(
             warning(logger, "reCAPTCHA verification failed", email=email)
             return {"error": "reCAPTCHA verification failed"}
 
+    # ONE hackathon lookup serves the required-questions check, the hacker
+    # auto-approve decision and the confirmation email/.ics context below.
+    hackathon_record = _load_hackathon_record(event_id)
+    constraints = (hackathon_record or {}).get('constraints') or {}
+
     # Validate required question answers for hacker applications
     if volunteer_data.get('volunteer_type') == 'hacker':
         submitted_answers = volunteer_data.get('requiredQuestionAnswers', [])
         if submitted_answers:
             try:
-                db_temp = get_db()
-                hackathon_docs = db_temp.collection('hackathons').where('event_id', '==', event_id).limit(1).stream()
-                hackathon_data = None
-                for doc in hackathon_docs:
-                    hackathon_data = doc.to_dict()
-                    break
-
-                if hackathon_data:
-                    questions = hackathon_data.get('constraints', {}).get('hacker_required_questions', {}).get('questions', [])
+                if hackathon_record:
+                    questions = (constraints.get('hacker_required_questions') or {}).get('questions', [])
                     if questions:
                         if len(submitted_answers) != len(questions):
                             warning(logger, "Required question answer count mismatch", email=email, event_id=event_id)
@@ -1027,6 +1416,11 @@ def create_or_update_volunteer(
     # stored under another identity shape (email / OAuth id) fall into the
     # create branch on edit, spawning a duplicate isSelected=False doc.
     existing = find_volunteer_by_caller_identity(user_id, event_id, volunteer_type)
+
+    # Title / venue / timezone / dates for the confirmation email and its .ics
+    # invites — derived from the record loaded above.
+    event_ctx = _confirmation_event_from_record(hackathon_record, event_id)
+    roster_outcome = None
     
     if existing:
         # Update existing record
@@ -1052,6 +1446,16 @@ def create_or_update_volunteer(
         # the stored value forward so docs predating the field still get one.
         update_data['isSelected'] = existing.get('isSelected', False)
 
+        # Hacker auto-approve (Nov 2026): an applicant still waiting on review
+        # who updates while the switch is on goes onto the roster too. Never
+        # un-approves, and never overrides a denied/withdrew/no_show decision.
+        # At capacity the stored status is left alone (they stay pending).
+        existing_status = str(existing.get('status') or '').strip().lower()
+        if not existing.get('isSelected') and existing_status not in _AUTO_APPROVE_BLOCKED_STATUSES:
+            if _hacker_roster_decision(volunteer_type, event_id, constraints) == "approved":
+                roster_outcome = "approved"
+                update_data.update(_roster_decision_fields("approved"))
+
         # Log volunteer_data
         logger.debug(f"volunteer_data: {volunteer_data}")
         logger.debug(f"Updating volunteer record {volunteer_id} with complete data including new fields {update_data}")
@@ -1062,14 +1466,18 @@ def create_or_update_volunteer(
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
             email,  # Pass volunteer email for proper ATTENDEE field
-            event_name="Opportunity Hack Volunteering",
-            location="Virtual",
+            event_name=_calendar_event_name(event_ctx),
+            location=(event_ctx or {}).get('location') or None,
             organizer_email="welcome@ohack.dev",
-            volunteer_type=volunteer_type
+            year=_event_year(event_ctx),
+            volunteer_type=volunteer_type,
+            tz_name=(event_ctx or {}).get('timezone') or None,
         )
         
         # Clear all related caches
         _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+        if roster_outcome:
+            _after_hacker_auto_approve(volunteer_id, event_id, email, roster_outcome)
         
         # Send admin notification about the update
         try:
@@ -1096,7 +1504,9 @@ def create_or_update_volunteer(
             else:
                 info(logger, "No calendar attachments generated from availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
+                                              shifts=split_availability_slots(volunteer_data.get('availability', '')),
+                                              event=event_ctx, roster_outcome=roster_outcome)
 
             info(logger, "Sent notifications about updated volunteer", email=email)
         except Exception as e:
@@ -1123,6 +1533,10 @@ def create_or_update_volunteer(
         
         # Add volunteer data
         volunteer_doc.update(volunteer_data)
+
+        # Hacker auto-approve (Nov 2026) — see _hacker_roster_decision.
+        roster_outcome = _hacker_roster_decision(volunteer_type, event_id, constraints)
+        volunteer_doc.update(_roster_decision_fields(roster_outcome))
         
         # Try to get Slack user ID
         try:
@@ -1137,14 +1551,18 @@ def create_or_update_volunteer(
         
         # Clear all related caches 
         _clear_volunteer_caches(user_id, email, event_id, volunteer_type)
+        if roster_outcome:
+            _after_hacker_auto_approve(volunteer_id, event_id, email, roster_outcome)
 
         calendar_attachments = get_calendar_email_attachment_from_availability(
             volunteer_data.get('availability', ''),
             email,  # Pass volunteer email for proper ATTENDEE field
-            event_name="Opportunity Hack Volunteering",
-            location="Virtual",
+            event_name=_calendar_event_name(event_ctx),
+            location=(event_ctx or {}).get('location') or None,
             organizer_email="welcome@ohack.dev",
-            volunteer_type=volunteer_type
+            year=_event_year(event_ctx),
+            volunteer_type=volunteer_type,
+            tz_name=(event_ctx or {}).get('timezone') or None,
         )
         
         # Send confirmation email to the volunteer
@@ -1169,7 +1587,9 @@ def create_or_update_volunteer(
             else:
                 info(logger, "No calendar attachments generated from availability data", email=email)
                 
-            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id)
+            send_volunteer_confirmation_email(first_name, last_name, email, volunteer_type, calendar_attachments, event_id, volunteer_id=volunteer_id,
+                                              shifts=split_availability_slots(volunteer_data.get('availability', '')),
+                                              event=event_ctx, roster_outcome=roster_outcome)
             send_admin_notification_email(volunteer_doc)
             send_slack_volunteer_notification(volunteer_doc)
             info(logger, "Sent notifications for new volunteer", email=email)
@@ -2097,69 +2517,146 @@ def get_my_roles_for_event(propel_user_id: str, event_id: str) -> Dict[str, Any]
 
 
 
+MENTOR_CHECKIN_DEFAULT_TIMEZONE = "America/Phoenix"
+
+
+def mentor_checkin_window(hackathon: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> Dict[str, Any]:
+    """
+    When mentors may check themselves in for an event:
+    opens 00:00 on `start_date`, closes 23:59:59 on `end_date`, both in the
+    event's own timezone (`hackathon.timezone`, default America/Phoenix).
+
+    Returns {"state": "upcoming"|"open"|"closed", "opens_at", "closes_at"}
+    (ISO strings with offset, or None when the date is unknown). Missing dates
+    leave that side of the window open — same reading as the survey mode
+    (api.surveys.surveys_service.compute_event_mode), whose date parser is
+    reused so the two can't disagree about when an event starts.
+    """
+    from api.surveys.surveys_service import _parse_event_date
+
+    hackathon = hackathon or {}
+    tz_name = hackathon.get("timezone") or MENTOR_CHECKIN_DEFAULT_TIMEZONE
+    try:
+        tz = pytz.timezone(tz_name)
+    except Exception:
+        tz = pytz.timezone(MENTOR_CHECKIN_DEFAULT_TIMEZONE)
+
+    def _date_part(value):
+        # Tolerate "2026-11-14T09:00:00" as well as the usual "2026-11-14".
+        return value[:10] if isinstance(value, str) else None
+
+    opens = _parse_event_date(_date_part(hackathon.get("start_date")), tz, end_of_day=False)
+    closes = _parse_event_date(_date_part(hackathon.get("end_date")), tz, end_of_day=True)
+    current = now.astimezone(tz) if now is not None else datetime.now(tz)
+
+    if opens is not None and current < opens:
+        state = "upcoming"
+    elif closes is not None and current > closes:
+        state = "closed"
+    else:
+        state = "open"
+    return {
+        "state": state,
+        "opens_at": opens.isoformat() if opens is not None else None,
+        "closes_at": closes.isoformat() if closes is not None else None,
+    }
+
+
+def _find_mentor_snapshot(db, user_id: str, event_id: str):
+    """
+    The caller's mentor doc for an event, through the SAME three-way identity
+    resolution as GET /api/mentor/application (propel UUID -> verified email
+    -> legacy OAuth id). The check-in routes used the propel-UUID-only lookup,
+    so a mentor matched by email saw their application but got a 404 from
+    /status and could not check in. Returns (snapshot, data) or (None, None).
+    """
+    snap = _find_volunteer_snapshot(db, user_id, event_id, 'mentor')
+    if snap is None:
+        return None, None
+    data = snap.to_dict() or {}
+    data['id'] = snap.id
+    return snap, data
+
+
 def get_mentor_checkin_status(user_id: str, event_id: str) -> Dict[str, Any]:
     """
-    Get the current check-in status for a mentor.
-    
-    Args:
-        user_id: The mentor's user ID
-        event_id: The event ID
-        
-    Returns:
-        Dictionary containing check-in status information
+    Current check-in status for the calling mentor, plus whether they are
+    approved (`isSelected`) and the event's check-in window, so the page never
+    has to guess dates client-side.
     """
     db = get_db()
-    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
-    
+    _snap, volunteer = _find_mentor_snapshot(db, user_id, event_id)
+
     if not volunteer:
         return {
             'success': False,
             'error': 'Mentor record not found'
         }
-    
+
     return {
         'success': True,
         'isCheckedIn': volunteer.get('isCheckedIn', False),
-        'checkInTime': volunteer.get('checkInTime', None),        
-        'timeSlot': volunteer.get('timeSlot', None)
+        'checkInTime': volunteer.get('checkInTime', None),
+        'timeSlot': volunteer.get('timeSlot', None),
+        'isSelected': bool(volunteer.get('isSelected')),
+        # Review status too: this route reads Firestore directly (no cache),
+        # so the page can trust it over the application GET.
+        'status': volunteer.get('status'),
+        'window': mentor_checkin_window(_hackathon_summary(db, event_id)),
     }
+
+
+def _checkin_refusal(code: str, message: str, **extra) -> Dict[str, Any]:
+    """A check-in the backend refuses on purpose (no write, no Slack)."""
+    return {'success': False, 'error': code, 'message': message, **extra}
 
 
 def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None) -> Dict[str, Any]:
     """
     Check in a mentor for an event.
-    
-    Args:
-        user_id: The mentor's user ID
-        event_id: The event ID
-        time_slot: Optional time slot for the check-in
-        
-    Returns:
-        Dictionary containing check-in status information
+
+    Refuses, in this order, with no write and no Slack:
+      not_approved      — the mentor application isn't approved (isSelected)
+      checkin_not_open  — the event hasn't started yet (carries opens_at)
+      checkin_closed    — the event's last day is over (carries closes_at)
     """
     db = get_db()
-    # Get the volunteer record
-    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
-    
+    _snap, volunteer = _find_mentor_snapshot(db, user_id, event_id)
+
     if not volunteer:
         return {
             'success': False,
             'error': 'Mentor record not found'
         }
-    
+
+    if not volunteer.get('isSelected'):
+        return _checkin_refusal(
+            'not_approved', "Your mentor application hasn't been approved yet.")
+
+    window = mentor_checkin_window(_hackathon_summary(db, event_id))
+    if window['state'] == 'upcoming':
+        return _checkin_refusal(
+            'checkin_not_open', "Mentor check-in opens when the event starts.",
+            opens_at=window['opens_at'])
+    if window['state'] == 'closed':
+        return _checkin_refusal(
+            'checkin_closed', "Mentor check-in has closed for this event.",
+            closes_at=window['closes_at'])
+
+    volunteer_ref = db.collection('volunteers').document(volunteer['id'])
+
     # Check if mentor is already checked in
     if volunteer.get('isCheckedIn', False):
         # Update the time slot if provided
         if time_slot:
-            volunteer_ref = db.collection('volunteers').document(volunteer['id'])
             volunteer_ref.update({
                 'timeSlot': time_slot,
                 'updated_timestamp': _get_current_timestamp()
             })
-            
+
             # Clear caches
-            _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
-            
+            _clear_volunteer_caches(user_id, volunteer.get('email'), event_id, 'mentor')
+
             return {
                 'success': True,
                 'message': 'Updated check-in time slot',
@@ -2167,7 +2664,7 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
                 'timeSlot': time_slot,
                 'slackNotificationSent': False  # No need to send notification for update
             }
-        
+
         return {
             'success': True,
             'message': 'Already checked in',
@@ -2175,11 +2672,10 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
             'timeSlot': volunteer.get('timeSlot'),
             'slackNotificationSent': False
         }
-    
+
     # Perform check-in
     current_time = _get_current_timestamp()
-    volunteer_ref = db.collection('volunteers').document(volunteer['id'])
-    
+
     update_data = {
         'isCheckedIn': True, # This is meant just to track mentor Check-in status TODO: change this to mentorIsCheckedIn
         'checkedIn': True, # This field is meant for in-person check-in, we'll also set it here
@@ -2189,22 +2685,22 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
         'checkInTimeList': firestore.ArrayUnion([current_time]),
         'updated_timestamp': current_time
     }
-    
+
     if time_slot:
         update_data['timeSlot'] = time_slot
-    
+
     volunteer_ref.update(update_data)
-    
+
     # Clear caches
-    _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
-    
+    _clear_volunteer_caches(user_id, volunteer.get('email'), event_id, 'mentor')
+
     # Send Slack notification
     slack_notification_sent = False
     try:
         slack_notification_sent = send_mentor_checkin_notification(volunteer, time_slot)
     except Exception as e:
         exception(logger, "Failed to send check-in notification", exc_info=e)
-    
+
     return {
         'success': True,
         'message': 'Checked in successfully',
@@ -2216,25 +2712,19 @@ def mentor_checkin(user_id: str, event_id: str, time_slot: Optional[str] = None)
 
 def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
     """
-    Check out a mentor from an event.
-    
-    Args:
-        user_id: The mentor's user ID
-        event_id: The event ID
-        
-    Returns:
-        Dictionary containing check-out status information
+    Check out a mentor from an event. Always allowed while checked in — even
+    after the event (someone still checked in at the end can leave) and even
+    if their approval was later withdrawn.
     """
     db = get_db()
-    # Get the volunteer record
-    volunteer = get_volunteer_by_user_id(user_id, event_id, 'mentor')
-    
+    _snap, volunteer = _find_mentor_snapshot(db, user_id, event_id)
+
     if not volunteer:
         return {
             'success': False,
             'error': 'Mentor record not found'
         }
-    
+
     # Check if mentor is checked in
     if not volunteer.get('isCheckedIn', False):
         return {
@@ -2281,7 +2771,7 @@ def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
     volunteer_ref.update(update_data)
     
     # Clear caches
-    _clear_volunteer_caches(user_id, volunteer['email'], event_id, 'mentor')
+    _clear_volunteer_caches(user_id, volunteer.get('email'), event_id, 'mentor')
     
     # Send Slack notification
     slack_notification_sent = False

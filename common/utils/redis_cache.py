@@ -1,5 +1,7 @@
 import os
 import json
+import time
+from fnmatch import fnmatchcase
 from functools import wraps
 from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse, urlunparse
@@ -28,9 +30,23 @@ def _redact_redis_url(redis_url: str) -> str:
     return urlunparse(parsed._replace(netloc=f"{redacted_user_info}@{host_info}"))
 
 
+# A runtime Redis failure used to switch Redis off for the REST OF THE PROCESS:
+# after one blip, one gunicorn worker kept using Redis while another served its
+# own local copy — two cache versions again (the per-process bug class). Now a
+# failure falls back to local and the connection is re-probed at most every
+# REDIS_REPROBE_SECONDS, so every worker converges back on the shared cache.
+REDIS_REPROBE_SECONDS = 30
+_REDIS_RETRY_AT = None  # monotonic time of the next re-probe; None = no retry
+REDIS_ENABLED = False
+REDIS_CLIENT = None
+redis_url = os.environ.get('REDIS_URL')
+_REDIS_URL = redis_url
+_REDIS_IMPORTABLE = False
+
+
 def _disable_redis(operation: str, exc: Exception) -> None:
-    """Disable Redis after a runtime failure and fall back to local cache."""
-    global REDIS_ENABLED, REDIS_CLIENT
+    """Fall back to the local cache after a runtime failure; re-probe later."""
+    global REDIS_ENABLED, REDIS_CLIENT, _REDIS_RETRY_AT
 
     if REDIS_ENABLED:
         warning(
@@ -38,31 +54,48 @@ def _disable_redis(operation: str, exc: Exception) -> None:
             "Redis cache operation failed; falling back to local TTL cache",
             operation=operation,
             error=str(exc),
+            reprobe_seconds=REDIS_REPROBE_SECONDS,
         )
 
     REDIS_ENABLED = False
     REDIS_CLIENT = None
+    if _REDIS_URL and _REDIS_IMPORTABLE:
+        _REDIS_RETRY_AT = time.monotonic() + REDIS_REPROBE_SECONDS
+
+
+def _connect(url: str):
+    import redis  # noqa: WPS433 - only reached when REDIS_URL is set
+    client = redis.from_url(url, socket_connect_timeout=2, socket_timeout=2)
+    client.ping()
+    return client
+
+
+def _redis_available() -> bool:
+    """True when Redis should be used for this call; re-probes when due."""
+    global REDIS_ENABLED, REDIS_CLIENT, _REDIS_RETRY_AT
+
+    if REDIS_ENABLED:
+        return True
+    if _REDIS_RETRY_AT is None or time.monotonic() < _REDIS_RETRY_AT:
+        return False
+    try:
+        REDIS_CLIENT = _connect(_REDIS_URL)
+        REDIS_ENABLED = True
+        _REDIS_RETRY_AT = None
+        info(logger, "Redis cache re-enabled after re-probe", cache_backend="redis")
+    except Exception as exc:  # still down; try again later
+        REDIS_CLIENT = None
+        _REDIS_RETRY_AT = time.monotonic() + REDIS_REPROBE_SECONDS
+        warning(logger, "Redis re-probe failed; staying on local TTL cache",
+                error=str(exc), reprobe_seconds=REDIS_REPROBE_SECONDS)
+    return REDIS_ENABLED
+
 
 # Check if Redis is available and import if it is
-REDIS_ENABLED = False
-REDIS_CLIENT = None
-redis_url = os.environ.get('REDIS_URL')
-
 if redis_url:
     try:
-        import redis
-        from redis.exceptions import RedisError
-
-        REDIS_CLIENT = redis.from_url(redis_url)
-        # Test the connection
-        REDIS_CLIENT.ping()
-        REDIS_ENABLED = True
-        info(
-            logger,
-            "Redis cache enabled",
-            cache_backend="redis",
-            redis_url=_redact_redis_url(redis_url),
-        )
+        import redis  # noqa: F401
+        _REDIS_IMPORTABLE = True
     except ImportError as exc:
         warning(
             logger,
@@ -71,23 +104,30 @@ if redis_url:
             redis_url=_redact_redis_url(redis_url),
             error=str(exc),
         )
-    except RedisError as exc:
+
+if _REDIS_IMPORTABLE:
+    try:
+        REDIS_CLIENT = _connect(redis_url)
+        REDIS_ENABLED = True
+        info(
+            logger,
+            "Redis cache enabled",
+            cache_backend="redis",
+            redis_url=_redact_redis_url(redis_url),
+        )
+    except Exception as exc:
+        # Startup failure is no longer permanent either: re-probe later.
+        REDIS_CLIENT = None
+        _REDIS_RETRY_AT = time.monotonic() + REDIS_REPROBE_SECONDS
         warning(
             logger,
             "Redis connection failed during startup; using local TTL cache",
             cache_backend="local_ttl",
             redis_url=_redact_redis_url(redis_url),
             error=str(exc),
+            reprobe_seconds=REDIS_REPROBE_SECONDS,
         )
-    except Exception as exc:
-        warning(
-            logger,
-            "Unexpected Redis startup failure; using local TTL cache",
-            cache_backend="local_ttl",
-            redis_url=_redact_redis_url(redis_url),
-            error=str(exc),
-        )
-else:
+elif not redis_url:
     info(
         logger,
         "Redis cache disabled; REDIS_URL not configured, using local TTL cache",
@@ -95,8 +135,30 @@ else:
         local_ttl_seconds=LOCAL_CACHE_TTL_SECONDS,
     )
 
-# Fallback local cache with 10 minute TTL
+# Fallback local cache. The TTLCache's own TTL is only the CEILING (10 min);
+# every entry also stores its own expiry so a caller's `ttl` is honoured.
+# Before Nov 2026 the per-call ttl was ignored here, so a `ttl=2` lookup (the
+# volunteer-by-user/email caches) was held for 10 minutes PER gunicorn worker:
+# after an admin changed a mentor's status, one worker kept serving the old
+# doc and refreshes of /mentor-checkin alternated between two states.
 local_cache = TTLCache(maxsize=LOCAL_CACHE_MAXSIZE, ttl=LOCAL_CACHE_TTL_SECONDS)
+_MISSING = object()
+
+
+def _local_get(key: str, default: Any = None) -> Any:
+    entry = local_cache.get(key, _MISSING)
+    if entry is _MISSING:
+        return default
+    expires_at, value = entry
+    if expires_at is not None and time.monotonic() >= expires_at:
+        local_cache.pop(key, None)
+        return default
+    return value
+
+
+def _local_set(key: str, value: Any, ttl: int) -> None:
+    expires_at = time.monotonic() + ttl if ttl and ttl > 0 else None
+    local_cache[key] = (expires_at, value)
 
 def cache_key(*args, **kwargs) -> str:
     """Generate a consistent cache key from arguments."""
@@ -116,7 +178,7 @@ def get_cached(key: str, default: Any = None) -> Any:
     Returns:
         Cached value or default
     """
-    if REDIS_ENABLED:
+    if _redis_available():
         try:
             value = REDIS_CLIENT.get(key)
             if value:
@@ -125,7 +187,7 @@ def get_cached(key: str, default: Any = None) -> Any:
         except Exception as exc:
             _disable_redis("get", exc)
     
-    return local_cache.get(key, default)
+    return _local_get(key, default)
 
 def set_cached(key: str, value: Any, ttl: int = 600) -> bool:
     """
@@ -143,7 +205,7 @@ def set_cached(key: str, value: Any, ttl: int = 600) -> bool:
         # Convert value to JSON string for storage
         json_value = json.dumps(value)
         
-        if REDIS_ENABLED:
+        if _redis_available():
             try:
                 REDIS_CLIENT.setex(key, ttl, json_value)
                 return True
@@ -151,7 +213,7 @@ def set_cached(key: str, value: Any, ttl: int = 600) -> bool:
                 _disable_redis("set", exc)
         
         # Use local cache
-        local_cache[key] = value
+        _local_set(key, value, ttl)
         return True
     except Exception:
         return False
@@ -167,7 +229,7 @@ def delete_cached(key: str) -> bool:
         True if successful, False otherwise
     """
     try:
-        if REDIS_ENABLED:
+        if _redis_available():
             try:
                 REDIS_CLIENT.delete(key)
             except Exception as exc:
@@ -192,7 +254,7 @@ def clear_pattern(pattern: str) -> bool:
         True if successful, False otherwise
     """
     try:
-        if REDIS_ENABLED:
+        if _redis_available():
             try:
                 keys = REDIS_CLIENT.keys(pattern)
                 if keys:
@@ -200,8 +262,10 @@ def clear_pattern(pattern: str) -> bool:
             except Exception as exc:
                 _disable_redis("clear_pattern", exc)
         
-        # For local cache, scan and remove matching keys
-        keys_to_delete = [k for k in local_cache if k.startswith(pattern)]
+        # For local cache, scan and remove matching keys. `pattern` is a Redis
+        # glob ("volunteer:by_event:x:mentor*") — a literal startswith() never
+        # matched the "*" and cleared nothing.
+        keys_to_delete = [k for k in list(local_cache) if fnmatchcase(k, pattern)]
         for k in keys_to_delete:
             if k in local_cache:
                 del local_cache[k]
@@ -242,6 +306,9 @@ def redis_cached(prefix: str, ttl: int = 600):
         
         # Add method to clear cache for this function
         wrapper.cache_clear = lambda: clear_pattern(f"{prefix}:*")
+        # Read by common/utils/cache_registry.py's guard test.
+        wrapper.cache_prefix = prefix
+        wrapper.cache_ttl = ttl
         
         return wrapper
     return decorator

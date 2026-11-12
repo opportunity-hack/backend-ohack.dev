@@ -199,6 +199,7 @@ def create_app():
     from api.broadcasts import broadcasts_views
     from api.submissions import submissions_views
     from api.peer_votes import peer_votes_views
+    from api.checkin import checkin_views
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
@@ -229,5 +230,6 @@ def create_app():
     app.register_blueprint(broadcasts_views.bp)
     app.register_blueprint(submissions_views.bp)
     app.register_blueprint(peer_votes_views.bp)
+    app.register_blueprint(checkin_views.bp)
 
     return app

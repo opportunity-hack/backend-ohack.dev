@@ -1,0 +1,72 @@
+# Working agreements for AI coding tools
+
+You are helping **{{TEAM_NAME}}** build a project for **{{NONPROFIT_NAME}}** at
+[{{EVENT_TITLE}}]({{EVENT_URL}}). Read this before suggesting or making changes.
+
+## The one repository rule (most important)
+
+**All code lives in this repository and nowhere else.** Never suggest, scaffold or
+push to a new repository — not under a teammate's account, not a second repo in the
+org, not a fork used as "the real one". If someone has code elsewhere, help them
+move it here (copy the files in, or add this repo as a remote and push a branch),
+then delete the stray repo. Judges, the Team Dashboard, the public project page and
+the nonprofit all read this repo only; work anywhere else does not count.
+
+## Who this is for
+
+- Nonprofit: {{NONPROFIT_LINE}}. Problem statement: {{PROBLEM_STATEMENT_LINE}}.
+- The nonprofit is the user. Prefer the simplest thing that works for them over
+  clever architecture; they will have to run this after the weekend.
+- Questions for the nonprofit go in their Slack channel {{NONPROFIT_SLACK}};
+  the team talks in {{TEAM_SLACK}}; mentors are in
+  [#ask-a-mentor]({{ASK_A_MENTOR_URL}}).
+- Everything here is open source (MIT). Never add proprietary or copied code.
+
+## Final-day clock
+
+{{DEMO_RULE}}
+
+{{TIMELINE_PLAIN}}
+
+Submission happens on the Team Dashboard ({{DASHBOARD_URL}}): project story,
+demo video link ({{DEMO_MAX_MINUTES}} minutes or less; YouTube, Vimeo, Loom or
+Google Drive), then Submit. If someone asks "what's left?", answer from that list.
+
+## Pull requests
+
+- **One change per PR.** Aim for under {{PR_MAX_LINES}} changed lines; if a
+  change is bigger, propose a split before writing code.
+- **Title:** imperative, under {{PR_TITLE_MAX}} characters — `Add volunteer
+  sign-up form`, not `Updates`.
+- **Description:** under {{PR_BODY_MAX_WORDS}} words, in the template order:
+  what changed, why, how to test it, screenshots for UI. Short beats complete.
+- Open PRs with `gh pr create` using the repo's template; never force-push a
+  shared branch.
+- Commit messages explain *why*; the diff already shows *what*.
+
+## Judging — build toward the rubric
+
+Judges score **Scope** (does it solve the nonprofit's real problem?),
+**Documentation** (can someone else run and extend it?), **Polish** (does it
+work end to end without hand-holding?) and **Security** (no secrets in git,
+input validated, auth where it matters), plus a separate **Accessibility**
+prize. Rubric: https://www.ohack.dev/hackathon-judging-criteria
+
+## Public credit
+
+Work is documented as **GitHub Issues** — one per task or decision, closed by
+the PR that lands it. Recruiters and the nonprofit read this repo later; Slack
+disappears. When planning, offer to write the issues.
+
+## Secrets and keys
+
+- Never commit `.env`, API keys, tokens or credentials. Use `.env.example` with
+  placeholder values and keep real values local. The OHack AI gateway key from
+  your team card is a secret too.
+- A pre-commit guard in `.claude/hooks/guard-secrets.sh` blocks commits that
+  contain things that look like keys; don't work around it, move the value to `.env`.
+
+## Documentation
+
+Keep `README.md` current as you go: what it does, how to run it, live link,
+demo link. The README is part of the submission.

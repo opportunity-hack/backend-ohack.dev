@@ -614,13 +614,42 @@ def get_submission_window_for_event(event_id):
 # Deadline reminders (T-24h/6h/1h Slack nudges) — admin button + hourly cron.
 # ---------------------------------------------------------------------------
 
-REMINDER_KINDS = {"submission"}
-REMINDER_HOURS = {24, 6, 1}
+# Per-kind hour tiers. `submission` = the T-24h/6h/1h "what's still missing"
+# nudges; `demo_video` = ONE T-2h "start recording now" nudge (Nov 2026 —
+# the same 2h lead the seeded repo README/AGENTS.md announce, so Slack and
+# the repo tell teams the same time). Both key off deadlines.submission.
+REMINDER_SCHEDULE = {
+    "submission": {24, 6, 1},
+    "demo_video": {2},
+}
+REMINDER_KINDS = set(REMINDER_SCHEDULE)
+REMINDER_HOURS = set().union(*REMINDER_SCHEDULE.values())
+DEMO_VIDEO_LEAD_HOURS = 2
 
 
-def build_reminder_message(team, event, deadline_iso, hours_before):
+def build_demo_video_message(team, event, deadline_iso, hours_before):
+    """The T-2h 'go record' nudge. None when the team already linked a demo
+    video (they're ahead — don't nag) or already submitted."""
+    if team.get("project_submission_status") in SUBMITTED_STATUSES:
+        return None
+    if team.get("demo_video_url"):
+        return None
+    event_id = event.get("event_id") or team.get("hackathon_event_id") or ""
+    link = f"https://www.ohack.dev/hack/{event_id}/manageteam#demo"
+    return (
+        f":movie_camera: *{hours_before} hours left — time to record your demo video.*\n"
+        "Stop adding features. Show the nonprofit what works end to end (4 minutes or less), "
+        "upload it to YouTube, Vimeo, Loom or Google Drive, and link it on your dashboard:\n"
+        f"{link}\n"
+        "A demo recorded with time to spare beats a feature finished at the buzzer."
+    )
+
+
+def build_reminder_message(team, event, deadline_iso, hours_before, kind="submission"):
     """A tailored nudge naming only what THIS team still owes, or None when
     the team has nothing left to do (already submitted — never nag a done team)."""
+    if kind == "demo_video":
+        return build_demo_video_message(team, event, deadline_iso, hours_before)
     if team.get("project_submission_status") in SUBMITTED_STATUSES:
         return None
 
@@ -665,8 +694,8 @@ def send_deadline_reminders(event_id, kind, hours_before, *, only_if_due=False, 
         hours_before = int(hours_before)
     except (TypeError, ValueError):
         return {"error": f"hours_before must be one of {sorted(REMINDER_HOURS)}"}, 400
-    if hours_before not in REMINDER_HOURS:
-        return {"error": f"hours_before must be one of {sorted(REMINDER_HOURS)}"}, 400
+    if hours_before not in REMINDER_SCHEDULE[kind]:
+        return {"error": f"hours_before must be one of {sorted(REMINDER_SCHEDULE[kind])} for kind {kind!r}"}, 400
 
     event = get_hackathon_by_event_id(event_id)
     if not event:
@@ -710,7 +739,7 @@ def send_deadline_reminders(event_id, kind, hours_before, *, only_if_due=False, 
         if not slack_channel:
             skipped.append({"team_id": team_id, "reason": "no_slack_channel"})
             continue
-        message = build_reminder_message(team, event, deadline_iso, hours_before)
+        message = build_reminder_message(team, event, deadline_iso, hours_before, kind=kind)
         if message is None:
             skipped.append({"team_id": team_id, "reason": "already_done"})
             continue
@@ -771,15 +800,16 @@ def send_due_reminders_for_current_events():
         event_id = event.get("event_id")
         if not event_id:
             continue
-        for hours_before in sorted(REMINDER_HOURS, reverse=True):
-            # One event with a bad doc / a Firestore hiccup must not stop the
-            # other events' reminders from going out.
-            try:
-                payload, status = send_deadline_reminders(event_id, "submission", hours_before, only_if_due=True, actor="cron")
-            except Exception:
-                logger.exception("send_due_reminders: event %s (%sh) failed", event_id, hours_before)
-                payload, status = {"error": "reminder_failed"}, 500
-            results.append({"event_id": event_id, "hours_before": hours_before, "status": status, "result": payload})
+        for kind, hours in sorted(REMINDER_SCHEDULE.items()):
+            for hours_before in sorted(hours, reverse=True):
+                # One event with a bad doc / a Firestore hiccup must not stop the
+                # other events' reminders from going out.
+                try:
+                    payload, status = send_deadline_reminders(event_id, kind, hours_before, only_if_due=True, actor="cron")
+                except Exception:
+                    logger.exception("send_due_reminders: event %s %s (%sh) failed", event_id, kind, hours_before)
+                    payload, status = {"error": "reminder_failed"}, 500
+                results.append({"event_id": event_id, "kind": kind, "hours_before": hours_before, "status": status, "result": payload})
 
     # Still answer 500 when anything blew up so the hourly GitHub Actions job
     # goes red (curl -f) instead of silently swallowing the failure.

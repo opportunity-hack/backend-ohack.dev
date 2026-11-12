@@ -899,6 +899,63 @@ def _link_repo_to_problem_statements(db, team_data, nonprofit, repo_name, repo_u
         logger.error("Failed linking repo %s to problem statement(s)", repo_url, exc_info=True)
 
 
+def _select_problem_statement(db, team_data, nonprofit):
+    """The problem statement the repo README should name: the team's own
+    first `problem_statements` ref, else the nonprofit's first one. Returns a
+    (ps_id, ps_dict) pair or ("", {}) — never raises."""
+    try:
+        candidates = []
+        for ps in team_data.get("problem_statements") or []:
+            if isinstance(ps, str):
+                candidates.append(ps)
+            elif ps is not None and hasattr(ps, "id"):  # DocumentReference
+                candidates.append(ps.id)
+        if not candidates:
+            npo_ps = (nonprofit or {}).get("problem_statements") or []
+            if len(npo_ps) >= 1 and isinstance(npo_ps[0], str):
+                candidates.append(npo_ps[0])
+        for ps_id in candidates:
+            snap = db.collection("problem_statements").document(ps_id).get()
+            if snap.exists:
+                return ps_id, (snap.to_dict() or {})
+    except Exception:
+        logger.warning("Could not resolve a problem statement for the repo seed", exc_info=True)
+    return "", {}
+
+
+def _build_repo_seed_files(db, team_data, team_id, hackathon_event, nonprofit, nonprofit_id,
+                           creator_name, devpost_url, github_org, repository_name):
+    """Render the files committed into a new team repo (see
+    common.utils.team_repo_seed). Returns None on ANY failure so
+    create_github_repo falls back to its legacy README — seeding must never
+    block an approval."""
+    try:
+        from common.utils.team_repo_seed import SeedContext, build_seed_files
+        ps_id, ps = _select_problem_statement(db, team_data, nonprofit)
+        ctx = SeedContext(
+            event_id=team_data.get("hackathon_event_id") or "",
+            event_title=hackathon_event.get("title") or "",
+            hackathon=hackathon_event,
+            team_id=team_id,
+            team_name=team_data.get("name") or "",
+            team_slack_channel=team_data.get("slack_channel") or "",
+            creator_name=creator_name or "",
+            nonprofit_id=nonprofit_id or "",
+            nonprofit_name=(nonprofit or {}).get("name") or "",
+            nonprofit_slack_channel=(nonprofit or {}).get("slack_channel") or "",
+            problem_statement_id=ps_id,
+            problem_statement_title=ps.get("title") or "",
+            problem_statement_slack_channel=ps.get("slack_channel") or "",
+            devpost_url=devpost_url or "",
+            github_org=github_org or "",
+            repo_name=repository_name or "",
+        )
+        return build_seed_files(ctx)
+    except Exception:
+        logger.error("Building repo seed files failed; using legacy README", exc_info=True)
+        return None
+
+
 def approve_team(admin_user_id, json):
     """
     Admin function to approve a team and pair with nonprofit
@@ -1004,6 +1061,16 @@ def approve_team(admin_user_id, json):
     nonprofit_title = nonprofit_name.replace(" ", "").replace("-", "")[:20]
     repository_name = f"{team_name}-{nonprofit_title}"[:100]
     
+    # Files committed into the new repo: README with real nonprofit/Slack/
+    # dashboard links + the final-day timeline, AGENTS.md/CLAUDE.md working
+    # agreements for AI tools, Claude Code hooks, PR template + lint. Pure
+    # and best-effort: if anything about building it fails we fall back to
+    # the legacy README rather than block the approval.
+    seed_files = _build_repo_seed_files(
+        db, team_data, team_id, hackathon_event, nonprofit, nonprofit_id,
+        first_user_name, devpost_url, github_org, repository_name,
+    )
+
     # Create GitHub repo
     try:
         logger.info("Creating github repo %s", repository_name)
@@ -1017,7 +1084,8 @@ def approve_team(admin_user_id, json):
             nonprofit_name, 
             nonprofit_id,
             github_org,
-            devpost_url
+            devpost_url,
+            seed_files=seed_files,
         )
     except ValueError as e:
         logger.error("Error creating GitHub repo: %s", e)
@@ -1034,7 +1102,9 @@ def approve_team(admin_user_id, json):
 
     logger.info("GitHub repo created: %s", repo["full_url"])
     
-    # Send notification to the team
+    # Send notification to the team. DevPost is optional now (the dashboard is
+    # the submission of record) — only mention it when the event has a link.
+    devpost_step = (f"; optionally also <{devpost_url}|submit on DevPost>" if devpost_url else "")
     slack_message = f'''
 :rocket: Great news! Your team *{team_name}* has been approved and paired with a nonprofit! :tada:
 
@@ -1043,22 +1113,21 @@ def approve_team(admin_user_id, json):
 *Approved by:* {admin_name}
 
 :github_parrot: *GitHub Repository:* {repo['full_url']}
-All code goes here! Remember, we're building for the public good (MIT license).
+:rotating_light: *This is your team's ONE repo — ALL code goes here.* Please don't create your own repo (personal or org): judges, your Team Dashboard, the public project page and the nonprofit only see this one, so work pushed anywhere else won't count. Add every teammate as a collaborator. We're building for the public good (MIT license).
 
 :question: *Need help?* 
 Join <#C01E5CGDQ74> for questions and updates.
 
 :clipboard: *Next Steps:*
-1. Add team to GitHub repo: <https://opportunity-hack.slack.com/archives/C1Q6YHXQU/p1605657678139600|How-to guide>
-2. Create DevPost project: <https://youtu.be/vCa7QFFthfU?si=bzMQ91d8j3ZkOD03|Tutorial video>
-3. Submit to <{devpost_url}|this DevPost project> - you can continue to update this until the deadline!
-4. Study your nonprofit slides and software requirements doc and chat with mentors
-5. Code, collaborate, and create!
-6. Share your progress on the socials: `#ohack` and `@opportunityhack`
-7. <https://www.ohack.dev/volunteer/track|Log volunteer hours>
-8. Post-hack: Update LinkedIn with your amazing experience! You are getting real-world industry experience!
-9. Update <https://www.ohack.dev/profile|your profile> for a chance to win prizes!
-10. Follow the schedule at <https://www.ohack.dev/hack/{hackathon_event_id}|ohack.dev/hack/{hackathon_event_id}>
+1. Add team to GitHub repo: <https://opportunity-hack.slack.com/archives/C1Q6YHXQU/p1605657678139600|How-to guide> — then read the repo's README and AGENTS.md (final-day timeline, PR habits, submission checklist)
+2. Your <https://www.ohack.dev/hack/{hackathon_event_id}/manageteam|Team Dashboard> is where you submit: project story + demo video link, then Submit (keep updating until the close){devpost_step}
+3. Study your nonprofit slides and software requirements doc and chat with mentors
+4. Code, collaborate, and create — small PRs, documented as GitHub Issues
+5. Share your progress on the socials: `#ohack` and `@opportunityhack`
+6. <https://www.ohack.dev/volunteer/track|Log volunteer hours>
+7. Post-hack: Update LinkedIn with your amazing experience! You are getting real-world industry experience!
+8. Update <https://www.ohack.dev/profile|your profile> for a chance to win prizes!
+9. Follow the schedule at <https://www.ohack.dev/hack/{hackathon_event_id}|ohack.dev/hack/{hackathon_event_id}>
 
 Let's make a difference! :muscle: :heart:
 '''
@@ -1088,8 +1157,15 @@ Let's make a difference! :muscle: :heart:
     # Lazy import: teams_service must never import gateway_keys at module top.
     try:
         from api.teams.gateway_keys import provision_team_gateway_key
-        provision_team_gateway_key(team_id)
-        logger.info("Gateway API key provisioned for team %s", team_id)
+        meta = provision_team_gateway_key(team_id)
+        partial = (meta or {}).get("partial_failure")
+        if partial:
+            logger.warning(
+                "Gateway %s mint failed for team %s (non-blocking; admin retry mints it): %s",
+                partial.get("label"), team_id, partial.get("error"),
+            )
+        else:
+            logger.info("Gateway API keys provisioned for team %s", team_id)
     except Exception as e:
         logger.warning("Gateway key provisioning failed for team %s (non-blocking): %s", team_id, e)
 

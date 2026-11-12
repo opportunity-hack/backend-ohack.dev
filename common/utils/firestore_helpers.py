@@ -89,7 +89,10 @@ def _snapshot_to_json(docid, snapshot):
     return d_json
 
 
-@cached(cache=TTLCache(maxsize=2000, ttl=600), lock=threading.Lock(), key=hash_key)
+# read_after_write (<=10s): every gunicorn worker on every Fly machine keeps
+# its own copy and a write clears only the worker that served it — see
+# common/utils/cache_registry.py.
+@cached(cache=TTLCache(maxsize=2000, ttl=10), lock=threading.Lock(), key=hash_key)
 def _doc_to_json_cached(docid, doc):
     """Cached resolve of a DocumentReference (saves one Firestore .get()).
 
@@ -104,7 +107,7 @@ def doc_to_json(docid=None, doc=None, depth=0):
     """Convert a Firestore snapshot/reference to a plain dict.
 
     - DocumentSnapshot: converted directly, never cached (read already done).
-    - DocumentReference: resolved through a 10-min per-process cache.
+    - DocumentReference: resolved through a 10-second per-process cache.
     - Anything else: returned unchanged.
     Every dict/list returned is a fresh copy, so callers may mutate it.
     """

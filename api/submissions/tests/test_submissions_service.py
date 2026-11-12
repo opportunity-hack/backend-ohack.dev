@@ -836,11 +836,52 @@ def test_send_due_reminders_for_current_events_iterates_hours_and_events(reminde
     result, status = svc.send_due_reminders_for_current_events()
 
     assert status == 200
-    hours_checked = {r["hours_before"] for r in result["results"]}
-    assert hours_checked == {24, 6, 1}
+    checked = {(r["kind"], r["hours_before"]) for r in result["results"]}
+    assert checked == {("submission", 24), ("submission", 6), ("submission", 1), ("demo_video", 2)}
     # Only the 24h reminder was due (deadline is ~23h30m away); confirm it fired.
     fired = [r for r in result["results"] if r["hours_before"] == 24][0]
     assert fired["result"]["notified"] == ["team-1"]
+
+
+# ---------------------------------------------------------------------------
+# demo_video reminder kind (Nov 2026) — the T-2h "go record" nudge
+# ---------------------------------------------------------------------------
+
+def test_demo_video_message_tells_team_to_record_now():
+    msg = svc.build_reminder_message({}, {"event_id": "e1"}, "x", 2, kind="demo_video")
+    assert "record your demo video" in msg
+    assert "2 hours left" in msg
+    assert "https://www.ohack.dev/hack/e1/manageteam#demo" in msg
+
+
+def test_demo_video_message_none_when_team_already_has_a_video_or_submitted():
+    assert svc.build_reminder_message({"demo_video_url": "https://youtu.be/x"}, {"event_id": "e1"}, "x", 2, kind="demo_video") is None
+    assert svc.build_reminder_message({"project_submission_status": "submitted"}, {"event_id": "e1"}, "x", 2, kind="demo_video") is None
+
+
+def test_demo_video_kind_only_accepts_its_own_hours(monkeypatch):
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"deadlines": {"submission": "2026-01-01T00:00:00+00:00"}})
+    _, status = svc.send_deadline_reminders("event-1", "demo_video", 24)
+    assert status == 400
+    _, status = svc.send_deadline_reminders("event-1", "submission", 2)
+    assert status == 400
+
+
+def test_demo_video_reminder_fires_two_hours_before_close_and_skips_teams_with_a_video(reminder_wire, monkeypatch):
+    now = datetime.now(timezone.utc)
+    deadline = (now + timedelta(hours=1, minutes=45)).isoformat()
+    monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda eid: {"id": "evtdoc-1", "event_id": "event-1", "deadlines": {"submission": deadline}})
+    reminder_wire["teams"]["team-1"] = {"hackathon_event_id": "event-1", "slack_channel": "#t1"}
+    reminder_wire["teams"]["team-2"] = {"hackathon_event_id": "event-1", "slack_channel": "#t2", "demo_video_url": "https://youtu.be/done"}
+
+    result, status = svc.send_deadline_reminders("event-1", "demo_video", 2, only_if_due=True)
+
+    assert status == 200
+    assert result["notified"] == ["team-1"]
+    assert {s["team_id"] for s in result["skipped"]} == {"team-2"}
+    # ENVIRONMENT=test → simulated send (no Slack call); the idempotency key still lands.
+    assert result["simulated"] is True
+    assert "demo_video_2h" in reminder_wire["hackathons"]["evtdoc-1"]["reminders_sent"]
 
 
 # ---------------------------------------------------------------------------
@@ -1000,7 +1041,7 @@ def test_send_due_reminders_one_bad_event_does_not_abort_the_rest(reminder_wire,
     # the hourly GitHub Actions job goes red instead of silently passing.
     assert status == 500
     assert result["success"] is False
-    assert result["failed"] == 3
+    assert result["failed"] == 4  # submission ×3 tiers + demo_video ×1, all for bad-event
     bad = [r for r in result["results"] if r["event_id"] == "bad-event"]
     assert bad and all(r["status"] == 500 for r in bad)
     good_24h = [r for r in result["results"] if r["event_id"] == "event-1" and r["hours_before"] == 24][0]
