@@ -41,8 +41,9 @@ Errors are `{"error": <code>, "message": <copy>}`.
 
 ## Rules
 
-- **Weight** = 5 × filled `GIVEAWAY_PROFILE_FIELDS` (twin of the frontend's
-  `src/components/Profile/profileFields.js` — keep in sync) + GitHub
+- **Weight** = 5 × filled `GIVEAWAY_PROFILE_FIELDS` (12 fields everyone can
+  fill — no apt/suite, company, Instagram, stickers or propel_id; twin of the
+  frontend's `src/components/Profile/profileFields.js` — keep in sync) + GitHub
   contributions (commits + PRs + issues + reviews, same data as
   `GET /api/messages/profile/github/<login>`) capped at 45. Profile entries are
   uncapped. A GitHub failure never fails the entry: the previous stored GitHub

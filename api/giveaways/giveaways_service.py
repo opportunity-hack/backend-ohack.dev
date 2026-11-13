@@ -36,12 +36,15 @@ logger = get_logger("api.giveaways.giveaways_service")
 CAMPAIGNS_COLLECTION = "giveaway_campaigns"
 ENTRIES_COLLECTION = "giveaway_entries"
 
-# Keep in sync with the frontend's src/components/Profile/profileFields.js —
-# the profile tab and the profile-completion prompt count the same fields.
+# Keep in sync with the frontend's src/components/Profile/profileFields.js.
+# Only fields EVERY participant can reasonably fill score: optional or
+# situational ones (apartment/suite, company, Instagram), the stickers
+# preference and the system-set propel_id deliberately don't, so nobody loses
+# entries for a blank that is correct for them. The mailing address stays
+# because prizes ship to it.
 GIVEAWAY_PROFILE_FIELDS = (
-    "role", "github", "expertise", "education", "why", "company", "shirt_size",
-    "want_stickers", "street_address", "street_address_2", "city", "state",
-    "postal_code", "country", "instagram_url", "linkedin_url", "propel_id",
+    "role", "github", "expertise", "education", "why", "shirt_size",
+    "linkedin_url", "street_address", "city", "state", "postal_code", "country",
 )
 ENTRIES_PER_PROFILE_FIELD = 5
 GITHUB_ENTRY_CAP = 45

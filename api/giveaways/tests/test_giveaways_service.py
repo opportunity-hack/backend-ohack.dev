@@ -175,9 +175,19 @@ def test_github_count_sums_every_kind_and_tolerates_shapes():
 
 
 def test_profile_fields_mirror_frontend_list():
-    # src/components/Profile/profileFields.js has 17 fields — keep in sync.
-    assert len(svc.GIVEAWAY_PROFILE_FIELDS) == 17
-    assert len(set(svc.GIVEAWAY_PROFILE_FIELDS)) == 17
+    # src/components/Profile/profileFields.js has 12 fields — keep in sync.
+    assert len(svc.GIVEAWAY_PROFILE_FIELDS) == 12
+    assert len(set(svc.GIVEAWAY_PROFILE_FIELDS)) == 12
+
+
+def test_optional_and_system_fields_never_score():
+    # Blank-is-correct fields must not cost anyone entries (or give free ones).
+    for name in ("street_address_2", "company", "instagram_url", "want_stickers", "propel_id"):
+        assert name not in svc.GIVEAWAY_PROFILE_FIELDS
+    entries, b = svc.compute_weight(
+        {"propel_id": "p", "want_stickers": True, "street_address_2": "4B", "company": "X", "instagram_url": "i"}, 0
+    )
+    assert b["profile_fields"] == 0 and entries == 0
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +199,7 @@ def test_save_entry_computes_weight_on_server(env):
     _campaign(db)
     out = svc.save_entry("prop-1", "fall-2026", {"all_prizes": False, "prize_ids": ["p2"], "entries": 99999})
     entry = out["entry"]
-    # role, github, city, propel_id? (not set) -> role + github + city = 3 fields
+    # role, github, city -> 3 fields
     assert entry["breakdown"]["profile_fields"] == 3
     assert entry["breakdown"]["github_entries"] == 45  # 47 contributions, capped
     assert entry["entries"] == 15 + 45
