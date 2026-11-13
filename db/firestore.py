@@ -973,6 +973,18 @@ class FirestoreDatabaseInterface(DatabaseInterface):
             scores.append(JudgeScore.deserialize(d))
         return scores
 
+    def fetch_judge_scores_by_judge_id(self, judge_id):
+        """All of one judge's submitted (non-draft) scores across every event —
+        one query, so the /judge dashboard doesn't run one per event."""
+        db = self.get_db()
+        scores = []
+        docs = db.collection('judge_scores').where('judge_id', '==', judge_id).where('is_draft', '==', False).stream()
+        for doc in docs:
+            d = doc.to_dict()
+            d['id'] = doc.id
+            scores.append(JudgeScore.deserialize(d))
+        return scores
+
     def fetch_judge_scores_by_event_and_round(self, event_id, round_name):
         db = self.get_db()
         scores = []

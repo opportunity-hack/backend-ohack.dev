@@ -175,9 +175,29 @@ def test_github_count_sums_every_kind_and_tolerates_shapes():
 
 
 def test_profile_fields_mirror_frontend_list():
-    # src/components/Profile/profileFields.js has 17 fields — keep in sync.
-    assert len(svc.GIVEAWAY_PROFILE_FIELDS) == 17
-    assert len(set(svc.GIVEAWAY_PROFILE_FIELDS)) == 17
+    # src/components/Profile/profileFields.js has 18 fields — keep in sync.
+    assert len(svc.GIVEAWAY_PROFILE_FIELDS) == 18
+    assert len(set(svc.GIVEAWAY_PROFILE_FIELDS)) == 18
+
+
+def test_instagram_and_portfolio_fields_score():
+    values = {
+        "instagram_url": "https://instagram.com/ada", "profile_slug": "ada", "headline": "Builder",
+        "bio": "Hi", "bio_video_url": "https://youtu.be/x", "portfolio_links": [{"label": "a", "url": "b"}],
+        "profile_visibility": "public",  # never scored — private-first
+    }
+    entries, b = svc.compute_weight(values, 0)
+    assert b["profile_fields"] == 6 and entries == 30
+
+
+def test_optional_and_system_fields_never_score():
+    # Blank-is-correct fields must not cost anyone entries (or give free ones).
+    for name in ("street_address_2", "company", "want_stickers", "propel_id", "profile_visibility"):
+        assert name not in svc.GIVEAWAY_PROFILE_FIELDS
+    entries, b = svc.compute_weight(
+        {"propel_id": "p", "want_stickers": True, "street_address_2": "4B", "company": "X"}, 0
+    )
+    assert b["profile_fields"] == 0 and entries == 0
 
 
 # ---------------------------------------------------------------------------
@@ -189,7 +209,7 @@ def test_save_entry_computes_weight_on_server(env):
     _campaign(db)
     out = svc.save_entry("prop-1", "fall-2026", {"all_prizes": False, "prize_ids": ["p2"], "entries": 99999})
     entry = out["entry"]
-    # role, github, city, propel_id? (not set) -> role + github + city = 3 fields
+    # role, github, city -> 3 fields
     assert entry["breakdown"]["profile_fields"] == 3
     assert entry["breakdown"]["github_entries"] == 45  # 47 contributions, capped
     assert entry["entries"] == 15 + 45
@@ -280,6 +300,68 @@ def test_withdraw_deletes_entry(env):
     assert svc.withdraw_entry("prop-1", "fall-2026") == {"withdrawn": True}
     assert ("giveaway_entries", "fall-2026__u1") not in db.store
     assert svc.withdraw_entry("prop-1", "fall-2026") == {"withdrawn": False}
+
+
+def _two_entries(db):
+    _campaign(db)
+    _campaign(db, "spring-2026")
+    svc.save_entry("prop-1", "fall-2026", {"all_prizes": True})
+    svc.save_entry("prop-2", "fall-2026", {"all_prizes": True})
+    svc.save_entry("prop-1", "spring-2026", {"all_prizes": True})
+
+
+def test_admin_remove_single_entry(env):
+    db, state = env
+    _two_entries(db)
+    out = svc.admin_remove_entries("fall-2026", {"entry_ids": ["fall-2026__u1"]}, "admin@x")
+    assert out["removed"] == 1 and out["count"] == 1
+    assert [e["user_id"] for e in out["entries"]] == ["u2"]
+    assert ("giveaway_entries", "spring-2026__u1") in db.store  # other campaign untouched
+    assert state["audit"][-1] == "giveaway_entries_removed"
+
+
+def test_admin_remove_ignores_other_campaigns_and_unknown_ids(env):
+    db, state = env
+    _two_entries(db)
+    audits = len(state["audit"])
+    out = svc.admin_remove_entries("fall-2026", {"entry_ids": ["spring-2026__u1", "nope"]}, "admin@x")
+    assert out["removed"] == 0 and out["count"] == 2
+    assert ("giveaway_entries", "spring-2026__u1") in db.store
+    assert len(state["audit"]) == audits  # nothing removed, nothing audited
+
+
+def test_admin_remove_all_entries(env):
+    db, _ = env
+    _two_entries(db)
+    out = svc.admin_remove_entries("fall-2026", {"all": True}, "admin@x")
+    assert out["removed"] == 2 and out["entries"] == []
+    assert ("giveaway_entries", "spring-2026__u1") in db.store
+
+
+@pytest.mark.parametrize("body", [None, {}, {"entry_ids": []}, {"entry_ids": [""]}, {"all": "yes"}, {"entry_ids": "x"}])
+def test_admin_remove_validates_body(env, body):
+    db, _ = env
+    _campaign(db)
+    with pytest.raises(svc.GiveawayError) as e:
+        svc.admin_remove_entries("fall-2026", body, "admin@x")
+    assert e.value.status == 400
+
+
+def test_admin_remove_refused_once_draw_started(env):
+    db, _ = env
+    _two_entries(db)
+    svc.admin_start_draw("fall-2026", {"seed": "123456"}, "admin@x")
+    with pytest.raises(svc.GiveawayError) as e:
+        svc.admin_remove_entries("fall-2026", {"all": True}, "admin@x")
+    assert e.value.status == 409 and e.value.error == "draw_started"
+    svc.admin_reset_draw("fall-2026", "admin@x")
+    assert svc.admin_remove_entries("fall-2026", {"all": True}, "admin@x")["removed"] == 2
+
+
+def test_admin_remove_unknown_giveaway(env):
+    with pytest.raises(svc.GiveawayError) as e:
+        svc.admin_remove_entries("nope", {"all": True}, "admin@x")
+    assert e.value.status == 404
 
 
 def test_open_lists_open_plus_entered_closed_with_win(env):

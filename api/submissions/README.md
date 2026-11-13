@@ -74,6 +74,13 @@ on a bad field, 403/409 per `_authorize_team_write`. Sets
 by a hacker's own write afterward). Returns
 `{"success": true, "team": <fresh team>, "window": <submission window>}`.
 
+Teammates can edit the same write-up at once. Every saved field gets a
+revision in `project_field_meta[field] = {rev, by, at}`. The body may carry
+`base_revs: {field: rev}` (the revisions the client last saw); when a stored
+revision differs, nothing is written and the answer is
+409 `{"error": "project_conflict", "fields": [...], "team": <fresh team>}`.
+Without `base_revs` the save is last-write-wins, as before.
+
 ### `POST /api/team/<teamid>/project/submit`
 Member (or admin) only. Requires `project_tagline` and `project_story` to
 already be saved (400 `{"error": "incomplete", "missing": [...]}` otherwise).
