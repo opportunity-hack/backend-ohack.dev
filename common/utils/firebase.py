@@ -38,6 +38,7 @@ PUBLIC_VOLUNTEER_DENYLIST = frozenset({
     "phone", "phoneNumber",
     # identifiers / audit
     "user_id", "slack_user_id",
+    "slack_user_id_matched_at", "slack_user_id_matched_by",
     "created_by", "updated_by",
     "created_timestamp", "updated_timestamp", "timestamp",
     # internal messaging state
