@@ -380,6 +380,113 @@ def test_save_project_after_submit_keeps_status(wire, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# save_project — teammates editing at once (field revisions + conflicts)
+# ---------------------------------------------------------------------------
+
+def _named(monkeypatch, name="Sam Rivera"):
+    monkeypatch.setattr(svc, "_editor_name", lambda propel_user_id: name)
+
+
+def test_save_project_stamps_a_revision_per_saved_field(wire, monkeypatch):
+    _seed_team(wire)
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+    _named(monkeypatch)
+    result, status = svc.save_project("propel-1", "team-1", {"project_tagline": "Hi"})
+    assert status == 200
+    meta = wire["team-1"]["project_field_meta"]
+    assert meta["project_tagline"]["rev"] == 1
+    assert meta["project_tagline"]["by"] == "Sam Rivera"
+    assert "project_story" not in meta
+    assert wire["team-1"]["project_updated_by_name"] == "Sam Rivera"
+    assert result["team"]["project_field_meta"]["project_tagline"]["rev"] == 1
+
+    svc.save_project("propel-1", "team-1", {"project_tagline": "Hi again", "project_story": "S"})
+    meta = wire["team-1"]["project_field_meta"]
+    assert meta["project_tagline"]["rev"] == 2
+    assert meta["project_story"]["rev"] == 1
+
+
+def test_save_project_409_conflict_when_a_teammate_saved_the_field_first(wire, monkeypatch):
+    _seed_team(
+        wire,
+        project_submission_status="draft",
+        project_story="Teammate's newer story",
+        project_field_meta={"project_story": {"rev": 3, "by": "Jo", "at": "x"}},
+    )
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+    _named(monkeypatch)
+    result, status = svc.save_project(
+        "propel-1",
+        "team-1",
+        {"project_story": "My stale story", "project_tagline": "T", "base_revs": {"project_story": 2, "project_tagline": 0}},
+    )
+    assert status == 409
+    assert result["error"] == "project_conflict"
+    assert result["fields"] == ["project_story"]
+    assert result["team"]["project_story"] == "Teammate's newer story"
+    # Nothing is written on a conflict — not even the non-conflicting field.
+    assert wire["team-1"]["project_story"] == "Teammate's newer story"
+    assert "project_tagline" not in wire["team-1"]
+    assert wire["team-1"]["project_field_meta"]["project_story"]["rev"] == 3
+
+
+def test_save_project_saves_when_base_revs_match(wire, monkeypatch):
+    _seed_team(
+        wire,
+        project_submission_status="draft",
+        project_story="Old",
+        project_field_meta={"project_story": {"rev": 3, "by": "Jo", "at": "x"}},
+    )
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+    _named(monkeypatch)
+    result, status = svc.save_project(
+        "propel-1", "team-1", {"project_story": "New", "base_revs": {"project_story": 3}}
+    )
+    assert status == 200
+    assert wire["team-1"]["project_story"] == "New"
+    assert wire["team-1"]["project_field_meta"]["project_story"]["rev"] == 4
+    assert "base_revs" not in wire["team-1"]
+
+
+def test_save_project_other_field_changing_is_not_a_conflict(wire, monkeypatch):
+    _seed_team(
+        wire,
+        project_submission_status="draft",
+        project_field_meta={"project_story": {"rev": 9, "by": "Jo", "at": "x"}},
+    )
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+    _named(monkeypatch)
+    result, status = svc.save_project(
+        "propel-1", "team-1", {"project_tagline": "Mine", "base_revs": {"project_tagline": 0}}
+    )
+    assert status == 200
+    assert wire["team-1"]["project_field_meta"]["project_story"]["rev"] == 9
+    assert wire["team-1"]["project_field_meta"]["project_tagline"]["rev"] == 1
+
+
+def test_save_project_without_base_revs_keeps_last_write_wins(wire, monkeypatch):
+    """Older clients send no base_revs — they must keep saving."""
+    _seed_team(
+        wire,
+        project_submission_status="draft",
+        project_story="Theirs",
+        project_field_meta={"project_story": {"rev": 3, "by": "Jo", "at": "x"}},
+    )
+    _member(monkeypatch, is_member=True)
+    _event(monkeypatch)
+    _named(monkeypatch)
+    for payload in ({"project_story": "Mine"}, {"project_story": "Mine 2", "base_revs": "junk"}, {"project_story": "Mine 3", "base_revs": {"project_story": "3"}}):
+        result, status = svc.save_project("propel-1", "team-1", payload)
+        assert status == 200
+    assert wire["team-1"]["project_story"] == "Mine 3"
+    assert wire["team-1"]["project_field_meta"]["project_story"]["rev"] == 6
+
+
+# ---------------------------------------------------------------------------
 # submit_project
 # ---------------------------------------------------------------------------
 
