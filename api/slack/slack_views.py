@@ -3,9 +3,13 @@ from api.slack.slack_service import (
     get_active_users, get_user_details, clear_slack_cache,
     sync_slack_users_to_firestore
 )
+from services.volunteer_slack_refresh import (
+    refresh_volunteer_slack_ids, SlackUnavailableError, VOLUNTEER_TYPES,
+    audit_slack_refresh, audit_channel_invite
+)
 from common.utils.slack import invite_user_to_channel
 
-from common.auth import auth
+from common.auth import auth, auth_user
 from common.exceptions import AuthorizationError, ValidationError
 from common.log import get_logger
 from common.utils.slack import send_slack
@@ -18,6 +22,14 @@ bp = Blueprint('slack', __name__, url_prefix='/api')
 def getOrgId(req):
     # Get the org_id from the req
     return req.headers.get("X-Org-Id")
+
+
+def _audit_actor():
+    """The signed-in admin, for audit lines."""
+    return {
+        "user_id": getattr(auth_user, "user_id", None),
+        "email": getattr(auth_user, "email", None),
+    }
 
 @bp.route("/slack/admin/users/active", methods=["GET"])
 @auth.require_user
@@ -64,6 +76,36 @@ def admin_sync_slack_users():
             "success": False,
             "error": "Failed to sync Slack users"
         }), 500
+
+
+@bp.route("/slack/admin/volunteers/<event_id>/refresh", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_refresh_volunteer_slack_ids(event_id):
+    """
+    Re-match an event's applicants to the Slack workspace and save the Slack
+    id for anyone who joined Slack after applying.
+
+    Request body (optional):
+        volunteer_type: mentor | judge | volunteer | hacker | sponsor
+
+    502 when Slack can't be read - never an empty "nobody found" success.
+    """
+    request_data = request.get_json(silent=True) or {}
+    volunteer_type = request_data.get("volunteer_type") or None
+    if volunteer_type is not None and volunteer_type not in VOLUNTEER_TYPES:
+        return jsonify({"success": False, "error": "invalid_volunteer_type"}), 400
+
+    try:
+        result = refresh_volunteer_slack_ids(event_id, volunteer_type)
+    except SlackUnavailableError:
+        return jsonify({"success": False, "error": "slack_unavailable"}), 502
+    except Exception as e:
+        logger.error("Error refreshing volunteer Slack ids: %s", str(e))
+        return jsonify({"success": False, "error": "refresh_failed"}), 500
+
+    audit_slack_refresh(_audit_actor(), event_id, volunteer_type, result)
+    return jsonify({"success": True, **result})
 
 
 def active_users_helper(admin=False):
@@ -275,6 +317,8 @@ def invite_to_channel_api():
     Request body:
         user_id: The ID of the user to add (required)
         channel: The channel name or ID to add the user to (required)
+        name, email, volunteer_id, volunteer_type, event_id: optional, only
+            used to name the person in the audit line
 
     Returns:
         JSON response with operation status
@@ -307,12 +351,16 @@ def invite_to_channel_api():
                 "error": "Channel is required"
             }), 400
 
+        person = {k: request_data.get(k) for k in
+                  ("name", "email", "volunteer_id", "volunteer_type", "event_id")}
+
         logger.info("Attempting to invite user %s to channel %s", user_id, channel)
 
         # Use invite_user_to_channel function to add user to channel
         success = invite_user_to_channel(user_id=user_id, channel_name=channel)
         if not success:
             logger.error("Failed to invite user %s to channel %s", user_id, channel)
+            audit_channel_invite(_audit_actor(), channel, user_id, False, person)
             return jsonify({
                 "success": False,
                 "error": "Failed to add user to channel"
@@ -320,7 +368,8 @@ def invite_to_channel_api():
         
         
         logger.info("Successfully invited user %s to channel %s", user_id, channel)
-        
+        audit_channel_invite(_audit_actor(), channel, user_id, True, person)
+
         return jsonify({
             "success": True,
             "message": f"User {user_id} added to channel {channel}"
@@ -336,6 +385,12 @@ def invite_to_channel_api():
                     request_data.get('user_id', 'unknown') if 'request_data' in locals() else 'unknown',
                     request_data.get('channel', 'unknown') if 'request_data' in locals() else 'unknown',
                     str(e))
+        if 'request_data' in locals() and isinstance(request_data, dict) and request_data.get('user_id'):
+            audit_channel_invite(
+                _audit_actor(), request_data.get('channel'), request_data.get('user_id'), False,
+                {k: request_data.get(k) for k in
+                 ("name", "email", "volunteer_id", "volunteer_type", "event_id")},
+                reason=type(e).__name__)
         return jsonify({
             "success": False,
             "error": "Failed to add user to channel"
