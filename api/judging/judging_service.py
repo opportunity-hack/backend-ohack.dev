@@ -11,6 +11,7 @@ from db.db import (
     fetch_judge_assignment_by_id,
     fetch_judge_assignments_by_event_and_judge,
     fetch_judge_scores_by_judge_and_event,
+    fetch_judge_scores_by_judge_id,
     fetch_judge_score,
     insert_judge_assignment,
     update_judge_assignment,
@@ -37,7 +38,7 @@ from services.teams_service import (
     get_team,
     get_teams_batch
 )
-from common.utils.firebase import get_nonprofit_by_id, get_volunteer_from_db_by_event
+from common.utils.firebase import get_nonprofit_by_id, get_volunteer_from_db_by_event, get_hackathon_by_event_id
 
 logger = get_logger("judging_service")
 
@@ -101,40 +102,40 @@ def get_judge_assignments(judge_id: str) -> Dict:
                 hackathon_assignments[event_id]['round2_teams'].append(
                     assignment.team_id)
 
-        # Fetch hackathon details and judge scores for each event
+        if not hackathon_assignments:
+            return {"hackathons": []}
+
+        # ONE query for every submitted score of this judge (was one per event).
+        completed = {}
+        for score in fetch_judge_scores_by_judge_id(judge_id):
+            rounds = completed.setdefault(score.event_id, {'round1': 0, 'round2': 0})
+            if score.round in rounds:
+                rounds[score.round] += 1
+
         hackathons = []
         for event_id, data in hackathon_assignments.items():
             try:
-                hackathon_info = get_single_hackathon_event(event_id)
-                if hackathon_info:
-                    # Get judging progress
-                    scores = fetch_judge_scores_by_judge_and_event(
-                        judge_id, event_id)
-
-                    round1_completed = len([s for s in scores
-                                           if s.round == 'round1'])
-                    round2_completed = len([s for s in scores
-                                           if s.round == 'round2'])
-
-                    hackathon_result = {
-                        "event_id": event_id,
-                        "title": hackathon_info.get('title', ''),
-                        "start_date": hackathon_info.get('start_date'),
-                        "end_date": hackathon_info.get('end_date'),
-                        "round1_teams": len(data['round1_teams']),
-                        "round2_teams": len(data['round2_teams']),
-                        "judging_status": {
-                            "round1": {
-                                "completed": round1_completed,
-                                "total": len(data['round1_teams'])
-                            },
-                            "round2": {
-                                "completed": round2_completed,
-                                "total": len(data['round2_teams'])
-                            }
-                        }
-                    }
-                    hackathons.append(hackathon_result)
+                # Lean lookup: title + dates only. get_single_hackathon_event
+                # resolves every team/nonprofit reference (30-50 sequential
+                # reads per event) and made this dashboard slow.
+                hackathon_info = get_hackathon_by_event_id(event_id)
+                if not hackathon_info:
+                    continue
+                done = completed.get(event_id, {'round1': 0, 'round2': 0})
+                hackathons.append({
+                    "event_id": event_id,
+                    "title": hackathon_info.get('title', ''),
+                    "start_date": hackathon_info.get('start_date'),
+                    "end_date": hackathon_info.get('end_date'),
+                    "round1_teams": len(data['round1_teams']),
+                    "round2_teams": len(data['round2_teams']),
+                    "judging_status": {
+                        "round1": {"completed": done['round1'],
+                                   "total": len(data['round1_teams'])},
+                        "round2": {"completed": done['round2'],
+                                   "total": len(data['round2_teams'])},
+                    },
+                })
             except Exception as e:
                 warning(logger, "Error fetching hackathon details",
                         event_id=event_id, error=str(e))
