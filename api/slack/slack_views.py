@@ -3,6 +3,9 @@ from api.slack.slack_service import (
     get_active_users, get_user_details, clear_slack_cache,
     sync_slack_users_to_firestore
 )
+from services.volunteer_slack_refresh import (
+    refresh_volunteer_slack_ids, SlackUnavailableError, VOLUNTEER_TYPES
+)
 from common.utils.slack import invite_user_to_channel
 
 from common.auth import auth
@@ -64,6 +67,35 @@ def admin_sync_slack_users():
             "success": False,
             "error": "Failed to sync Slack users"
         }), 500
+
+
+@bp.route("/slack/admin/volunteers/<event_id>/refresh", methods=["POST"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_refresh_volunteer_slack_ids(event_id):
+    """
+    Re-match an event's applicants to the Slack workspace and save the Slack
+    id for anyone who joined Slack after applying.
+
+    Request body (optional):
+        volunteer_type: mentor | judge | volunteer | hacker | sponsor
+
+    502 when Slack can't be read - never an empty "nobody found" success.
+    """
+    request_data = request.get_json(silent=True) or {}
+    volunteer_type = request_data.get("volunteer_type") or None
+    if volunteer_type is not None and volunteer_type not in VOLUNTEER_TYPES:
+        return jsonify({"success": False, "error": "invalid_volunteer_type"}), 400
+
+    try:
+        result = refresh_volunteer_slack_ids(event_id, volunteer_type)
+    except SlackUnavailableError:
+        return jsonify({"success": False, "error": "slack_unavailable"}), 502
+    except Exception as e:
+        logger.error("Error refreshing volunteer Slack ids: %s", str(e))
+        return jsonify({"success": False, "error": "refresh_failed"}), 500
+
+    return jsonify({"success": True, **result})
 
 
 def active_users_helper(admin=False):
