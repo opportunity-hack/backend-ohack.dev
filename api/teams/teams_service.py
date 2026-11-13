@@ -1,11 +1,14 @@
+import copy
 import uuid
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+
+from cachetools import TTLCache
 from db.db import get_db, get_user_doc_reference
 from api.messages.messages_service import get_problem_statement_from_id_old
 from services.teams_service import get_teams_list, get_team, public_team_view
 from services.nonprofits_service import get_single_npo
-from common.utils.firestore_helpers import clear_all_caches as clear_cache
+from common.utils.firestore_helpers import clear_all_caches as clear_cache, register_cache
 from services.users_service import (
     get_propel_user_details_by_id,
     save_user,
@@ -347,6 +350,22 @@ def edit_team(json):
         val = json.get("project_story")
         json["project_story"] = sanitize_markdown(val, PROJECT_STORY_MAX_LEN) if isinstance(val, str) and val else None
 
+    # Move a team to a different project: problem_statement_id must be one of
+    # the selected nonprofit's projects (the nonprofit in this same request
+    # wins over the stored one). Writes problem_statements: [ref] — the field
+    # the repo-link / README-seed helpers and /me's `project` read. A
+    # falsy value clears it.
+    if "problem_statement_id" in json:
+        ps_id = _ref_id(json.get("problem_statement_id"))
+        if ps_id is None:
+            update_data["problem_statements"] = []
+        else:
+            npo_id = json.get("selected_nonprofit_id") or team_data.get("selected_nonprofit_id")
+            project, refusal = _resolve_nonprofit_project(db, npo_id, ps_id)
+            if refusal:
+                return refusal
+            update_data["problem_statements"] = [db.collection("problem_statements").document(project["id"])]
+
     # If this is the first time setting devpost_link, set devpost_link_submitted date
     if "devpost_link" in json and "devpost_link" not in team_data:
         update_data["devpost_link_submitted"] = datetime.now().isoformat()
@@ -401,6 +420,291 @@ def _append_team_to_hackathon(db, hackathon_db_id, team_ref):
         event_ref.set({"teams": teams}, merge=True)
     return teams
 
+
+# ---------------------------------------------------------------------------
+# Project options + ranking validation (team creation, Nov 2026)
+#
+# A nonprofit can have several projects (problem statements), so teams rank
+# individual projects, not nonprofits. get_team_project_options is the ONE
+# rule for "which projects can a team pick in this event": the
+# GET /api/team/<event_id>/project-options route returns it and queue_team
+# validates rankings against it, so the page and the API can't disagree.
+# ---------------------------------------------------------------------------
+
+PROJECT_DESCRIPTION_PREVIEW_CHARS = 400
+# Live projects don't need a hackathon team. Mirrors the frontend's
+# "production" status in src/lib/projectStatus.js.
+UNSELECTABLE_PROJECT_STATUSES = {"production"}
+MIN_RANKED_PROJECTS = 2
+MAX_RANKED_PROJECTS = 5
+
+_PROJECT_OPTIONS_CACHE = TTLCache(maxsize=64, ttl=60)
+register_cache(_PROJECT_OPTIONS_CACHE)
+
+
+def _ref_id(value):
+    """Id of a DocumentReference or a bare id string; None otherwise."""
+    if isinstance(value, str):
+        return value.strip() or None
+    return getattr(value, "id", None)
+
+
+def _as_ref(db, collection, value):
+    """DocumentReference for a ref or a bare id string (None for junk)."""
+    if isinstance(value, str):
+        return db.collection(collection).document(value) if value.strip() else None
+    return value if getattr(value, "id", None) else None
+
+
+def _snapshot_dict(snap):
+    if snap is None or not getattr(snap, "exists", False):
+        return None
+    return snap.to_dict() or {}
+
+
+def _preview(text, limit=PROJECT_DESCRIPTION_PREVIEW_CHARS):
+    if not isinstance(text, str):
+        return ""
+    text = text.strip()
+    if len(text) <= limit:
+        return text
+    return text[:limit].rstrip() + "…"
+
+
+def _skills_list(value):
+    if isinstance(value, list):
+        return [s for s in value if isinstance(s, str) and s.strip()]
+    if isinstance(value, str) and value.strip():
+        return [s.strip() for s in value.split(",") if s.strip()]
+    return []
+
+
+def _build_project_options(db, hackathon):
+    visible = hackathon.get("visible_problem_statements")
+    # None/missing = every project is visible (same reading as the frontend's
+    # Hackathon/NonprofitList.js); an explicit list (even empty) is the allowlist.
+    visible_ids = None if visible is None else {_ref_id(v) for v in visible if _ref_id(v)}
+
+    npo_refs = []
+    seen_npos = set()
+    for value in hackathon.get("nonprofits") or []:
+        ref = _as_ref(db, "nonprofits", value)
+        if ref is not None and ref.id not in seen_npos:
+            seen_npos.add(ref.id)
+            npo_refs.append(ref)
+    if not npo_refs:
+        return []
+
+    npo_by_id = {}
+    for snap in db.get_all(npo_refs):
+        data = _snapshot_dict(snap)
+        if data is not None:
+            npo_by_id[snap.id] = data
+
+    # One get_all over every nonprofit's problem statements.
+    ps_refs = []
+    seen_ps = set()
+    for ref in npo_refs:
+        for value in (npo_by_id.get(ref.id) or {}).get("problem_statements") or []:
+            ps_ref = _as_ref(db, "problem_statements", value)
+            if ps_ref is None or ps_ref.id in seen_ps:
+                continue
+            if visible_ids is not None and ps_ref.id not in visible_ids:
+                continue
+            seen_ps.add(ps_ref.id)
+            ps_refs.append(ps_ref)
+
+    ps_by_id = {}
+    if ps_refs:
+        for snap in db.get_all(ps_refs):
+            data = _snapshot_dict(snap)
+            if data is not None:
+                ps_by_id[snap.id] = data
+
+    nonprofits = []
+    for ref in npo_refs:  # keep the event's nonprofit order
+        npo = npo_by_id.get(ref.id)
+        if npo is None:
+            continue
+        projects = []
+        for value in npo.get("problem_statements") or []:
+            ps_id = _ref_id(value)
+            ps = ps_by_id.get(ps_id)
+            if ps is None:
+                continue  # hidden, deleted, or listed twice
+            if (ps.get("status") or "").strip().lower() in UNSELECTABLE_PROJECT_STATUSES:
+                continue
+            if any(p["id"] == ps_id for p in projects):
+                continue
+            projects.append({
+                "id": ps_id,
+                "title": ps.get("title") or "Untitled project",
+                "description": _preview(ps.get("description")),
+                "skills": _skills_list(ps.get("skills")),
+                "status": ps.get("status"),
+            })
+        if not projects:
+            continue  # nothing a team can pick
+        nonprofits.append({
+            "id": ref.id,
+            "name": npo.get("name") or "",
+            "image": npo.get("image"),
+            "website": npo.get("website"),
+            "projects": projects,
+        })
+    return nonprofits
+
+
+def get_team_project_options(event_id):
+    """Projects a team can rank at creation for `event_id`, grouped by
+    nonprofit: {"event_id", "nonprofits": [{id, name, image, website,
+    projects: [{id, title, description, skills, status}]}]}.
+
+    Projects come from the event's nonprofits, filtered by the event's
+    `visible_problem_statements` allowlist (missing/None = all) with
+    production projects dropped; nonprofits left with no project are
+    dropped. Returns None when the event doesn't exist. Cached 60s per event
+    (static class — cleared by every admin write through clear_cache)."""
+    if not event_id:
+        return None
+    cached = _PROJECT_OPTIONS_CACHE.get(event_id)
+    if cached is not None:
+        return copy.deepcopy(cached)
+
+    hackathon = get_hackathon_by_event_id(event_id)
+    if not hackathon:
+        return None
+    result = {
+        "event_id": event_id,
+        "nonprofits": _build_project_options(get_db(), hackathon),
+    }
+    _PROJECT_OPTIONS_CACHE[event_id] = copy.deepcopy(result)
+    return result
+
+
+def _project_index(options):
+    """{problem_statement_id: {"title": str, "nonprofits": {npo_id: npo_name}}}"""
+    index = {}
+    for npo in (options or {}).get("nonprofits") or []:
+        for project in npo.get("projects") or []:
+            entry = index.setdefault(project["id"], {"title": project.get("title") or "", "nonprofits": {}})
+            entry["nonprofits"][npo["id"]] = npo.get("name") or ""
+    return index
+
+
+def ranking_limits(total_available):
+    """(min, max) projects a team must rank given how many are selectable."""
+    total = max(0, int(total_available or 0))
+    return min(MIN_RANKED_PROJECTS, total), min(MAX_RANKED_PROJECTS, total)
+
+
+class RankingError(ValueError):
+    """A refusal from validate_project_rankings; str(e) is the user copy."""
+
+
+def _rank_sort_key(item):
+    index, entry = item
+    rank = entry.get("rank")
+    try:
+        return (0, float(rank), index)
+    except (TypeError, ValueError):
+        return (1, 0.0, index)
+
+
+def validate_project_rankings(rankings, options):
+    """Normalize a team's ranked projects against `options`
+    (get_team_project_options). Returns [{nonprofit_id,
+    problem_statement_id, rank}] with ranks reassigned 1..n, in the team's
+    order, duplicates dropped. Raises RankingError with user-facing copy.
+
+    Each entry must name a project that is selectable in this event AND
+    belongs to that nonprofit. A team ranks MIN..MAX projects, or every
+    available project when the event has fewer than MIN.
+
+    Legacy shape (no entry carries `problem_statement_id`): the frontend
+    before the project-ranking release sent [{nonprofit_id, rank}]. Kept
+    valid so team creation works between the backend and frontend deploys —
+    each nonprofit must still be one of this event's nonprofits; no count
+    rule. Returns [{nonprofit_id, rank}]."""
+    if rankings is None:
+        rankings = []
+    if not isinstance(rankings, list) or not all(isinstance(r, dict) for r in rankings):
+        raise RankingError("Your project ranking didn't come through. Refresh the page and choose your projects again.")
+
+    ordered = [entry for _, entry in sorted(enumerate(rankings), key=_rank_sort_key)]
+    has_project = [bool(_ref_id(e.get("problem_statement_id"))) for e in ordered]
+
+    if not any(has_project):
+        event_npos = {npo["id"] for npo in (options or {}).get("nonprofits") or []}
+        normalized, seen = [], set()
+        for entry in ordered:
+            npo_id = _ref_id(entry.get("nonprofit_id"))
+            if not npo_id:
+                raise RankingError("Each ranking needs a nonprofit.")
+            if npo_id in seen:
+                continue
+            if npo_id not in event_npos:
+                raise RankingError("One of the nonprofits you ranked isn't part of this event. Refresh the page and choose again.")
+            seen.add(npo_id)
+            normalized.append({"nonprofit_id": npo_id, "rank": len(normalized) + 1})
+        return normalized
+
+    if not all(has_project):
+        raise RankingError("Each ranking needs both a nonprofit and one of its projects.")
+
+    index = _project_index(options)
+    normalized, seen = [], set()
+    for entry in ordered:
+        ps_id = _ref_id(entry.get("problem_statement_id"))
+        npo_id = _ref_id(entry.get("nonprofit_id"))
+        if ps_id in seen:
+            continue  # same project listed twice: keep the higher rank
+        project = index.get(ps_id)
+        if project is None:
+            raise RankingError(
+                "One of the projects you ranked isn't open for teams in this event anymore. "
+                "Refresh the list and choose again."
+            )
+        if npo_id not in project["nonprofits"]:
+            raise RankingError(f"“{project['title']}” doesn't belong to the nonprofit it was ranked under. Choose it again from the list.")
+        seen.add(ps_id)
+        normalized.append({
+            "nonprofit_id": npo_id,
+            "problem_statement_id": ps_id,
+            "rank": len(normalized) + 1,
+        })
+
+    low, high = ranking_limits(len(index))
+    if len(normalized) < low:
+        raise RankingError(f"Rank at least {low} projects (you ranked {len(normalized)}).")
+    if len(normalized) > high:
+        raise RankingError(f"Rank at most {high} projects (you ranked {len(normalized)}).")
+    return normalized
+
+
+def _ranking_lines(rankings, options):
+    """Slack lines "#1 {project} — {nonprofit}" (legacy: "#1 {nonprofit}")."""
+    names = {npo["id"]: npo.get("name") or npo["id"] for npo in (options or {}).get("nonprofits") or []}
+    titles = {}
+    for npo in (options or {}).get("nonprofits") or []:
+        for project in npo.get("projects") or []:
+            titles[project["id"]] = project.get("title") or project["id"]
+    lines = []
+    for entry in rankings or []:
+        npo_name = names.get(entry.get("nonprofit_id"), entry.get("nonprofit_id") or "")
+        ps_id = entry.get("problem_statement_id")
+        if ps_id:
+            lines.append(f"#{entry['rank']} {titles.get(ps_id, ps_id)} — {npo_name}")
+        else:
+            lines.append(f"#{entry['rank']} {npo_name}")
+    return lines
+
+
+def _refusal(code, message, status=400):
+    """Real 4xx refusal body (never the legacy 200 {message})."""
+    return {"error": code, "message": message, "success": False}, status
+
+
 def queue_team(propel_user_id, json):
     """
     Create a team and queue it for nonprofit pairing
@@ -408,40 +712,75 @@ def queue_team(propel_user_id, json):
     - Set active status to False
     - Send Slack notification that team is in queue
     - Do not create GitHub repo or other resources yet
+
+    Everything that can refuse runs BEFORE the Slack channel is created, so a
+    refusal leaves no orphaned channel: required fields → event exists →
+    project rankings → GitHub username → creator's user doc. Refusals are
+    400 {error, message}: missing_fields | event_not_found |
+    invalid_rankings | invalid_github_username | user_not_found.
     """
     send_slack_audit(action="queue_team", message="Queueing", payload=json)
 
+    json = json if isinstance(json, dict) else {}
+    required = {
+        "name": "a team name",
+        "slackChannel": "a Slack channel name",
+        "eventId": "the event",
+        "githubUsername": "your GitHub username",
+    }
+    missing = [label for key, label in required.items()
+               if not (isinstance(json.get(key), str) and json.get(key).strip())]
+    if missing:
+        return _refusal("missing_fields", "Please add " + ", ".join(missing) + ".")
+
+    team_name = json["name"].strip()
+    slack_channel = json["slackChannel"].strip()
+    hackathon_event_id = json["eventId"].strip()
+    github_username = json["githubUsername"].strip()
+
+    hackathon = get_hackathon_by_event_id(hackathon_event_id)
+    if not hackathon:
+        return _refusal("event_not_found", "We couldn't find this event. Refresh the page and try again.")
+
+    # Ranked projects: [{nonprofit_id, problem_statement_id, rank}], validated
+    # against the same options the create-team page shows.
+    project_options = get_team_project_options(hackathon_event_id) or {"nonprofits": []}
+    try:
+        nonprofit_rankings = validate_project_rankings(json.get("nonprofitRankings"), project_options)
+    except RankingError as e:
+        return _refusal("invalid_rankings", str(e))
+
+    if not validate_github_username(github_username):
+        return _refusal(
+            "invalid_github_username",
+            "We couldn't find that GitHub username. Use your username without the @ symbol, not your email.",
+        )
+
     _, user_id, _, _, name, _ = get_propel_user_details_by_id(propel_user_id)
     slack_user_id = user_id
-    
+
     # Extract the raw Slack user ID (handles both OAuth formats and Google users gracefully)
     root_slack_user_id = extract_slack_user_id(slack_user_id)
-    users_list = []
     user = get_user_doc_reference(root_slack_user_id)
-    users_list.append(user)
-    
+    if user is None:
+        return _refusal(
+            "user_not_found",
+            "We couldn't find your profile. Open your profile page once (it creates it), then try again.",
+        )
+    users_list = [user]
+
     db = get_db()
     logger.debug("Team Queue")
     logger.debug(json)
-    
+
     doc_id = uuid.uuid1().hex  # Generate a new team id
-    team_name = json["name"]
-    slack_channel = json["slackChannel"]
-    hackathon_event_id = json["eventId"]
     comments = json.get("comments", "")
     teamMembers = json.get("teamMembers", []) # In addition to the user
     url_hackathon = f"https://ohack.dev/hack/{hackathon_event_id}"
     url_manage_team = f"{url_hackathon}/manageteam"
-    
-    # Store nonprofit rankings if provided
-    nonprofit_rankings = json.get("nonprofitRankings", [])
-    
-    github_username = json["githubUsername"]
-    if not validate_github_username(github_username):
-        return {
-            "message": "Error: Invalid GitHub Username - don't give us your email, just your username without the @ symbol."
-        }
-    
+    ranking_lines = _ranking_lines(nonprofit_rankings, project_options)
+    ranking_block = "\n".join(ranking_lines) if ranking_lines else "(none yet)"
+
     # Create the slack channel
     logger.info("Creating slack channel %s", slack_channel)
     channel_id = create_slack_channel(slack_channel)
@@ -460,8 +799,11 @@ def queue_team(propel_user_id, json):
 *Channel:* #{slack_channel}
 *Created by:* <@{root_slack_user_id}> (add your other team members here)
 
-- Thank you for your nonprofit preferences! 
-- Our team will review your request and pair you with a nonprofit soon.
+*Your ranked projects:*
+{ranking_block}
+
+- Thank you for your project preferences!
+- Our team will review your request and pair you with a project soon.
 - We'll send a message to this Slack channel when the pairing process is complete.
 
 
@@ -558,7 +900,7 @@ Let's make a difference! :muscle: :heart:
 
 
     # Link the team to the hackathon event
-    hackathon_db_id = get_hackathon_by_event_id(hackathon_event_id)["id"]
+    hackathon_db_id = hackathon["id"]
     _append_team_to_hackathon(db, hackathon_db_id, new_team_doc)
 
     # Clear the cache
@@ -636,6 +978,7 @@ def get_my_teams_by_event_id(propel_id, event_id):
                 user_map[user_doc.id] = user_data.get("user_id")
 
         # Filter teams that contain the target user
+        my_teams = []
         for item in teams_with_users:
             team_data = item["team_data"]
             user_refs = item["user_refs"]
@@ -643,12 +986,38 @@ def get_my_teams_by_event_id(propel_id, event_id):
             # Check if any user in this team matches our target user
             for user_ref in user_refs:
                 if user_ref.id in user_map and user_map[user_ref.id] == user_id:
-                    # Found the user in this team
-                    del team_data["users"]
-                    if "problem_statements" in team_data:
-                        del team_data["problem_statements"]
-                    teams.append(public_team_view(team_data))
+                    my_teams.append(team_data)
                     break  # No need to check other users in this team
+
+        # `problem_statements` holds DocumentReferences (not JSON) — replace
+        # it with `project: {id, title}` (the project the team was approved
+        # for; null before approval). One get_all across all my teams.
+        project_ids = {}
+        for team_data in my_teams:
+            first = next(iter(team_data.get("problem_statements") or []), None)
+            ps_ref = _as_ref(db, "problem_statements", first) if first is not None else None
+            if ps_ref is not None:
+                project_ids[team_data["id"]] = ps_ref
+        titles = {}
+        if project_ids:
+            try:
+                unique = {ref.id: ref for ref in project_ids.values()}
+                for snap in db.get_all(list(unique.values())):
+                    data = _snapshot_dict(snap)
+                    if data is not None:
+                        titles[snap.id] = data.get("title") or ""
+            except Exception:
+                logger.warning("Could not resolve team projects for /me", exc_info=True)
+
+        for team_data in my_teams:
+            team_data.pop("users", None)
+            team_data.pop("problem_statements", None)
+            ps_ref = project_ids.get(team_data["id"])
+            team_data["project"] = (
+                {"id": ps_ref.id, "title": titles[ps_ref.id]}
+                if ps_ref is not None and ps_ref.id in titles else None
+            )
+            teams.append(public_team_view(team_data))
 
     logger.debug("Teams data: %s", teams)
 
@@ -790,9 +1159,15 @@ def get_teams_by_hackathon_id(hackathon_id):
                 if user_ref.id in user_data_map:
                     users.append(user_data_map[user_ref.id])
             
-            # Remove unnecessary fields from team data
-            for field in ["users", "problem_statements"]:
-                team_data.pop(field, None)
+            # `users` refs are replaced by team_members below. Project refs
+            # aren't JSON-serializable, so send their ids: the admin edit
+            # dialog needs the assigned project, or its "Save project" button
+            # offered to move an approved team to a default project.
+            team_data.pop("users", None)
+            team_data["problem_statements"] = [
+                ps_id for ps_id in (_ref_id(ref) for ref in (team_data.get("problem_statements") or []))
+                if ps_id
+            ]
             
             team_data["team_members"] = users
             teams.append(team_data)
@@ -956,90 +1331,233 @@ def _build_repo_seed_files(db, team_data, team_id, hackathon_event, nonprofit, n
         return None
 
 
+def _resolve_nonprofit_project(db, nonprofit_id, problem_statement_id):
+    """The project a team is approved for / moved to. Returns
+    ((project_dict | None), refusal | None) where project_dict is
+    {"id", "title", "nonprofit": <get_single_npo dict>}.
+
+    - unknown nonprofit → 400 nonprofit_not_found
+    - nonprofit with no projects → 400 no_problem_statements
+    - id given but not one of the nonprofit's projects → 400 invalid_problem_statement
+    - no id: a single-project nonprofit auto-fills it; with several →
+      400 problem_statement_required
+    """
+    if not nonprofit_id:
+        return None, _refusal("missing_fields", "Pick a nonprofit first.")
+    nonprofit = None
+    try:
+        nonprofit = (get_single_npo(nonprofit_id) or {}).get("nonprofits")
+    except Exception:
+        logger.warning("Nonprofit lookup failed for %s", nonprofit_id, exc_info=True)
+    if not nonprofit or not nonprofit.get("name"):
+        return None, _refusal("nonprofit_not_found", "We couldn't find that nonprofit. Refresh and pick it again.")
+
+    npo_ps_ids = []
+    for value in nonprofit.get("problem_statements") or []:
+        ps = _ref_id(value) or (value.get("id") if isinstance(value, dict) else None)
+        if ps and ps not in npo_ps_ids:
+            npo_ps_ids.append(ps)
+    if not npo_ps_ids:
+        return None, _refusal("no_problem_statements", f"{nonprofit['name']} has no projects yet. Add one before approving a team for it.")
+
+    ps_id = _ref_id(problem_statement_id) if problem_statement_id else None
+    if ps_id is None:
+        if len(npo_ps_ids) == 1:
+            ps_id = npo_ps_ids[0]
+        else:
+            return None, _refusal(
+                "problem_statement_required",
+                f"{nonprofit['name']} has {len(npo_ps_ids)} projects — pick the one this team will build.",
+            )
+    elif ps_id not in npo_ps_ids:
+        return None, _refusal("invalid_problem_statement", f"That project isn't one of {nonprofit['name']}'s projects.")
+
+    snap = db.collection("problem_statements").document(ps_id).get()
+    ps_data = _snapshot_dict(snap)
+    if ps_data is None:
+        return None, _refusal("invalid_problem_statement", "That project no longer exists. Refresh and pick again.")
+    return {"id": ps_id, "title": ps_data.get("title") or "", "nonprofit": nonprofit}, None
+
+
+# A claim older than this is treated as abandoned (the approving worker
+# crashed or was redeployed mid-approval) and may be taken over.
+APPROVAL_CLAIM_STALE_AFTER = timedelta(minutes=10)
+APPROVING_STATUS = "APPROVING"
+
+
+def _in_transaction(db, body):
+    """Runs body(transaction) in a real Firestore transaction. Tests replace
+    this with `lambda db, body: body(FakeTransaction())` — a real
+    @firestore.transactional callable needs a live Firestore client."""
+    from firebase_admin import firestore
+
+    @firestore.transactional
+    def _run(transaction):
+        return body(transaction)
+
+    return _run(db.transaction())
+
+
+def _tx_get_one(transaction, ref):
+    """First snapshot from transaction.get(ref) — the real Transaction.get()
+    returns a generator for a DocumentReference."""
+    result = transaction.get(ref)
+    if hasattr(result, "exists"):
+        return result
+    return next(iter(result), None)
+
+
+def _approval_claim_is_stale(team_data, now=None):
+    """True when an APPROVING claim is older than APPROVAL_CLAIM_STALE_AFTER
+    (or carries no readable start time)."""
+    now = now or datetime.utcnow()
+    try:
+        started = datetime.fromisoformat(team_data.get("approval_started_at"))
+    except (TypeError, ValueError):
+        return True
+    return now - started > APPROVAL_CLAIM_STALE_AFTER
+
+
+def _claim_team_for_approval(db, team_ref, admin_user_id):
+    """Atomically flip IN_REVIEW → APPROVING so two admins approving at once
+    can't both post to Slack and mint keys. Returns None when this caller
+    owns the approval, else the status that blocked it. An APPROVING claim
+    older than APPROVAL_CLAIM_STALE_AFTER is taken over."""
+    now = datetime.utcnow()
+
+    def body(transaction):
+        data = _snapshot_dict(_tx_get_one(transaction, team_ref))
+        if data is None:
+            return "NOT_FOUND"
+        status = data.get("status")
+        if status == APPROVING_STATUS:
+            if not _approval_claim_is_stale(data, now):
+                return status
+        elif status != "IN_REVIEW":
+            return status or "UNKNOWN"
+        transaction.update(team_ref, {
+            "status": APPROVING_STATUS,
+            "approval_started_at": now.isoformat(),
+            "approval_started_by": admin_user_id,
+        })
+        return None
+
+    return _in_transaction(db, body)
+
+
+def _release_approval_claim(team_ref):
+    """Put a claimed team back in the review queue after a failed approval."""
+    try:
+        team_ref.set({"status": "IN_REVIEW"}, merge=True)
+    except Exception:
+        logger.error("Could not restore IN_REVIEW on team %s after a failed approval",
+                     getattr(team_ref, "id", "?"), exc_info=True)
+
+
 def approve_team(admin_user_id, json):
     """
-    Admin function to approve a team and pair with nonprofit
-    - Set status to APPROVED
-    - Set active to True
-    - Create GitHub repo and resources
-    - Send notification to team
+    Admin function to approve a team and pair it with a nonprofit project.
+    Body: {teamId, nonprofitId, problemStatementId?}. problemStatementId is
+    required when the nonprofit has more than one project (a single-project
+    nonprofit auto-fills it).
+    - Claims the team (IN_REVIEW → APPROVING) in a transaction; a second
+      approver gets 409 already_approved
+    - Creates the GitHub repo, posts to Slack, sets status NONPROFIT_SELECTED,
+      active, selected_nonprofit_id, problem_statements: [ref], github_links
+    - Mints AI gateway keys, links the repo to the chosen project
+    - Any failure before the final write restores IN_REVIEW
+    Refusals are 4xx {error, message, success: false}.
     """
     send_slack_audit(action="approve_team", message="Approving", payload=json)
-    
+
     db = get_db()
     logger.debug("Team Approval")
     logger.debug(json)
-    
-    team_id = json["teamId"]
-    nonprofit_id = json["nonprofitId"]
-    
-    # Get the team
+
+    json = json if isinstance(json, dict) else {}
+    team_id = _ref_id(json.get("teamId"))
+    nonprofit_id = _ref_id(json.get("nonprofitId"))
+    if not team_id or not nonprofit_id:
+        return _refusal("missing_fields", "Pick a nonprofit (and its project) before approving.")
+
     team_doc = db.collection('teams').document(team_id)
-    team_data = team_doc.get().to_dict()
-    
+    team_data = _snapshot_dict(team_doc.get())
     if not team_data:
-        return {
-            "message": "Error: Team not found",
-            "success": False
-        }
-    
-    # Verify the team is in IN_REVIEW status
-    if team_data.get("status") != "IN_REVIEW":
-        return {
-            "message": f"Error: Team is not in review status (current status: {team_data.get('status')})",
-            "success": False
-        }
-    
-    # Get nonprofit details
-    nonprofit = None
-    nonprofit_name = ""
-    if nonprofit_id:
-        logger.info("Nonprofit ID provided %s", nonprofit_id)
-        nonprofit = get_single_npo(nonprofit_id)["nonprofits"]
-        nonprofit_name = nonprofit["name"]
-        
-        # Just make sure there is at least a problem statement
-        if "problem_statements" in nonprofit and len(nonprofit["problem_statements"]) > 0:           
-            logger.info("Problem statements found for nonprofit %s", nonprofit_name)
-        else:
-            return {
-                "message": "Error: No problem statement available for the nonprofit",
-                "success": False
-            }
-    else:
-        return {
-            "message": "Error: Nonprofit ID is required",
-            "success": False
-        }
-            
+        return _refusal("team_not_found", "Team not found.", 404)
+
+    status = team_data.get("status")
+    abandoned_claim = status == APPROVING_STATUS and _approval_claim_is_stale(team_data)
+    if status != "IN_REVIEW" and not abandoned_claim:
+        if status == APPROVING_STATUS or team_data.get("approved_at"):
+            return _refusal("already_approved", "This team was already approved (or another organizer is approving it right now). Refresh to see it.", 409)
+        return _refusal("not_in_review", f"This team isn't waiting for review (status: {status}).", 409)
+
+    project, refusal = _resolve_nonprofit_project(db, nonprofit_id, json.get("problemStatementId"))
+    if refusal:
+        return refusal
+    nonprofit = project["nonprofit"]
+    nonprofit_name = nonprofit["name"]
+    problem_statement_id = project["id"]
+    problem_statement_title = project["title"]
+
+    if not team_data.get("users"):
+        return _refusal("team_has_no_members", "This team has no members, so there's no one to create the repo for. Add a member first.")
+
     # Prepare data for GitHub repo creation
-    team_name = team_data["name"]
-    slack_channel = team_data["slack_channel"]
-    github_username = team_data["github_username"]
-    hackathon_event_id = team_data["hackathon_event_id"]
+    team_name = team_data.get("name") or ""
+    slack_channel = team_data.get("slack_channel") or ""
+    github_username = team_data.get("github_username") or ""
+    hackathon_event_id = team_data.get("hackathon_event_id")
 
     # Get hackathon event details by event ID
-    hackathon_event = get_hackathon_by_event_id(hackathon_event_id)
+    hackathon_event = get_hackathon_by_event_id(hackathon_event_id) if hackathon_event_id else None
     if not hackathon_event:
-        return {
-            "message": "Error: Hackathon event not found",
-            "success": False
-        }
-    
+        return _refusal("event_not_found", "This team's hackathon event wasn't found.")
+
     # Make sure that github_org is set within the event. Older events may
     # still carry a pasted URL / @handle from before the validator normalized
     # it, so reduce it to the bare slug here too.
     github_org = normalize_github_org(hackathon_event.get("github_org"))
     if not github_org:
-        return {
-            "message": (
-                "Error: this event has no GitHub organization set. "
-                "Add it under Admin → Hackathon → Overview → GitHub organization "
-                "(just the org name, e.g. Opportunity-Hack-2026), then approve again."
-            ),
-            "success": False
-        }
+        return _refusal(
+            "github_org_missing",
+            "This event has no GitHub organization set. "
+            "Add it under Admin → Hackathon → Overview → GitHub organization "
+            "(just the org name, e.g. Opportunity-Hack-2026), then approve again.",
+        )
     logger.info("GitHub organization: %s", github_org)
+
+    # Claim the team before any side effect (repo, Slack, keys).
+    blocked = _claim_team_for_approval(db, team_doc, admin_user_id)
+    if blocked == "NOT_FOUND":
+        return _refusal("team_not_found", "Team not found.", 404)
+    if blocked:
+        return _refusal("already_approved", "This team was already approved (or another organizer is approving it right now). Refresh to see it.", 409)
+
+    try:
+        result = _approve_claimed_team(
+            db, admin_user_id, team_doc, team_id, team_data, nonprofit, nonprofit_id,
+            nonprofit_name, problem_statement_id, problem_statement_title,
+            team_name, slack_channel, github_username, hackathon_event_id,
+            hackathon_event, github_org,
+        )
+    except Exception:
+        _release_approval_claim(team_doc)
+        raise
+    if isinstance(result, tuple):  # a refusal after the claim — back to review
+        _release_approval_claim(team_doc)
+    return result
+
+
+def _approve_claimed_team(db, admin_user_id, team_doc, team_id, team_data, nonprofit, nonprofit_id,
+                          nonprofit_name, problem_statement_id, problem_statement_title,
+                          team_name, slack_channel, github_username, hackathon_event_id,
+                          hackathon_event, github_org):
+    """The side-effecting half of approve_team, run only by the caller that
+    claimed the team. Returns the success dict, or a refusal tuple."""
+    # The chosen project wins over anything the team doc carried, so the
+    # repo README seed and the repo → project link both use it.
+    team_data["problem_statements"] = [problem_statement_id]
 
     # Look through the "links" within the hackathon event to find any url that contains "devpost"
     devpost_url = ""
@@ -1052,10 +1570,11 @@ def approve_team(admin_user_id, json):
     # Get admin user details for audit
     _, _, _, _, admin_name, _ = get_propel_user_details_by_id(admin_user_id)
     
-    # Get first team member for GitHub repo creation
+    # Get first team member for GitHub repo creation (team_data["users"] is
+    # non-empty — approve_team checked)
     first_user_ref = team_data["users"][0]
-    first_user_data = first_user_ref.get().to_dict()
-    first_user_name = first_user_data.get("name", "Team Member")
+    first_user_data = _snapshot_dict(first_user_ref.get()) if hasattr(first_user_ref, "get") else None
+    first_user_name = (first_user_data or {}).get("name") or "Team Member"
     
     # Generate GitHub repo name        
     nonprofit_title = nonprofit_name.replace(" ", "").replace("-", "")[:20]
@@ -1090,15 +1609,19 @@ def approve_team(admin_user_id, json):
     except ValueError as e:
         logger.error("Error creating GitHub repo: %s", e)
         if "already exists" in str(e):
-            logger.error("GitHub repo already exists...continuing")
-        else:
-            return {
-                "message": f"Error creating GitHub repo: {e}",
-                "success": False
+            # create_repo lost a race with another create of the same name
+            # (create_github_repo already reuses a repo it can see). The repo
+            # is there — point at it instead of crashing on an unset `repo`.
+            logger.warning("GitHub repo %s already exists; using it", repository_name)
+            repo = {
+                "repo_name": repository_name,
+                "full_url": f"https://github.com/{github_org}/{repository_name}",
             }
-    
+        else:
+            return _refusal("github_repo_failed", f"Error creating GitHub repo: {e}", 502)
+
     nonprofit_url = f"https://ohack.dev/nonprofit/{nonprofit_id}"
-    
+    project_url = f"https://www.ohack.dev/project/{problem_statement_id}"
 
     logger.info("GitHub repo created: %s", repo["full_url"])
     
@@ -1110,6 +1633,7 @@ def approve_team(admin_user_id, json):
 
 *Channel:* #{slack_channel}
 *Nonprofit:* <{nonprofit_url}|{nonprofit_name}>
+*Project:* <{project_url}|{problem_statement_title or problem_statement_id}>
 *Approved by:* {admin_name}
 
 :github_parrot: *GitHub Repository:* {repo['full_url']}
@@ -1141,7 +1665,8 @@ Let's make a difference! :muscle: :heart:
     team_doc.set({
         "status": "NONPROFIT_SELECTED",
         "active": "True",        
-        "selected_nonprofit_id": nonprofit_id,        
+        "selected_nonprofit_id": nonprofit_id,
+        "problem_statements": [db.collection("problem_statements").document(problem_statement_id)],
         "github_links": [
             {
                 "link": full_github_repo_url,
@@ -1175,16 +1700,23 @@ Let's make a difference! :muscle: :heart:
         db, team_data, nonprofit, repo_name, full_github_repo_url
     )
 
-    # Clear cache
-    clear_cache()
-    
-    # Get updated team data
-    team = get_teams_list(team_id)
-    
+    # The approval is durable from here on: a failure below must not send
+    # the team back to review.
+    team = None
+    try:
+        clear_cache()
+        team = get_teams_list(team_id)
+    except Exception:
+        logger.warning("Post-approval cache clear / team reload failed for %s", team_id, exc_info=True)
+
     return {
-        "message": f"Team approved and paired with {nonprofit_name}. Slack notification sent to #{slack_channel}.",
+        "message": (
+            f"Team approved for “{problem_statement_title}” ({nonprofit_name}). "
+            f"Slack notification sent to #{slack_channel}."
+        ),
         "success": True,
-        "team": team
+        "team": team,
+        "problem_statement_id": problem_statement_id,
     }
 
 def get_queued_teams():

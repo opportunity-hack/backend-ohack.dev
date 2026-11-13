@@ -15,6 +15,7 @@ from api.teams.teams_service import (
     get_teams_by_hackathon_id,
     public_hackathon_teams_view,
     get_my_teams_by_event_id,
+    get_team_project_options,
     send_team_message,
     toggle_completion_item,
     mark_team_complete,
@@ -69,6 +70,22 @@ def get_my_teams_by_event_if_api(event_id):
     
     logger.error("Could not obtain user details for GET /team/<event_id>/me")
     return {"error": "Unauthorized"}, 401
+
+@bp.route("/<event_id>/project-options", methods=["GET"])
+@auth.require_user
+def get_team_project_options_api(event_id):
+    """
+    Projects a team can rank when it's created, grouped by nonprofit:
+    {"event_id", "nonprofits": [{id, name, image, website, projects:
+    [{id, title, description, skills, status}]}]}. The same rule
+    POST /api/team/queue validates `nonprofitRankings` against.
+    404 {error: event_not_found} for an unknown event.
+    """
+    options = get_team_project_options(event_id)
+    if options is None:
+        return {"error": "event_not_found", "message": "We couldn't find this event."}, 404
+    return options
+
 
 @bp.route("/edit", methods=["PATCH"])
 @auth.require_user
@@ -251,9 +268,12 @@ def add_team_to_queue():
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def approve_team_assignment():
     """
-    Admin endpoint to approve a team and assign it to a nonprofit.
-    Sets status to APPROVED, active=True, creates GitHub repo,
-    and sends notification to the team.
+    Admin endpoint to approve a team and pair it with a nonprofit project.
+    Body: {teamId, nonprofitId, problemStatementId?} (problemStatementId is
+    required when the nonprofit has more than one project). Sets status
+    NONPROFIT_SELECTED (not "APPROVED"), active, problem_statements: [ref],
+    creates the GitHub repo and notifies the team. Refusals are 4xx
+    {error, message} — see api/teams/README.md.
     """
     logger.info("POST /team/approve called")
     if auth_user and auth_user.user_id:

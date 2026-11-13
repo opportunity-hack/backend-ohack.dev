@@ -1035,3 +1035,174 @@ def validate_volunteer_admin_patch(data):
         else:
             raise ValueError(f"status must be one of {list(ALLOWED_VOLUNTEER_STATUSES)}")
     return cleaned
+
+
+# ---------------------------------------------------------------------------
+# Giveaways v2 (Nov 2026) — `giveaway_campaigns` docs, edited from
+# /admin/giveaways?tab=setup. See api/giveaways/README.md.
+# ---------------------------------------------------------------------------
+
+ALLOWED_GIVEAWAY_STATUSES = ("draft", "open", "closed", "drawn")
+# Statuses an admin may set by PATCH. `drawn` is reached only by the draw flow.
+ADMIN_SETTABLE_GIVEAWAY_STATUSES = ("draft", "open", "closed")
+GIVEAWAY_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,62}[a-z0-9]$")
+MAX_GIVEAWAY_TITLE_LENGTH = 120
+MAX_GIVEAWAY_DESCRIPTION_LENGTH = 500
+MAX_GIVEAWAY_PRIZES = 50
+MAX_GIVEAWAY_PRIZE_NAME_LENGTH = 80
+MAX_GIVEAWAY_PRIZE_DESCRIPTION_LENGTH = 300
+GIVEAWAY_PRIZE_QUANTITY_RANGE = (1, 50)
+GIVEAWAY_CAMPAIGN_KEYS = (
+    "title", "description", "event_id", "status", "must_be_present", "closes_at", "prizes",
+)
+
+
+def parse_offset_iso(value):
+    """datetime for an ISO-8601 string WITH an explicit offset (or `Z`), else
+    None. Naive strings are rejected: a deadline without a zone is ambiguous."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    raw = value.strip()
+    if raw.endswith("Z"):
+        raw = raw[:-1] + "+00:00"
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed
+
+
+def _optional_http_url(value, field):
+    if value in (None, ""):
+        return None
+    if not isinstance(value, str) or len(value) > 2048:
+        raise ValueError(f"{field} must be a URL")
+    parsed = urlparse(value.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        raise ValueError(f"{field} must start with http:// or https://")
+    return value.strip()
+
+
+def normalize_giveaway_prizes(prizes, new_id):
+    """Validated, normalized prize list. `new_id()` mints an id for prizes that
+    arrive without one (a new row in the editor); existing ids are kept so
+    entries' `prize_ids` and draw results stay attached across edits.
+    `sort_order` is reassigned from list position. Raises ValueError."""
+    if prizes is None:
+        return []
+    if not isinstance(prizes, list):
+        raise ValueError("prizes must be a list")
+    if len(prizes) > MAX_GIVEAWAY_PRIZES:
+        raise ValueError(f"at most {MAX_GIVEAWAY_PRIZES} prizes")
+    out, seen = [], set()
+    for index, prize in enumerate(prizes):
+        if not isinstance(prize, dict):
+            raise ValueError("each prize must be an object")
+        name = sanitize_string(prize.get("name") or "", MAX_GIVEAWAY_PRIZE_NAME_LENGTH + 1)
+        if not name:
+            raise ValueError(f"prize {index + 1} needs a name")
+        if len(name) > MAX_GIVEAWAY_PRIZE_NAME_LENGTH:
+            raise ValueError(f"prize names are at most {MAX_GIVEAWAY_PRIZE_NAME_LENGTH} characters")
+        description = prize.get("description") or ""
+        if not isinstance(description, str):
+            raise ValueError("prize description must be text")
+        description = description.strip()
+        if len(description) > MAX_GIVEAWAY_PRIZE_DESCRIPTION_LENGTH:
+            raise ValueError(
+                f"prize descriptions are at most {MAX_GIVEAWAY_PRIZE_DESCRIPTION_LENGTH} characters"
+            )
+        quantity = prize.get("quantity", 1)
+        if isinstance(quantity, bool) or not isinstance(quantity, int):
+            raise ValueError("prize quantity must be a whole number")
+        low, high = GIVEAWAY_PRIZE_QUANTITY_RANGE
+        if not low <= quantity <= high:
+            raise ValueError(f"prize quantity must be between {low} and {high}")
+        prize_id = prize.get("id")
+        if prize_id in (None, ""):
+            prize_id = new_id()
+        if not isinstance(prize_id, str) or len(prize_id) > 64:
+            raise ValueError("prize id must be a short string")
+        if prize_id in seen:
+            raise ValueError("prize ids must be unique")
+        seen.add(prize_id)
+        out.append({
+            "id": prize_id,
+            "name": name,
+            "description": description,
+            "image_url": _optional_http_url(prize.get("image_url"), "image_url"),
+            "product_url": _optional_http_url(prize.get("product_url"), "product_url"),
+            "quantity": quantity,
+            "sort_order": index,
+        })
+    return out
+
+
+def validate_giveaway_campaign_partial(data, new_id):
+    """Clean subset of a giveaway campaign create/patch body. Only keys in
+    GIVEAWAY_CAMPAIGN_KEYS are returned; unknown keys are ignored (the doc id,
+    timestamps and `draw` are server-owned). Raises ValueError."""
+    if not isinstance(data, dict):
+        raise ValueError("body must be an object")
+    clean = {}
+    if "title" in data:
+        title = sanitize_string(data.get("title") or "", MAX_GIVEAWAY_TITLE_LENGTH + 1)
+        if not title:
+            raise ValueError("title is required")
+        if len(title) > MAX_GIVEAWAY_TITLE_LENGTH:
+            raise ValueError(f"title is at most {MAX_GIVEAWAY_TITLE_LENGTH} characters")
+        clean["title"] = title
+    if "description" in data:
+        description = data.get("description") or ""
+        if not isinstance(description, str):
+            raise ValueError("description must be text")
+        description = description.strip()
+        if len(description) > MAX_GIVEAWAY_DESCRIPTION_LENGTH:
+            raise ValueError(f"description is at most {MAX_GIVEAWAY_DESCRIPTION_LENGTH} characters")
+        clean["description"] = description
+    if "event_id" in data:
+        event_id = data.get("event_id")
+        if event_id in (None, ""):
+            clean["event_id"] = None
+        elif not isinstance(event_id, str) or len(event_id) > 100:
+            raise ValueError("event_id must be a short string")
+        else:
+            clean["event_id"] = event_id.strip()
+    if "status" in data:
+        status = data.get("status")
+        if status not in ADMIN_SETTABLE_GIVEAWAY_STATUSES:
+            raise ValueError(f"status must be one of {list(ADMIN_SETTABLE_GIVEAWAY_STATUSES)}")
+        clean["status"] = status
+    if "must_be_present" in data:
+        if not isinstance(data.get("must_be_present"), bool):
+            raise ValueError("must_be_present must be true or false")
+        clean["must_be_present"] = data["must_be_present"]
+    if "closes_at" in data:
+        closes_at = data.get("closes_at")
+        if closes_at in (None, ""):
+            clean["closes_at"] = None
+        elif parse_offset_iso(closes_at) is None:
+            raise ValueError("closes_at must be an ISO date-time with a timezone offset")
+        else:
+            clean["closes_at"] = closes_at.strip()
+    if "prizes" in data:
+        clean["prizes"] = normalize_giveaway_prizes(data.get("prizes"), new_id)
+    return clean
+
+
+def validate_giveaway_campaign(data, new_id):
+    """Create body: everything in validate_giveaway_campaign_partial plus a
+    required title and a slug-shaped `id`. Returns (giveaway_id, clean)."""
+    if not isinstance(data, dict):
+        raise ValueError("body must be an object")
+    giveaway_id = (data.get("id") or "").strip().lower() if isinstance(data.get("id"), str) else ""
+    if not GIVEAWAY_ID_RE.match(giveaway_id):
+        raise ValueError(
+            "id must be 3-64 lowercase letters, digits or dashes, e.g. fall-2026"
+        )
+    title = data.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise ValueError("title is required")
+    clean = validate_giveaway_campaign_partial(data, new_id)
+    return giveaway_id, clean

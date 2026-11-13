@@ -1307,6 +1307,33 @@ def test_auto_approve_never_overrides_a_staff_decision(status):
     assert mock_email.call_args.kwargs["roster_outcome"] is None
 
 
+@pytest.mark.parametrize("existing_fields, reapproved", [
+    # An organizer took an auto-approved hacker off the roster: isSelected is
+    # False but status/auto_approved still say approved. Never put them back.
+    ({"status": "approved", "auto_approved": True}, False),
+    ({"status": "approved"}, False),
+    ({"status": "confirmed"}, False),
+    # Waitlisted by staff (no auto_approved flag) — a decision, keep it.
+    ({"status": "waitlisted"}, False),
+    # Waitlisted by the capacity check — re-check once there's room.
+    ({"status": "waitlisted", "auto_approved": False}, True),
+    # Still waiting on review.
+    ({"status": "pending"}, True),
+    ({}, True),
+    ({"status": "active"}, True),  # legacy default the update branch used to write
+])
+def test_auto_approve_on_update_respects_staff_roster_decisions(existing_fields, reapproved):
+    existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
+                "volunteer_type": "hacker", "isSelected": False, **existing_fields}
+    mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 90})
+    result, mock_email, _ = _submit_hacker(mock_db, existing=existing, on_roster=3)
+
+    assert result["isSelected"] is reapproved
+    assert mock_email.call_args.kwargs["roster_outcome"] == ("approved" if reapproved else None)
+    if not reapproved:
+        assert result.get("status") == existing_fields.get("status", "active")
+
+
 def test_update_of_a_pending_hacker_at_capacity_keeps_their_status():
     existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
                 "volunteer_type": "hacker", "isSelected": False, "status": "pending"}
@@ -1393,3 +1420,111 @@ def test_confirmation_email_for_a_waitlisted_hacker():
         )
     assert "waitlist" in sent["html"]
     assert "[Confirmed]" not in sent["subject"]
+
+
+# ---------------------------------------------------------------------------
+# Server-owned fields on create (Nov 2026, code-review item 3)
+#
+# The create branch used to build the doc from the token and then
+# volunteer_doc.update(body), so a body could overwrite id / user_id /
+# created_by and submit its own review status. With hacker auto-approve on,
+# one logged-in user could POST with a fresh user_id + email each time, miss
+# the existing-application lookup, and fill the roster to capacity.
+# ---------------------------------------------------------------------------
+
+def test_create_ignores_body_identity_and_review_fields():
+    mock_db, volunteers = _db_with_hackathon({})
+    with patch('services.volunteers_service.get_db', return_value=mock_db), \
+         patch('services.volunteers_service.find_volunteer_by_caller_identity', return_value=None), \
+         patch('services.volunteers_service.get_slack_user_by_email', return_value=None), \
+         patch('services.volunteers_service.send_admin_notification_email'), \
+         patch('services.volunteers_service.send_slack_volunteer_notification'), \
+         patch('services.volunteers_service.send_volunteer_confirmation_email'):
+        result = create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email=MOCK_EMAIL, event_id="fall-2026",
+            created_by=MOCK_USER_ID,
+            volunteer_data={
+                **HACKER_DATA,
+                "id": "attacker-chosen-id",
+                "user_id": "someone-else",
+                "event_id": "another-event",
+                "status": "approved",
+                "created_by": "someone-else",
+                "created_timestamp": "2020-01-01T00:00:00",
+                "timestamp": "2020-01-01T00:00:00",
+            },
+        )
+
+    written = volunteers.document.return_value.set.call_args.args[0]
+    doc_id = volunteers.document.call_args.args[0]
+    for doc in (written, result):
+        assert doc["id"] == doc_id != "attacker-chosen-id"
+        assert doc["user_id"] == MOCK_USER_ID
+        assert doc["event_id"] == "fall-2026"
+        assert doc["created_by"] == MOCK_USER_ID
+        assert doc["created_timestamp"] != "2020-01-01T00:00:00"
+        assert doc["timestamp"] != "2020-01-01T00:00:00"
+        assert "status" not in doc
+        assert doc["isSelected"] is False
+    assert written["name"] == "Riley Hacker"  # the rest of the form still saves
+
+
+def test_create_status_comes_only_from_the_roster_decision():
+    mock_db, volunteers = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 90})
+    with patch('services.volunteers_service.get_db', return_value=mock_db), \
+         patch('services.volunteers_service.find_volunteer_by_caller_identity', return_value=None), \
+         patch('services.volunteers_service._count_selected_hackers', return_value=90), \
+         patch('services.volunteers_service.get_slack_user_by_email', return_value=None), \
+         patch('services.volunteers_service.send_admin_notification_email'), \
+         patch('services.volunteers_service.send_slack_volunteer_notification'), \
+         patch('services.hackathons_service.get_volunteer_by_event'), \
+         patch('services.volunteers_service.send_volunteer_confirmation_email'):
+        result = create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email=MOCK_EMAIL, event_id="fall-2026",
+            volunteer_data={**HACKER_DATA, "status": "approved"},
+        )
+    assert result["status"] == "waitlisted"
+    assert result["isSelected"] is False
+
+
+def test_second_submit_by_same_login_with_new_email_updates_not_creates():
+    """The token user_id finds the first application even when the body's
+    email and user_id change — so one login gets one application (and one
+    auto-approval) per event."""
+    from mockfirestore import MockFirestore
+
+    db = MockFirestore()
+    db.collection('hackathons').document('h1').set({
+        **FALL_2026_EVENT,
+        "constraints": {"hacker_auto_approve": True, "hacker_capacity": 90},
+    })
+    common = [
+        patch('services.volunteers_service.get_db', return_value=db),
+        patch('services.volunteers_service.get_volunteer_by_user_id', return_value=None),
+        patch('services.volunteers_service.get_volunteer_by_email', return_value=None),
+        patch('services.users_service.get_propel_user_details_by_id', return_value=None),
+        patch('services.volunteers_service.get_slack_user_by_email', return_value=None),
+        patch('services.volunteers_service.send_admin_notification_email'),
+        patch('services.volunteers_service.send_slack_volunteer_notification'),
+        patch('services.hackathons_service.get_volunteer_by_event'),
+        patch('services.volunteers_service.send_volunteer_confirmation_email'),
+    ]
+    for p in common:
+        p.start()
+    try:
+        first = create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email="one@example.com", event_id="fall-2026",
+            volunteer_data={**HACKER_DATA, "email": "one@example.com", "user_id": "fake-1"},
+        )
+        second = create_or_update_volunteer(
+            user_id=MOCK_USER_ID, email="two@example.com", event_id="fall-2026",
+            volunteer_data={**HACKER_DATA, "email": "two@example.com", "user_id": "fake-2"},
+        )
+    finally:
+        patch.stopall()
+
+    docs = [d.to_dict() for d in db.collection('volunteers').stream()]
+    assert len(docs) == 1
+    assert second["id"] == first["id"]
+    assert docs[0]["user_id"] == MOCK_USER_ID
+    assert docs[0]["email"] == "one@example.com"

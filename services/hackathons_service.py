@@ -656,10 +656,48 @@ def get_single_hackathon_event(hackathon_id):
     return {}
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=3600), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
+_FILTERED_HACKATHON_LISTS = ("current", "previous")
+
+
+def get_hackathon_list(is_current_only=None):
+    """Hackathon list, cached per variant.
+
+    'current' / 'previous' feed the public homepage, /hack and the archive and
+    stay on a long static cache. The unfiltered list is what the admin
+    hackathon editor loads (useHackathonAdmin) before it autosaves whole
+    constraints / countdowns / deadlines objects, so it must be read-after-
+    write: with no Redis, a save clears only the worker that served it, and a
+    reload onto another worker used to seed the editor with an hour-old copy
+    that the next autosave wrote back over the newer config.
+    """
+    if is_current_only in _FILTERED_HACKATHON_LISTS:
+        return _get_filtered_hackathon_list(is_current_only)
+    return _get_full_hackathon_list(is_current_only)
+
+
+def _clear_hackathon_list_caches():
+    _get_filtered_hackathon_list.cache_clear()
+    _get_full_hackathon_list.cache_clear()
+
+
+# Keep the cachetools-style API callers and tests use.
+get_hackathon_list.cache_clear = _clear_hackathon_list_caches
+
+
+@cached(cache=TTLCache(maxsize=10, ttl=3600), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
 @limits(calls=200, period=ONE_MINUTE)
 @log_execution_time
-def get_hackathon_list(is_current_only=None):
+def _get_filtered_hackathon_list(is_current_only):
+    return _query_hackathon_list(is_current_only)
+
+
+@cached(cache=TTLCache(maxsize=10, ttl=10), lock=threading.Lock(), key=lambda is_current_only: str(is_current_only))
+@log_execution_time
+def _get_full_hackathon_list(is_current_only):
+    return _query_hackathon_list(is_current_only)
+
+
+def _query_hackathon_list(is_current_only=None):
     """
     Retrieve a list of hackathons based on specified criteria.
 
@@ -673,17 +711,23 @@ def get_hackathon_list(is_current_only=None):
     db = _get_db()
 
     query = db.collection('hackathons')
-    today_str = datetime.now().strftime("%Y-%m-%d")
+    # Grace day: the backend runs on UTC, so a naive "today" flips at 5 PM
+    # Phoenix time and an event vanished from the homepage on the evening of
+    # its end date. Keep an event current through the day after its end date.
+    grace_cutoff = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
 
     if is_current_only == "current":
-        logger.debug(f"Querying current events (end_date >= {today_str})")
-        query = query.where(filter=firestore.FieldFilter("end_date", ">=", today_str)).order_by("end_date", direction=firestore.Query.ASCENDING)
+        logger.debug(f"Querying current events (end_date >= {grace_cutoff})")
+        query = query.where(filter=firestore.FieldFilter("end_date", ">=", grace_cutoff)).order_by("end_date", direction=firestore.Query.ASCENDING)
 
     elif is_current_only == "previous":
         # Return the full archive so /hack can show every past hackathon (back to 2014).
         # Year chips on the frontend handle navigation; pagination is client-side.
-        logger.debug(f"Querying all previous events (end_date <= {today_str})")
-        query = query.where("end_date", "<=", today_str)
+        # Strictly earlier than the current cutoff so the two lists never
+        # overlap: an event is current through the day after its end date,
+        # and moves to previous the day after that.
+        logger.debug(f"Querying all previous events (end_date < {grace_cutoff})")
+        query = query.where("end_date", "<", grace_cutoff)
         query = query.order_by("end_date", direction=firestore.Query.DESCENDING).limit(200)
 
     else:

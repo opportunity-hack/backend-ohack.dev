@@ -53,6 +53,21 @@ STAFF_OWNED_VOLUNTEER_FIELDS = frozenset({
     'auto_approved', 'auto_approved_at',
 })
 
+# Fields the create branch of create_or_update_volunteer always sets from the
+# server (token identity, URL event, clock). An applicant's body may carry any
+# of them — the forms resubmit loaded docs — but must never decide them.
+SERVER_OWNED_ON_CREATE_FIELDS = frozenset({
+    'id', 'user_id', 'event_id', 'isSelected',
+    'created_by', 'created_timestamp', 'updated_by', 'updated_timestamp', 'timestamp',
+})
+
+# Review status is written by staff (hackathon PATCH) and by the auto-approve
+# decision. Self-service never sets it: dropped on create, and the update branch
+# carries the stored value forward. Not in STAFF_OWNED_VOLUNTEER_FIELDS on
+# purpose — that set documents what the admin side owns end to end.
+SELF_SERVICE_IGNORED_FIELDS = frozenset({'status'})
+
+
 def _notifications_disabled() -> bool:
     """
     True when outbound notifications (Slack, Resend email) must be suppressed.
@@ -84,6 +99,29 @@ def get_volunteer_by_user_id(user_id: str, event_id: str, volunteer_type: str) -
     for volunteer in volunteers:
         return volunteer.to_dict()
     return None
+
+def _find_own_volunteer_doc_uncached(user_id: str, event_id: str,
+                                     volunteer_type: Optional[str]) -> Optional[Dict[str, Any]]:
+    """Firestore read (no cache) of the caller's own application, keyed by the
+    token user_id that the create branch always stores. Last check before
+    creating, so a stale per-worker cache of "no application" can't let one
+    login create a second doc (and a second auto-approval)."""
+    if not user_id or not event_id or not volunteer_type:
+        return None
+    try:
+        docs = get_db().collection('volunteers').where('user_id', '==', user_id) \
+                                                .where('event_id', '==', event_id) \
+                                                .where('volunteer_type', '==', volunteer_type) \
+                                                .limit(1).stream()
+        for doc in docs:
+            data = doc.to_dict()
+            if isinstance(data, dict):
+                return data
+    except Exception as e:
+        warning(logger, "Uncached own-application lookup failed",
+                event_id=event_id, volunteer_type=volunteer_type, exc_info=e)
+    return None
+
 
 def get_volunteer_application_count_by_availability_timeslot(event_id: str) -> Dict[str, int]:
     """
@@ -880,6 +918,32 @@ def _hackathon_for_confirmation(event_id: Optional[str]) -> Optional[Dict[str, A
 # decision (or the applicant's own withdrawal) always wins over the switch.
 _AUTO_APPROVE_BLOCKED_STATUSES = frozenset({"denied", "withdrew", "no_show"})
 
+# Statuses that mean "nobody has decided yet". "active" is the legacy default
+# the update branch writes when a doc has no status.
+_AUTO_APPROVE_UNDECIDED_STATUSES = frozenset({"", "pending", "active"})
+
+
+def _eligible_for_auto_approve_on_update(existing: Dict[str, Any]) -> bool:
+    """Whether a hacker updating their application may be auto-approved.
+
+    Only people nobody has decided on yet, plus people the capacity check
+    itself waitlisted (auto_approved is False). Anything else is an organizer's
+    call: taking someone off the roster leaves status "approved" (often with
+    auto_approved True) and only flips isSelected, and a staff waitlist has no
+    auto_approved flag — auto-approving those put people back on the roster
+    and re-sent "You're confirmed".
+    """
+    if existing.get('isSelected'):
+        return False
+    status = str(existing.get('status') or '').strip().lower()
+    if status in _AUTO_APPROVE_BLOCKED_STATUSES:
+        return False
+    if status in _AUTO_APPROVE_UNDECIDED_STATUSES:
+        return existing.get('auto_approved') is not True
+    if status == "waitlisted":
+        return existing.get('auto_approved') is False
+    return False
+
 
 def _count_selected_hackers(event_id: str) -> int:
     """How many hackers are on the event roster (isSelected=True). Uses a
@@ -1408,7 +1472,7 @@ def create_or_update_volunteer(
     # payload from overriding the isSelected=False seed to self-approve.
     volunteer_data = {
         k: v for k, v in volunteer_data.items()
-        if k not in STAFF_OWNED_VOLUNTEER_FIELDS
+        if k not in STAFF_OWNED_VOLUNTEER_FIELDS and k not in SELF_SERVICE_IGNORED_FIELDS
     }
 
     # Check if volunteer already exists. Use the SAME 3-way identity resolver
@@ -1416,6 +1480,8 @@ def create_or_update_volunteer(
     # stored under another identity shape (email / OAuth id) fall into the
     # create branch on edit, spawning a duplicate isSelected=False doc.
     existing = find_volunteer_by_caller_identity(user_id, event_id, volunteer_type)
+    if not existing:
+        existing = _find_own_volunteer_doc_uncached(user_id, event_id, volunteer_type)
 
     # Title / venue / timezone / dates for the confirmation email and its .ics
     # invites — derived from the record loaded above.
@@ -1448,10 +1514,11 @@ def create_or_update_volunteer(
 
         # Hacker auto-approve (Nov 2026): an applicant still waiting on review
         # who updates while the switch is on goes onto the roster too. Never
-        # un-approves, and never overrides a denied/withdrew/no_show decision.
-        # At capacity the stored status is left alone (they stay pending).
-        existing_status = str(existing.get('status') or '').strip().lower()
-        if not existing.get('isSelected') and existing_status not in _AUTO_APPROVE_BLOCKED_STATUSES:
+        # un-approves and never overrides an organizer's decision (denied,
+        # taken off the roster, staff waitlist) — see
+        # _eligible_for_auto_approve_on_update. At capacity the stored status
+        # is left alone (they stay pending).
+        if _eligible_for_auto_approve_on_update(existing):
             if _hacker_roster_decision(volunteer_type, event_id, constraints) == "approved":
                 roster_outcome = "approved"
                 update_data.update(_roster_decision_fields("approved"))
@@ -1517,22 +1584,25 @@ def create_or_update_volunteer(
         # Create new record
         volunteer_id = _generate_volunteer_id()
         
-        # Prepare volunteer document
+        # Form data first, then the server-owned fields on top. This used to be
+        # the other way round, so a body could set its own id / user_id /
+        # created_by — and a fresh user_id + email per POST missed the
+        # existing-application lookup every time (one login could fill the
+        # auto-approve roster). The token user_id stored here is what the next
+        # submit's lookup matches.
         volunteer_doc = {
+            'email': email,
+            **{k: v for k, v in volunteer_data.items() if k not in SERVER_OWNED_ON_CREATE_FIELDS},
             'id': volunteer_id,
             'user_id': user_id,
             'event_id': event_id,
             'timestamp': _get_current_timestamp(),
-            'email': email,
             'isSelected': False,
             'created_by': created_by or user_id,
             'created_timestamp': _get_current_timestamp(),
             'updated_by': created_by or user_id,
             'updated_timestamp': _get_current_timestamp(),
         }
-        
-        # Add volunteer data
-        volunteer_doc.update(volunteer_data)
 
         # Hacker auto-approve (Nov 2026) — see _hacker_roster_decision.
         roster_outcome = _hacker_roster_decision(volunteer_type, event_id, constraints)

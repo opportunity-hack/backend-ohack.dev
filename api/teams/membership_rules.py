@@ -15,7 +15,8 @@ Refusal codes (HTTP status):
   not_approved_hacker  403  caller has no approved (isSelected) hacker application
   event_ended          409  after 23:59:59 on end_date, event timezone
   team_join_disabled   409  constraints.team_join_enabled is False
-  team_inactive        409  team.active is not True/"True"
+  team_inactive        409  team.active is not True/"True" (teams waiting for review —
+                            IN_REVIEW / APPROVING — stay joinable)
   team_not_joinable    409  team.status in JOINING_DISABLED_STATUSES
   team_not_found       404
 
@@ -35,6 +36,11 @@ TEAM_JOIN_DISABLED = "team_join_disabled"
 TEAM_INACTIVE = "team_inactive"
 TEAM_NOT_JOINABLE = "team_not_joinable"
 TEAM_NOT_FOUND = "team_not_found"
+
+# Twin of src/constants/teamStatus.js PENDING_REVIEW_STATUSES. A team waiting
+# for organizer review is saved with active=False, but teammates who weren't on
+# Slack when it was created must still be able to join it from the team page.
+PENDING_REVIEW_STATUSES = frozenset({"IN_REVIEW", "APPROVING"})
 
 # Twin of src/constants/teamStatus.js JOINING_DISABLED_STATUSES.
 JOINING_DISABLED_STATUSES = frozenset({
@@ -102,7 +108,7 @@ def team_membership_rules(
         return TEAM_JOIN_DISABLED
     if action == LEAVE:
         return None
-    if not _team_is_active(team):
+    if not _team_is_active(team) and team.get("status") not in PENDING_REVIEW_STATUSES:
         return TEAM_INACTIVE
     if team.get("status") in JOINING_DISABLED_STATUSES:
         return TEAM_NOT_JOINABLE

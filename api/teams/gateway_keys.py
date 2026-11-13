@@ -11,6 +11,7 @@ Plaintext keys are Fernet-encrypted before they touch Firestore, and are
 only ever returned to team members (or admins) through the member-only GET
 endpoint. They are never logged.
 """
+import hashlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -346,11 +347,16 @@ def _key_spend_best_effort(plaintext_key, team_id):
     """Current spend for a key. Never raises; None when LiteLLM is unhappy.
 
     LiteLLM's /key/info is GET-only with the key as a query param; a POST
-    answers 405, which silently nulled every team's spend (Nov 2026)."""
+    answers 405, which silently nulled every team's spend (Nov 2026).
+
+    The query string lands in LiteLLM's access log, so we send the key's
+    sha256 hash, not the key: LiteLLM v1.97.0 stores keys hashed and looks a
+    `key=` value up as-is unless it starts with "sk-". A hash can't be used to
+    authenticate (auth hashes whatever bearer it is given)."""
     try:
         r = requests.get(
             f"{_base_url()}/key/info",
-            params={"key": plaintext_key},
+            params={"key": hashlib.sha256(plaintext_key.encode()).hexdigest()},
             headers={"Authorization": f"Bearer {_master_key()}"},
             timeout=15,
         )
@@ -359,7 +365,10 @@ def _key_spend_best_effort(plaintext_key, team_id):
         info = payload.get("info", {}) if isinstance(payload, dict) else {}
         return info.get("spend", payload.get("spend"))
     except Exception as e:
-        logger.warning("Gateway key spend lookup failed for team %s: %s", team_id, e)
+        # Never log `e` itself: a requests error message embeds the full URL.
+        status = getattr(getattr(e, "response", None), "status_code", None)
+        logger.warning("Gateway key spend lookup failed for team %s: %s (status %s)",
+                       team_id, type(e).__name__, status)
         return None
 
 

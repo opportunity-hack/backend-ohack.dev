@@ -104,6 +104,14 @@ CACHES = (
     _c("api.jobs.jobs_service", "get_public_listings", "cached", 10, READ_AFTER_WRITE,
        "Admin publish/close. Was 300s."),
     _c("api.jobs.jobs_service", "get_public_listing", "cached", 10, READ_AFTER_WRITE, "Was 300s."),
+    _c("api.giveaways.giveaways_service", "_campaign_cache", "ttlcache", 10, READ_AFTER_WRITE,
+       "Giveaway campaigns: admin create/open/close/draw, then the admin list and "
+       "/profile giveaways reload. Was 60s."),
+    _c("api.giveaways.giveaways_service", "_all_campaigns", "cached", 10, READ_AFTER_WRITE,
+       "Backed by _campaign_cache."),
+    _c("services.hackathons_service", "_get_full_hackathon_list", "cached", 10, READ_AFTER_WRITE,
+       "Unfiltered list — the admin hackathon editor loads from it and autosaves whole "
+       "objects back; was 3600s, which let a stale copy undo a newer save."),
     _c("services.problem_statements_service", "_helpers_cache", "ttlcache", 10, READ_AFTER_WRITE,
        "'Who's helping' roster refetched right after the help toggle. Was 60s."),
 
@@ -112,7 +120,14 @@ CACHES = (
     _c("api.slack.slack_service", "get_user_details", "redis_cached", 10, STATIC),
     _c("services.teams_service", "_TEAM_USERS_CACHE", "ttlcache", 600, STATIC,
        "Keyed by the tuple of member ids, so join/leave is a new key; only names/avatars lag."),
-    _c("services.hackathons_service", "get_hackathon_list", "cached", 3600, STATIC),
+    _c("api.teams.teams_service", "_PROJECT_OPTIONS_CACHE", "ttlcache", 60, STATIC,
+       "Projects a team can rank at creation (GET /api/team/<event>/project-options); "
+       "queue_team validates against the same cached copy so the page and API agree."),
+    _c("services.users_service", "_PROFILE_VISIT_THROTTLE", "ttlcache", 600, STATIC,
+       "Not a read cache: once-per-user throttle for the profile-visit Slack audit + "
+       "last_login write."),
+    _c("services.hackathons_service", "_get_filtered_hackathon_list", "cached", 3600, STATIC,
+       "?current=current|previous — homepage, /hack, archive."),
     _c("services.hackathons_service", "get_hackathon_funnel", "cached", 300, STATIC),
     _c("services.hackathons_service", "get_hackathon_funnel_aggregate", "manual", 6 * 3600, STATIC),
     _c("services.nonprofits_service", "_npo_list_cache", "ttlcache", 300, STATIC),
