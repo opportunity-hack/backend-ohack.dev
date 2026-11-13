@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any, Dict, Optional
 
 from common.log import get_logger, info, warning, error
-from common.utils.slack import userlist
+from common.utils.slack import userlist, send_slack_audit
 from common.utils.redis_cache import clear_pattern
 from common.utils.oauth_providers import is_slack_user_id, extract_slack_user_id
 from common.utils.firebase import get_db, get_users_by_emails
@@ -15,6 +15,86 @@ from common.utils.firebase import get_db, get_users_by_emails
 logger = get_logger(__name__)
 
 VOLUNTEER_TYPES = ("mentor", "judge", "volunteer", "hacker", "sponsor")
+
+
+AUDIT_PEOPLE_PER_MESSAGE = 40
+_AUDIT_FIELD_MAX = 200
+
+
+def _clip(value: Any) -> str:
+    """One-line, length-capped text for an audit message."""
+    return " ".join(str(value or "").split())[:_AUDIT_FIELD_MAX]
+
+
+def _actor_label(actor: Optional[Dict[str, Any]]) -> str:
+    actor = actor or {}
+    email, user_id = _clip(actor.get("email")), _clip(actor.get("user_id"))
+    if email and user_id:
+        return f"{email} ({user_id})"
+    return email or user_id or "unknown admin"
+
+
+def audit_slack_refresh(actor, event_id, volunteer_type, result) -> int:
+    """Post who ran a Slack re-check and exactly whose Slack id was saved.
+
+    Silent when nobody was matched: the invite dialog re-checks every time it
+    opens, and a line per no-op would bury the real entries. Returns the number
+    of audit messages sent. Never raises.
+    """
+    try:
+        updated = (result or {}).get("updated") or []
+        if not updated:
+            return 0
+        scope = f"{volunteer_type}s" if volunteer_type else "all application types"
+        head = (
+            f"{_actor_label(actor)} re-checked Slack for event {_clip(event_id)} ({scope}): "
+            f"saved a Slack id for {len(updated)} of {result.get('checked', 0)} applications checked, "
+            f"{len(result.get('unmatched') or [])} still not on Slack"
+        )
+        lines = [
+            f"- {_clip(u.get('name')) or '(no name)'} <{_clip(u.get('email'))}> | "
+            f"{_clip(u.get('volunteer_type'))} | Slack {_clip(u.get('slack_user_id'))} | "
+            f"matched by {_clip(u.get('matched_by'))} | "
+            f"{'on roster' if u.get('isSelected') else 'not on roster'} | volunteer {_clip(u.get('id'))}"
+            for u in updated
+        ]
+        chunks = [lines[i:i + AUDIT_PEOPLE_PER_MESSAGE]
+                  for i in range(0, len(lines), AUDIT_PEOPLE_PER_MESSAGE)]
+        for n, chunk in enumerate(chunks, start=1):
+            part = f" (part {n} of {len(chunks)})" if len(chunks) > 1 else ""
+            send_slack_audit(action="volunteer_slack_refresh",
+                             message=head + part + "\n" + "\n".join(chunk))
+        return len(chunks)
+    except Exception as e:  # an audit problem must never fail the request
+        warning(logger, "Slack refresh audit failed", error=str(e))
+        return 0
+
+
+def audit_channel_invite(actor, channel, slack_user_id, success, person=None, reason=None) -> None:
+    """Post who added (or failed to add) which person to which Slack channel.
+
+    `person` is optional context sent by the admin UI ({name, email,
+    volunteer_id, volunteer_type, event_id}); older clients send none and the
+    line then carries the Slack id only. Never raises.
+    """
+    try:
+        person = person or {}
+        who = f"Slack {_clip(slack_user_id)}"
+        name, email = _clip(person.get("name")), _clip(person.get("email"))
+        if name or email:
+            who = f"{name or '(no name)'} <{email}> | {who}"
+        extra = [f"{label} {_clip(person.get(key))}" for key, label in (
+            ("volunteer_type", "type"), ("volunteer_id", "volunteer"), ("event_id", "event"),
+        ) if _clip(person.get(key))]
+        verb = "added" if success else "FAILED to add"
+        message = f"{_actor_label(actor)} {verb} {who} to channel {_clip(channel)}"
+        if extra:
+            message += " | " + " | ".join(extra)
+        if not success and reason:
+            message += f" | reason: {_clip(reason)}"
+        send_slack_audit(action="slack_channel_invite", message=message)
+    except Exception as e:
+        warning(logger, "Slack channel invite audit failed", error=str(e))
 
 
 class SlackUnavailableError(Exception):
