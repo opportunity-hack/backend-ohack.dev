@@ -639,7 +639,7 @@ def build_demo_video_message(team, event, deadline_iso, hours_before):
     return (
         f":movie_camera: *{hours_before} hours left — time to record your demo video.*\n"
         "Stop adding features. Show the nonprofit what works end to end (4 minutes or less), "
-        "upload it to YouTube, Vimeo, Loom or Google Drive, and link it on your dashboard:\n"
+        "upload it to YouTube as *Unlisted* (easiest — Loom, Vimeo and Google Drive links work too), and link it on your dashboard:\n"
         f"{link}\n"
         "A demo recorded with time to spare beats a feature finished at the buzzer."
     )
