@@ -185,6 +185,9 @@ def fetch_judge_score(judge_id, team_id, event_id, round_name, is_draft=False):
 def fetch_judge_scores_by_judge_and_event(judge_id, event_id):
     return db.fetch_judge_scores_by_judge_and_event(judge_id, event_id)
 
+def fetch_judge_scores_by_judge_id(judge_id):
+    return db.fetch_judge_scores_by_judge_id(judge_id)
+
 def fetch_judge_scores_by_event_and_round(event_id, round_name):
     return db.fetch_judge_scores_by_event_and_round(event_id, round_name)
 
