@@ -432,21 +432,88 @@ def validate_project_payload(payload, team_id, existing=None):
     return clean, errors
 
 
+def _editor_name(propel_user_id):
+    """Display name for the caller (PropelAuth lookup is TTL-cached), or None."""
+    try:
+        from services.users_service import get_propel_user_details_by_id
+        details = get_propel_user_details_by_id(propel_user_id) or ()
+        return (details[4] if len(details) > 4 else None) or None
+    except Exception as e:  # pragma: no cover - name is cosmetic
+        logger.warning("submissions._editor_name failed: %s", e)
+        return None
+
+
+def _field_rev(meta, field):
+    """Revision counter of one project field (0 when never stamped)."""
+    entry = (meta or {}).get(field)
+    rev = entry.get("rev") if isinstance(entry, dict) else None
+    return rev if isinstance(rev, int) and not isinstance(rev, bool) else 0
+
+
+def project_conflicts(team, fields, base_revs):
+    """Fields whose stored revision moved past what the caller last saw.
+
+    `base_revs` is `{field: rev}` from the client. A field the client sent no
+    (integer) base for is not checked, so older clients keep last-write-wins.
+    """
+    if not isinstance(base_revs, dict):
+        return []
+    meta = team.get("project_field_meta") or {}
+    conflicts = []
+    for field in fields:
+        base = base_revs.get(field)
+        if not isinstance(base, int) or isinstance(base, bool):
+            continue
+        if _field_rev(meta, field) != base:
+            conflicts.append(field)
+    return sorted(conflicts)
+
+
 def save_project(propel_user_id, team_id, payload, admin=False):
     """Partial update of project_* fields. Sets project_submission_status to
     'draft' on the very first save (never regressed to draft afterward).
     409s (via _authorize_team_write) once the submission window has closed,
-    unless the caller is an admin."""
+    unless the caller is an admin.
+
+    Teammates edit the same write-up at once, so every saved field carries a
+    revision in `project_field_meta[field] = {rev, by, at}`. A client may send
+    `base_revs: {field: rev}` (the revisions it last saw); if a teammate saved
+    one of those fields since, NOTHING is written and the answer is
+    409 `{error: "project_conflict", fields, team}` so the editor can ask
+    "keep mine / use theirs" instead of silently overwriting. The check and
+    the write are not one transaction: two saves landing within the same few
+    milliseconds can still both pass (accepted)."""
     err, team, _event, window = _authorize_team_write(propel_user_id, team_id, admin=admin, enforce_deadline=True)
     if err:
         return err
+
+    base_revs = None
+    if isinstance(payload, dict) and "base_revs" in payload:
+        payload = dict(payload)
+        base_revs = payload.pop("base_revs")
 
     clean, errors = validate_project_payload(payload, team_id, existing=team)
     if errors:
         return {"error": "invalid_project", "errors": errors}, 400
 
+    conflicts = project_conflicts(team, clean.keys(), base_revs)
+    if conflicts:
+        logger.info("project_save_conflict team=%s fields=%s", team_id, conflicts)
+        fresh = (get_team(team_id) or {}).get("team") or {}
+        return {"error": "project_conflict", "fields": conflicts, "team": fresh}, 409
+
+    now_iso = datetime.now(timezone.utc).isoformat()
     update = dict(clean)
-    update["project_updated_at"] = datetime.now(timezone.utc).isoformat()
+    update["project_updated_at"] = now_iso
+    if clean:
+        editor = _editor_name(propel_user_id)
+        # Written as the whole map (existing entries + the bumped ones) so the
+        # result is the same whether the store deep-merges maps or not.
+        meta = dict(team.get("project_field_meta") or {})
+        for field in clean:
+            meta[field] = {"rev": _field_rev(meta, field) + 1, "by": editor, "at": now_iso}
+        update["project_field_meta"] = meta
+        update["project_updated_by_name"] = editor
     first_save = not team.get("project_submission_status")
     if first_save:
         update["project_submission_status"] = "draft"
