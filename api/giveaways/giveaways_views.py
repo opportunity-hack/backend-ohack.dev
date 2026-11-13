@@ -96,6 +96,12 @@ def admin_entries(giveaway_id):
     return _run(svc.admin_list_entries, giveaway_id)
 
 
+@bp.route("/admin/<giveaway_id>/entries/remove", methods=["POST"])
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_entries_remove(giveaway_id):
+    return _run(svc.admin_remove_entries, giveaway_id, _body(), _actor())
+
+
 @bp.route("/admin/<giveaway_id>/draw/start", methods=["POST"])
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_draw_start(giveaway_id):

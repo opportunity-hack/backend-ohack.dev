@@ -37,14 +37,17 @@ CAMPAIGNS_COLLECTION = "giveaway_campaigns"
 ENTRIES_COLLECTION = "giveaway_entries"
 
 # Keep in sync with the frontend's src/components/Profile/profileFields.js.
-# Only fields EVERY participant can reasonably fill score: optional or
-# situational ones (apartment/suite, company, Instagram), the stickers
-# preference and the system-set propel_id deliberately don't, so nobody loses
-# entries for a blank that is correct for them. The mailing address stays
-# because prizes ship to it.
+# Scored: the basic profile, Instagram + LinkedIn, the mailing address (prizes
+# ship to it) and the public-portfolio fields (/profile#portfolio). Not scored:
+# apartment/suite and company (a blank is often correct), the stickers
+# preference and the system-set propel_id. profile_visibility is deliberately
+# NOT scored — portfolios are private-first and entries must never pressure
+# anyone into going public.
 GIVEAWAY_PROFILE_FIELDS = (
     "role", "github", "expertise", "education", "why", "shirt_size",
-    "linkedin_url", "street_address", "city", "state", "postal_code", "country",
+    "linkedin_url", "instagram_url",
+    "street_address", "city", "state", "postal_code", "country",
+    "profile_slug", "headline", "bio", "bio_video_url", "portfolio_links",
 )
 ENTRIES_PER_PROFILE_FIELD = 5
 GITHUB_ENTRY_CAP = 45
@@ -535,6 +538,63 @@ def admin_list_entries(giveaway_id):
         entries.append(data)
     entries.sort(key=lambda e: e.get("user_id") or "")
     return {"entries": entries, "count": len(entries)}
+
+
+MAX_REMOVE_ENTRY_IDS = 500
+
+
+def admin_remove_entries(giveaway_id, body, actor):
+    """POST /admin/<id>/entries/remove — `{entry_ids: [...]}` or `{all: true}`.
+
+    Refused once a draw has started: the stage ranks the entry list it loaded
+    at Start, and a recorded winner must keep the entry it won with. Reset the
+    draw first. People can enter again while the giveaway is open."""
+    body = body if isinstance(body, dict) else {}
+    remove_all = body.get("all") is True
+    ids = body.get("entry_ids")
+    if not remove_all:
+        if (
+            not isinstance(ids, list) or not ids or len(ids) > MAX_REMOVE_ENTRY_IDS
+            or not all(isinstance(i, str) and i for i in ids)
+        ):
+            raise GiveawayError(
+                400, "invalid_entry_ids",
+                f"Send entry_ids (1-{MAX_REMOVE_ENTRY_IDS}) or all: true.",
+            )
+    campaign = _read_campaign(giveaway_id)
+    if campaign is None:
+        raise GiveawayError(404, "not_found", "That giveaway doesn't exist.")
+    if (campaign.get("draw") or {}).get("seed"):
+        raise GiveawayError(
+            409, "draw_started",
+            "The draw has started, so entries can't be removed. Reset the draw first.",
+        )
+    collection = _get_db().collection(ENTRIES_COLLECTION)
+    removed = []
+    if remove_all:
+        for doc in collection.where("giveaway_id", "==", giveaway_id).stream():
+            collection.document(doc.id).delete()
+            removed.append(doc.id)
+    else:
+        for entry_id in dict.fromkeys(ids):
+            ref = collection.document(entry_id)
+            snap = ref.get()
+            data = snap.to_dict() if snap.exists else None
+            # Only this giveaway's entries — an id from another campaign is ignored.
+            if not data or data.get("giveaway_id") != giveaway_id:
+                continue
+            ref.delete()
+            removed.append(entry_id)
+    if removed:
+        scope = "all entries" if remove_all else f"{len(removed)} entr{'y' if len(removed) == 1 else 'ies'}"
+        _audit(
+            "giveaway_entries_removed",
+            f"Giveaway entries removed: {giveaway_id} ({scope}, {len(removed)} total) by {actor}",
+            {"giveaway_id": giveaway_id, "entry_ids": removed[:50], "all": remove_all},
+        )
+    out = admin_list_entries(giveaway_id)
+    out["removed"] = len(removed)
+    return out
 
 
 # ---------------------------------------------------------------------------

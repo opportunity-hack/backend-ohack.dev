@@ -32,6 +32,7 @@ old clients. Nothing here reads or writes them, and no data is migrated.
 | `DELETE /<id>/entry` | user | withdraw (409 once closed) |
 | `GET /admin`, `POST /admin`, `GET|PATCH /admin/<id>` | `volunteer.admin` | campaigns; a prize with a `won` result can't be removed or shrunk below it (409 `prize_has_winner`); status is locked once a draw starts (409 `draw_started`) |
 | `GET /admin/<id>/entries` | `volunteer.admin` | ONE `where giveaway_id ==` query |
+| `POST /admin/<id>/entries/remove` | `volunteer.admin` | `{entry_ids:[…]}` or `{all:true}` → fresh list + `removed`; 409 `draw_started` once a draw has a seed; Slack-audited |
 | `POST /admin/<id>/draw/start` | `volunteer.admin` | `{seed}`; status → `closed`; same seed = resume, different = 409 `draw_already_started` |
 | `POST /admin/<id>/draw/results` | `volunteer.admin` | `{prize_id, slot, user_id, outcome, attempt}` and/or `{finish: true}`; transactional checks: entered that prize, no prior win (409 `already_won`), slot free (409 `slot_filled`), slot < quantity. All slots won or `finish` → `drawn` |
 | `POST /admin/<id>/draw/undo` | `volunteer.admin` | `{result_id}`; a `drawn` giveaway with an empty slot goes back to `closed` |
@@ -41,8 +42,9 @@ Errors are `{"error": <code>, "message": <copy>}`.
 
 ## Rules
 
-- **Weight** = 5 × filled `GIVEAWAY_PROFILE_FIELDS` (12 fields everyone can
-  fill — no apt/suite, company, Instagram, stickers or propel_id; twin of the
+- **Weight** = 5 × filled `GIVEAWAY_PROFILE_FIELDS` (18 fields: basic profile,
+  LinkedIn/Instagram, mailing address, portfolio fields — not apt/suite,
+  company, stickers, propel_id or profile_visibility; twin of the
   frontend's `src/components/Profile/profileFields.js` — keep in sync) + GitHub
   contributions (commits + PRs + issues + reviews, same data as
   `GET /api/messages/profile/github/<login>`) capped at 45. Profile entries are
