@@ -161,3 +161,37 @@ def test_fetched_results_cached_with_terminal_and_transient_ttls(monkeypatch, fa
     ttls = {key: ttl for key, _value, ttl in sets}
     assert ttls["resend:status:re_done"] == vs._RESEND_STATUS_TERMINAL_TTL
     assert ttls["resend:status:re_pending"] == vs._RESEND_STATUS_TRANSIENT_TTL
+
+
+def test_not_found_is_not_retried_and_is_cached(monkeypatch, fake_cache):
+    """Resend 404s ("Email not found") are permanent: one call, no retry
+    sleep, cached with the terminal TTL so later page loads skip them."""
+    store, sets = fake_cache
+    sleeps = []
+    monkeypatch.setattr(vs.time, "sleep", lambda s: sleeps.append(s))
+
+    def handler(eid):
+        if eid == "re_gone":
+            raise vs.resend.exceptions.ResendError(
+                code=404, error_type="not_found",
+                message="Email not found", suggested_action="")
+        return _payload(eid)
+
+    calls = _mock_get(monkeypatch, handler)
+
+    result = vs.get_resend_email_statuses(["re_good", "re_gone"])
+
+    assert result["success"] is True
+    assert calls.count("re_gone") == 1
+    assert sleeps == []
+    gone = result["statuses"]["re_gone"]
+    assert gone["last_event"] == "unknown"
+    assert gone["not_found"] is True
+    ttls = {key: ttl for key, _value, ttl in sets}
+    assert ttls["resend:status:re_gone"] == vs._RESEND_STATUS_TERMINAL_TTL
+
+    # Second request: served from cache, Resend is not asked again.
+    calls.clear()
+    again = vs.get_resend_email_statuses(["re_gone"])
+    assert calls == []
+    assert again["statuses"]["re_gone"]["not_found"] is True
