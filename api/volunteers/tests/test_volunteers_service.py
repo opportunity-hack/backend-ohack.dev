@@ -1240,14 +1240,14 @@ def test_auto_approve_puts_a_new_hacker_on_the_roster():
     mock_by_event.cache_clear.assert_called_once()
 
 
-def test_auto_approve_waitlists_once_capacity_is_reached():
+def test_auto_approve_approves_even_over_capacity():
     mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 90})
     result, mock_email, _ = _submit_hacker(mock_db, on_roster=90)
 
-    assert result["isSelected"] is False
-    assert result["status"] == "waitlisted"
-    assert result["auto_approved"] is False
-    assert mock_email.call_args.kwargs["roster_outcome"] == "waitlisted"
+    assert result["isSelected"] is True
+    assert result["status"] == "approved"
+    assert result["auto_approved"] is True
+    assert mock_email.call_args.kwargs["roster_outcome"] == "approved"
 
 
 def test_auto_approve_without_capacity_has_no_limit():
@@ -1334,14 +1334,16 @@ def test_auto_approve_on_update_respects_staff_roster_decisions(existing_fields,
         assert result.get("status") == existing_fields.get("status", "active")
 
 
-def test_update_of_a_pending_hacker_at_capacity_keeps_their_status():
+def test_update_of_a_pending_hacker_at_capacity_still_approves():
     existing = {"id": "vol-1", "user_id": MOCK_USER_ID, "email": MOCK_EMAIL, "event_id": "fall-2026",
                 "volunteer_type": "hacker", "isSelected": False, "status": "pending"}
     mock_db, _ = _db_with_hackathon({"hacker_auto_approve": True, "hacker_capacity": 2})
-    result, _, _ = _submit_hacker(mock_db, existing=existing, on_roster=2)
+    result, mock_email, _ = _submit_hacker(mock_db, existing=existing, on_roster=2)
 
-    assert result["isSelected"] is False
-    assert result["status"] == "pending"
+    assert result["isSelected"] is True
+    assert result["status"] == "approved"
+    assert result["auto_approved"] is True
+    assert mock_email.call_args.kwargs["roster_outcome"] == "approved"
 
 
 def test_update_of_an_approved_hacker_does_not_recount_or_restamp():
@@ -1481,10 +1483,10 @@ def test_create_status_comes_only_from_the_roster_decision():
          patch('services.volunteers_service.send_volunteer_confirmation_email'):
         result = create_or_update_volunteer(
             user_id=MOCK_USER_ID, email=MOCK_EMAIL, event_id="fall-2026",
-            volunteer_data={**HACKER_DATA, "status": "approved"},
+            volunteer_data={**HACKER_DATA, "status": "denied"},
         )
-    assert result["status"] == "waitlisted"
-    assert result["isSelected"] is False
+    assert result["status"] == "approved"
+    assert result["isSelected"] is True
 
 
 def test_second_submit_by_same_login_with_new_email_updates_not_creates():
