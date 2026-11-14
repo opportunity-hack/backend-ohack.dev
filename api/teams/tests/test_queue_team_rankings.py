@@ -96,10 +96,47 @@ def test_valid_rankings_are_normalized_and_stored(env):
     ]
     assert team["status"] == "IN_REVIEW"
     assert calls["slack_channels"] == ["rockets-fall26"]
-    channel_msg = next(msg for ch, msg in calls["slack_messages"] if ch == "rockets-fall26")
+    # Posted by the id create_slack_channel returned, not by name.
+    channel_msg = next(msg for ch, msg in calls["slack_messages"] if ch == "C123")
     assert "#1 Volunteer scheduler — Alpha" in channel_msg
     assert "#3 Food map — Gamma" in channel_msg
 
+
+
+def test_invites_use_the_new_channel_id(env, monkeypatch):
+    # Regression (Nov 2026): invites looked the brand-new channel up by name,
+    # hit a cached "not found", and silently invited nobody — not the creator,
+    # the picked teammates or the admins.
+    _, calls, _ = env
+    invited = []
+    monkeypatch.setattr(svc, "invite_user_to_channel", lambda uid, channel: invited.append((uid, channel)))
+    monkeypatch.setattr(svc, "get_user_from_slack_id", lambda uid: None)
+    monkeypatch.setattr(svc, "save_user", lambda **kw: type("U", (), {"user_id": kw["user_id"]})())
+
+    result = svc.queue_team("propel-1", body(
+        [r("npo-a", "ps-a1", 1), r("npo-a", "ps-a2", 2)],
+        teamMembers=[{"id": "UMATE", "name": "bo", "real_name": "Bo"}, "Typed Name"],
+    ))
+
+    assert result["success"] is True
+    assert {channel for _, channel in invited} == {"C123"}
+    invited_ids = [uid for uid, _ in invited]
+    assert "oauth2|slack|T1-UCREATOR" in invited_ids
+    assert "UMATE" in invited_ids
+    assert set(svc.TEAM_COMPLETION_SLACK_ADMINS) <= set(invited_ids)
+
+
+def test_falls_back_to_the_name_when_create_returns_no_id(env, monkeypatch):
+    _, calls, _ = env
+    invited = []
+    monkeypatch.setattr(svc, "create_slack_channel", lambda name: None)
+    monkeypatch.setattr(svc, "invite_user_to_channel", lambda uid, channel: invited.append(channel))
+
+    result = svc.queue_team("propel-1", body([r("npo-a", "ps-a1", 1), r("npo-a", "ps-a2", 2)]))
+
+    assert result["success"] is True
+    assert set(invited) == {"rockets-fall26"}
+    assert any(ch == "rockets-fall26" for ch, _ in calls["slack_messages"])
 
 def test_too_few_projects(env):
     db, calls, _ = env

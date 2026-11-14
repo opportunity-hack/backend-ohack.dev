@@ -784,6 +784,10 @@ def queue_team(propel_user_id, json):
     # Create the slack channel
     logger.info("Creating slack channel %s", slack_channel)
     channel_id = create_slack_channel(slack_channel)
+    # Post + invite by the id we just got back. Looking the brand-new channel
+    # up by name used to miss (a cached "not found"), so nobody — not the
+    # creator, teammates or admins — was ever invited.
+    slack_target = channel_id or slack_channel
 
     logger.info("Adding bot to channel: %s with channel ID: %s", slack_channel, channel_id)
     add_bot_to_channel(channel_id)    
@@ -815,12 +819,12 @@ Join <#C01E5CGDQ74> for questions and updates.
 
 Let's make a difference! :muscle: :heart:
 '''
-    send_slack(slack_message, slack_channel)
+    send_slack(slack_message, slack_target)
     send_slack(slack_message, "log-team-creation")
 
 
     logger.info("Inviting user %s to slack channel %s", slack_user_id, slack_channel)
-    invite_user_to_channel(slack_user_id, slack_channel)
+    invite_user_to_channel(slack_user_id, slack_target)
 
     # Look at teamMember.id to get the slack user id
     
@@ -835,7 +839,7 @@ Let's make a difference! :muscle: :heart:
         member_slack_id = member.get("id") if isinstance(member, dict) else None
         if member_slack_id and member_slack_id != root_slack_user_id:
             logger.info("Inviting user %s to slack channel %s", member_slack_id, slack_channel)
-            invite_user_to_channel(member_slack_id, slack_channel)
+            invite_user_to_channel(member_slack_id, slack_target)
             # Lookup the user in the database by user_id which is their slack user id
             full_user_id_with_slack_prefix = normalize_slack_user_id(member_slack_id)
             user_db_check = get_user_from_slack_id(full_user_id_with_slack_prefix)
@@ -862,7 +866,7 @@ Let's make a difference! :muscle: :heart:
     # Add Slack admins
     for admin in TEAM_COMPLETION_SLACK_ADMINS:
         logger.info("Inviting admin %s to slack channel %s", admin, slack_channel)
-        invite_user_to_channel(admin, slack_channel)
+        invite_user_to_channel(admin, slack_target)
 
 
     my_date = datetime.now()
