@@ -10,6 +10,7 @@ from slack_sdk.errors import SlackApiError
 from dotenv import load_dotenv
 from cachetools import TTLCache, cached
 from ratelimit import limits, sleep_and_retry
+import re
 import threading
 from common.utils.redis_cache import redis_cached
 
@@ -228,46 +229,78 @@ def get_slack_user_by_email(email):
         return None
 
 
-@cached(cache=TTLCache(maxsize=100, ttl=60), lock=threading.Lock())  # Cache for 1 minute
-@sleep_and_retry
-@limits(calls=20, period=60)  # Rate limiting
+# Channel name → id. Only HITS are cached: a cached miss is what broke team
+# creation (Nov 2026) — create_slack_channel looks the name up before creating
+# it, the None was cached for 60s, and every invite that followed found "no
+# such channel" and silently skipped. Ids never change for a name, so hits are
+# safe to keep for a minute.
+_CHANNEL_ID_CACHE = TTLCache(maxsize=500, ttl=60)
+_CHANNEL_ID_LOCK = threading.Lock()
+# Public/private channel or DM ids: C…/G…/D… followed by 8+ uppercase alnum.
+_CONVERSATION_ID_RE = re.compile(r"^[CGD][A-Z0-9]{8,}$")
+
+
+def remember_channel_id(channel_name, channel_id):
+    """Record a known name → id (e.g. right after conversations.create)."""
+    if channel_name and channel_id:
+        with _CHANNEL_ID_LOCK:
+            _CHANNEL_ID_CACHE[channel_name] = channel_id
+
+
 def get_channel_id_from_channel_name(channel_name):
     """
-    Get channel ID from channel name with caching and pagination support.
-    
+    Get channel ID from channel name. Found ids are cached for a minute;
+    misses are never cached (a channel may be created a second later).
+
     :param channel_name: Name of the channel to find
     :return: Channel ID if found, None otherwise
     """
+    with _CHANNEL_ID_LOCK:
+        cached_id = _CHANNEL_ID_CACHE.get(channel_name)
+    if cached_id:
+        return cached_id
+
+    channel_id = _lookup_channel_id(channel_name)
+    remember_channel_id(channel_name, channel_id)
+    return channel_id
+
+
+@sleep_and_retry
+@limits(calls=20, period=60)  # Rate limiting
+def _lookup_channel_id(channel_name):
     client = get_client()
-    
+
     logger.info(f"Looking for slack channel {channel_name}...")
-    
+
     try:
         cursor = None
         while True:
-            # Use pagination to handle workspaces with many channels
-            result = client.conversations_list(
-                exclude_archived=True, 
-                limit=999999,
-                types="private_channel,public_channel"  # Specify channel types
-            )
-            
+            # Slack caps a page at 1000; follow next_cursor for the rest. (The
+            # cursor used to be read but never sent, so a paged miss re-fetched
+            # page 1 forever.)
+            kwargs = {
+                "exclude_archived": True,
+                "limit": 1000,
+                "types": "private_channel,public_channel",
+            }
+            if cursor:
+                kwargs["cursor"] = cursor
+            result = client.conversations_list(**kwargs)
+
             logger.debug(f"Found {len(result['channels'])} channels in this batch")
-            
-            # Search through current batch
+
             for channel in result["channels"]:
                 if channel["name"] == channel_name:
                     logger.info(f"Found Channel! {channel_name} -> {channel['id']}")
                     return channel["id"]
-            
-            # Check if there are more pages
-            cursor = result.get("response_metadata", {}).get("next_cursor")
+
+            cursor = (result.get("response_metadata") or {}).get("next_cursor")
             if not cursor:
                 break
-                
+
         logger.warning(f"Channel {channel_name} not found")
         return None
-        
+
     except SlackApiError as e:
         logger.error(f"Error fetching channels: {e}")
         return None
@@ -381,8 +414,12 @@ def create_slack_channel(channel_name):
 
     try:
         result = client.conversations_create(name=channel_name)
-        logger.info(f"Created channel {channel_name} with id {result['channel']['id']}")
-        return result["channel"]["id"]
+        channel_id = result["channel"]["id"]
+        logger.info(f"Created channel {channel_name} with id {channel_id}")
+        # conversations.list can lag a new channel; later lookups by name
+        # (send_slack, invites) must not miss it.
+        remember_channel_id(channel_name, channel_id)
+        return channel_id
     except Exception as e:
         logger.error("Caught exception")
         logger.error(e)
@@ -391,7 +428,12 @@ def create_slack_channel(channel_name):
 
 def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None):
     client = get_client()
-    channel_id = get_channel_id_from_channel_name(channel)
+    # Already a conversation id (e.g. the id queue_team got back from
+    # conversations.create) — no need to list every channel to find it.
+    if isinstance(channel, str) and _CONVERSATION_ID_RE.match(channel):
+        channel_id = channel
+    else:
+        channel_id = get_channel_id_from_channel_name(channel)
     logger.info(f"Got channel id {channel_id}")
 
     if channel_id is None:
