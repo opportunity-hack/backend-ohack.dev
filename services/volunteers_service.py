@@ -3726,6 +3726,15 @@ def send_email_to_address(
         }
 
 
+def _is_resend_not_found(exc: Exception) -> bool:
+    """True when Resend answered 404 / not_found for an email id."""
+    if str(getattr(exc, 'code', '')) == '404':
+        return True
+    if getattr(exc, 'error_type', '') == 'not_found':
+        return True
+    return 'not found' in str(exc).lower()
+
+
 def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
     """
     Fetch delivery status for a list of Resend email IDs.
@@ -3768,6 +3777,17 @@ def get_resend_email_statuses(email_ids: list) -> Dict[str, Any]:
                     set_cached(f"resend:status:{eid}", result, ttl=ttl)
                     return result
                 except Exception as fetch_error:
+                    if _is_resend_not_found(fetch_error):
+                        # Resend no longer has this email (past its retention
+                        # window, or sent under another account). That answer
+                        # never changes, so don't retry and do cache it —
+                        # otherwise every admin page load re-asks Resend for
+                        # every such ID (twice, 0.6s apart).
+                        result = {'id': eid, 'last_event': 'unknown',
+                                  'not_found': True, 'error': 'Email not found'}
+                        set_cached(f"resend:status:{eid}", result,
+                                   ttl=_RESEND_STATUS_TERMINAL_TTL)
+                        return result
                     retries += 1
                     if retries < 2:
                         time.sleep(0.6)
