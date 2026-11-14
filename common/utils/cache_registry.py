@@ -165,8 +165,9 @@ CACHES = (
     _c("api.leaderboard.leaderboard_service", "get_github_leaderboard", "manual", 300, STATIC),
     _c("services.broadcasts_service", "list_contacts", "manual", 60, STATIC,
        "Resend contact list (admin; ?force=true busts)."),
-    _c("services.volunteers_service", "_fetch_one_status", "manual", None, STATIC,
-       "Resend delivery status per email id (ttl computed per status)."),
+    _c("services.volunteers_service", "_fetch_one_status", "manual", 7 * 24 * 3600, STATIC,
+       "Resend delivery status per email id: terminal events + 'Email not found' 7 days, "
+       "transient events 120s."),
     _c("services.volunteers_service", "_fetch_and_cache_resend_emails", "manual", 3600, STATIC,
        "Resend email index for the admin volunteer table."),
 
