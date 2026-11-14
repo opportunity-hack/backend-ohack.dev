@@ -970,30 +970,17 @@ def _hacker_roster_decision(volunteer_type: Optional[str], event_id: str,
     """Auto-approve decision for a hacker submit/update (Nov 2026).
 
     Returns None unless the event has ``constraints.hacker_auto_approve`` on
-    and this is a hacker application; otherwise "approved" while the roster is
-    under ``constraints.hacker_capacity`` (None/absent = no limit) and
-    "waitlisted" once it is full.
-
-    Read-then-write race: two submits landing at the same moment can both see
-    count == capacity - 1 and both get approved, so the roster can exceed the
-    cap by a handful. Accepted at walk-in volume (~10 people); admins can take
-    anyone off the roster in the Volunteer section.
+    and this is a hacker application; otherwise "approved" — the roster cap
+    (``constraints.hacker_capacity``) no longer gates approval. When the
+    switch is on, everyone who applies goes on the roster, even over
+    capacity. The cap still means something at the door (seats are first
+    come, first served at check-in) but it never waitlists an applicant.
     """
     if volunteer_type != 'hacker' or not constraints:
         return None
     if constraints.get('hacker_auto_approve') is not True:
         return None
-    capacity = constraints.get('hacker_capacity')
-    if not isinstance(capacity, int) or isinstance(capacity, bool) or capacity < 1:
-        return "approved"
-    try:
-        on_roster = _count_selected_hackers(event_id)
-    except Exception as e:
-        # Can't tell whether there's room — leave the application pending for
-        # a human rather than over- or under-filling the roster.
-        warning(logger, "Could not count the hacker roster; skipping auto-approve", event_id=event_id, exc_info=e)
-        return None
-    return "approved" if on_roster < capacity else "waitlisted"
+    return "approved"
 
 
 def _roster_decision_fields(decision: Optional[str]) -> Dict[str, Any]:
@@ -1513,11 +1500,10 @@ def create_or_update_volunteer(
         update_data['isSelected'] = existing.get('isSelected', False)
 
         # Hacker auto-approve (Nov 2026): an applicant still waiting on review
-        # who updates while the switch is on goes onto the roster too. Never
-        # un-approves and never overrides an organizer's decision (denied,
-        # taken off the roster, staff waitlist) — see
-        # _eligible_for_auto_approve_on_update. At capacity the stored status
-        # is left alone (they stay pending).
+        # who updates while the switch is on goes onto the roster too, even
+        # over capacity. Never un-approves and never overrides an organizer's
+        # decision (denied, taken off the roster, staff waitlist) — see
+        # _eligible_for_auto_approve_on_update.
         if _eligible_for_auto_approve_on_update(existing):
             if _hacker_roster_decision(volunteer_type, event_id, constraints) == "approved":
                 roster_outcome = "approved"
