@@ -14,9 +14,36 @@ logger.setLevel(logging.DEBUG)
 # GitHub failures retry on the next request.
 _ISSUES_CACHE = TTLCache(maxsize=512, ttl=600)
 
-# Team dashboard "Code activity" card (GET /api/github/activity). Separate,
-# shorter-TTL cache from _ISSUES_CACHE since this is meant to feel live-ish.
+# GET /api/github/activity — team dashboard "Code activity" card and the
+# public judging schedule's Code column (every team's repo, fetched by every
+# viewer on page load). Three tiers so a busy event day doesn't burn the shared
+# GITHUB_TOKEN budget, while "nothing yet" answers refresh quickly:
+#   _ACTIVITY_CACHE        5 min  — repo has commits (the normal case)
+#   _ACTIVITY_EMPTY_CACHE  1 min  — valid payload but no commits / no
+#                                   last_commit_at yet (fresh team repo; the
+#                                   first push should show up fast)
+#   _ACTIVITY_ERROR_CACHE  30 s   — 404 / 503 rate-limited / 502 (incl. a
+#                                   None or malformed payload); short enough to
+#                                   recover quickly, long enough that N viewers
+#                                   don't each re-hit GitHub for a dead repo.
 _ACTIVITY_CACHE = TTLCache(maxsize=512, ttl=300)
+_ACTIVITY_EMPTY_CACHE = TTLCache(maxsize=512, ttl=60)
+_ACTIVITY_ERROR_CACHE = TTLCache(maxsize=512, ttl=30)
+
+
+def _activity_has_commits(result: Dict[str, Any]) -> bool:
+    commits = result.get("commits") or {}
+    try:
+        total = int(commits.get("total_recent") or 0)
+    except (TypeError, ValueError):
+        total = 0
+    return total > 0 and bool(commits.get("last_commit_at"))
+
+
+def clear_activity_caches() -> None:
+    _ACTIVITY_CACHE.clear()
+    _ACTIVITY_EMPTY_CACHE.clear()
+    _ACTIVITY_ERROR_CACHE.clear()
 
 # GitHub org/repo name charset. Loose but enough to reject path-injection-ish
 # input before it reaches PyGithub.
@@ -25,10 +52,13 @@ _GITHUB_NAME_RE = re.compile(r"^[A-Za-z0-9_.-]{1,100}$")
 
 def get_github_activity(org_name: str, repo_name: str) -> Dict[str, Any]:
     """
-    GET /api/github/activity backing service. Success-only cache (mirrors
-    get_github_issues): a rate-limit or repo-not-found response is never
-    cached, so the next request retries against GitHub instead of pinning a
-    transient failure for the TTL window.
+    GET /api/github/activity backing service, cached in three tiers (see
+    _ACTIVITY_CACHE above): repos with commits 5 min, empty/None-ish payloads
+    1 min, errors 30 s. 400s are never cached (bad input, no GitHub call).
+
+    A None or malformed payload from get_repo_activity is NOT a success: it
+    answers 502 github_unavailable so clients show "couldn't check" rather than
+    "no commits".
 
     Returns (payload, status):
       200 {success, repo, commits, contributors, open_prs}
@@ -41,10 +71,26 @@ def get_github_activity(org_name: str, repo_name: str) -> Dict[str, Any]:
         return {"error": "invalid_repo"}, 400
 
     cache_key = (org_name, repo_name)
-    cached = _ACTIVITY_CACHE.get(cache_key)
-    if cached is not None:
-        return cached, 200
+    for cache in (_ACTIVITY_CACHE, _ACTIVITY_EMPTY_CACHE):
+        cached = cache.get(cache_key)
+        if cached is not None:
+            return cached, 200
+    cached_error = _ACTIVITY_ERROR_CACHE.get(cache_key)
+    if cached_error is not None:
+        return cached_error
 
+    payload, status = _fetch_github_activity(org_name, repo_name)
+    if status == 200:
+        if _activity_has_commits(payload):
+            _ACTIVITY_CACHE[cache_key] = payload
+        else:
+            _ACTIVITY_EMPTY_CACHE[cache_key] = payload
+    else:
+        _ACTIVITY_ERROR_CACHE[cache_key] = (payload, status)
+    return payload, status
+
+
+def _fetch_github_activity(org_name: str, repo_name: str):
     from github import UnknownObjectException, RateLimitExceededException, GithubException
 
     try:
@@ -72,8 +118,11 @@ def get_github_activity(org_name: str, repo_name: str) -> Dict[str, Any]:
         logger.error("get_github_activity: unexpected error org=%s repo=%s: %s", org_name, repo_name, e)
         return {"error": "github_unavailable"}, 502
 
-    _ACTIVITY_CACHE[cache_key] = result
+    if not isinstance(result, dict) or not isinstance(result.get("commits"), dict):
+        logger.warning("get_github_activity: empty/malformed payload org=%s repo=%s: %r", org_name, repo_name, type(result))
+        return {"error": "github_unavailable"}, 502
     return result, 200
+
 
 def get_github_organization_data(org_name: str) -> Dict[str, Any]:
     """

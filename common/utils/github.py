@@ -21,6 +21,26 @@ class PrivateRepoError(Exception):
     are refused (the service maps this to the same 404 as "doesn't exist")."""
 
 
+# Public, unauthenticated read paths (GET /api/github/activity, /issues, the
+# GitHub-username check) must fail fast. PyGithub 2.x defaults to
+# GithubRetry(total=10), which SLEEPS until the rate-limit reset and retries
+# 5xx with backoff, on top of a 15s socket timeout — on event day the judging
+# schedule fans out one activity call per team repo per viewer, those calls
+# parked every gunicorn thread (2 workers x 8 threads) and the whole API
+# stopped answering (Nov 2026). No retry + a short timeout surfaces the
+# failure as a 502/503 the caller caches briefly instead.
+GITHUB_READ_TIMEOUT_SECONDS = 8
+
+
+def _fast_fail_github(**kwargs):
+    return Github(
+        os.getenv('GITHUB_TOKEN'),
+        timeout=GITHUB_READ_TIMEOUT_SECONDS,
+        retry=None,
+        **kwargs,
+    )
+
+
 def get_github_organization(g, org_name):
     """Resolve a GitHub org by login, raising ValueError with a readable
     message instead of letting PyGithub's exception bubble up as a 500.
@@ -243,7 +263,7 @@ def does_repo_exist(repo_name, hackathon_event_id, org_name, org=None):
     
 
 def validate_github_username(github_username):
-    g = Github(os.getenv('GITHUB_TOKEN'))
+    g = _fast_fail_github()
     try:
         user = g.get_user(github_username)
         return True
@@ -292,7 +312,7 @@ def get_repo_activity(org_name, repo_name):
     for get_commits on one) is NOT an error here — it's a valid all-zeros
     result for a freshly created team repo.
     """
-    g = Github(os.getenv('GITHUB_TOKEN'), per_page=100)
+    g = _fast_fail_github(per_page=100)
     repo = g.get_repo(f"{org_name}/{repo_name}")
 
     # Checked before any commit/PR call so nothing about a private repo (commit
@@ -426,7 +446,7 @@ def get_issues(
         org_name,
         state=None
     ):
-    g = Github(os.getenv('GITHUB_TOKEN'))
+    g = _fast_fail_github()
     org = g.get_organization(org_name)
     
     try:
