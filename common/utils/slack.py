@@ -426,7 +426,8 @@ def create_slack_channel(channel_name):
     logger.debug("create_slack_channel end")
 
 
-def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None):
+def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None,
+               unfurl_links=None, unfurl_media=None):
     client = get_client()
     # Already a conversation id (e.g. the id queue_team got back from
     # conversations.create) — no need to list every channel to find it.
@@ -460,13 +461,20 @@ def send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot"
             kwargs["icon_emoji"] = icon_emoji
         else:
             kwargs["icon_url"] = "https://cdn.ohack.dev/ohack.dev/logos/OpportunityHack_2Letter_Light_Blue.png"
-        
+
+        # Only sent when a caller asks — Slack's default (unfurl) stays for everyone else.
+        if unfurl_links is not None:
+            kwargs["unfurl_links"] = unfurl_links
+        if unfurl_media is not None:
+            kwargs["unfurl_media"] = unfurl_media
+
         response = client.chat_postMessage(**kwargs)
     except SlackApiError as e:
         logger.warning(f"send_slack failed for channel={channel_id}: {e.response.get('error', e)}")
 
 
-def async_send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None):
+def async_send_slack(message="", channel="", icon_emoji=None, username="Hackathon Bot", blocks=None,
+                     unfurl_links=None, unfurl_media=None):
     """Send a Slack message without blocking the caller.
 
     Same signature as send_slack; the whole send (including the channel-name
@@ -484,6 +492,8 @@ def async_send_slack(message="", channel="", icon_emoji=None, username="Hackatho
         icon_emoji=icon_emoji,
         username=username,
         blocks=blocks,
+        unfurl_links=unfurl_links,
+        unfurl_media=unfurl_media,
     )
 
 
