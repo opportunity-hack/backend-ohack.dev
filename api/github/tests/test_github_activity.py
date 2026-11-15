@@ -17,6 +17,14 @@ from github import GithubException, UnknownObjectException, RateLimitExceededExc
 import common.utils.github as github_utils
 
 
+@pytest.fixture(autouse=True)
+def _reset_rate_limit_breaker():
+    """The breaker is module-global; never let one test's 403 leak into the next."""
+    github_utils.reset_github_rate_limit()
+    yield
+    github_utils.reset_github_rate_limit()
+
+
 # ---------------------------------------------------------------------------
 # Fakes
 # ---------------------------------------------------------------------------
@@ -439,3 +447,105 @@ def test_get_repo_activity_uses_fast_fail_client(monkeypatch):
     assert seen["retry"] is None
     assert seen["timeout"] <= 10
     assert seen["per_page"] == 100
+
+
+# ---------------------------------------------------------------------------
+# Rate-limit circuit breaker + /issues (Nov 2026 outage: default PyGithub
+# retry slept 972s on a 403 from GET /orgs/<org>, parking every thread)
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def closed_breaker():
+    github_utils.reset_github_rate_limit()
+    yield
+    github_utils.reset_github_rate_limit()
+
+
+def test_breaker_opens_on_rate_limit_and_blocks_further_calls(monkeypatch, closed_breaker):
+    github_service.clear_activity_caches()
+    reset = str(int(datetime.now(timezone.utc).timestamp()) + 600)
+    calls = []
+
+    def fake_github(*a, **kw):
+        calls.append("client")
+        raise RateLimitExceededException(403, {"message": "rate limited"}, {"x-ratelimit-reset": reset})
+
+    monkeypatch.setattr(github_utils, "Github", fake_github)
+    _, status = github_service.get_github_activity("org", "repo-a")
+    assert status == 503
+    assert github_utils.github_rate_limited_until() is not None
+
+    # A different repo (not in any cache) never constructs a client.
+    _, status = github_service.get_github_activity("org", "repo-b")
+    assert status == 503
+    assert calls == ["client"]
+
+
+def test_breaker_pause_is_capped_and_defaults_without_header(closed_breaker):
+    now = datetime.now(timezone.utc).timestamp()
+    github_utils.note_github_rate_limit(RateLimitExceededException(403, {}, {"x-ratelimit-reset": str(int(now) + 99999)}))
+    assert github_utils.github_rate_limited_until() <= now + 3600 + 1
+    github_utils.reset_github_rate_limit()
+    github_utils.note_github_rate_limit(RateLimitExceededException(403, {}, {}))
+    assert now + 30 < github_utils.github_rate_limited_until() <= now + 61
+
+
+class FakeIssue:
+    def __init__(self, n, pr=False):
+        self.number = n
+        self.title = f"Issue {n}"
+        self.body = ""
+        self.state = "open"
+        self.created_at = None
+        self.updated_at = None
+        self.pull_request = object() if pr else None
+
+
+def test_get_issues_skips_org_lookup_filters_prs_and_caps(monkeypatch, closed_breaker):
+    seen = {}
+
+    class Repo:
+        def get_issues(self, state=None):
+            seen["state"] = state
+            return [FakeIssue(i, pr=(i % 2 == 0)) for i in range(2000)]
+
+    class Client:
+        def get_repo(self, full_name):
+            seen["repo"] = full_name
+            return Repo()
+
+        def get_organization(self, name):  # pragma: no cover - must not be called
+            raise AssertionError("get_issues must not call GET /orgs/<org>")
+
+    def fake_github(*a, **kw):
+        seen["kwargs"] = kw
+        return Client()
+
+    monkeypatch.setattr(github_utils, "Github", fake_github)
+    issues = github_utils.get_issues("repo", "org", state="ALL")
+
+    assert seen["repo"] == "org/repo" and seen["state"] == "all"
+    assert seen["kwargs"]["retry"] is None and seen["kwargs"]["per_page"] == 100
+    assert len(issues) == github_utils.MAX_ISSUES_SCANNED // 2  # PRs dropped, scan capped
+    assert all(i["issue_number"] % 2 == 1 for i in issues)
+
+
+def test_get_github_issues_caches_rate_limit_briefly_and_opens_breaker(monkeypatch, closed_breaker):
+    github_service._ISSUES_CACHE.clear()
+    github_service._ISSUES_ERROR_CACHE.clear()
+    calls = {"n": 0}
+
+    class Client:
+        def get_repo(self, full_name):
+            calls["n"] += 1
+            raise RateLimitExceededException(403, {"message": "rate limited"}, {})
+
+    monkeypatch.setattr(github_utils, "Github", lambda *a, **kw: Client())
+
+    first = github_service.get_github_issues("org", "repo", "all")
+    second = github_service.get_github_issues("org", "repo", "all")
+
+    assert first == second == {"error": "github_rate_limited"}
+    assert calls["n"] == 1
+    assert github_utils.github_rate_limited_until() is not None
+    assert ("org", "repo", "all") not in github_service._ISSUES_CACHE
