@@ -831,7 +831,7 @@ Let's make a difference! :muscle: :heart:
 
 
     if slack_user_id:
-        logger.info("Inviting user %s to slack channel %s", slack_user_id, slack_channel)
+        logger.info("Inviting the team creator to slack channel %s", slack_channel)
         invite_user_to_channel(slack_user_id, slack_target)
     else:
         logger.info("Team creator has no Slack login; skipping the channel invite")
