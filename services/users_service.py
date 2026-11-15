@@ -22,6 +22,7 @@ from common.utils.oauth_providers import (
     USER_ID_PREFIX,
     normalize_slack_user_id,
     is_oauth_user_id,
+    is_slack_user_id,
     get_oauth_provider_from_propel_response,
     build_user_id_for_provider,
     extract_slack_user_id,
@@ -602,6 +603,18 @@ def _fetch_propel_metadata(propel_id):
     }
 
 
+def _backfill_propel_id(user, propel_id):
+    """Stamp `propel_id` on a doc we matched by a VERIFIED identity (provider id
+    or email) so every later request hits the fast path. Never raises."""
+    if not propel_id or getattr(user, "propel_id", None) == propel_id:
+        return
+    user.propel_id = propel_id
+    try:
+        upsert_profile_metadata(user)
+    except Exception as e:
+        warning(logger, "Failed to backfill propel_id on user", propel_id=propel_id, error=str(e))
+
+
 def _resolve_and_ensure_user(propel_id):
     """Resolve a propel_id to a Firestore User, lazily creating the doc for
     brand-new users. Returns (user, user_id); (None, None) only when NO identity
@@ -637,6 +650,19 @@ def _resolve_and_ensure_user(propel_id):
         user_id = oauth_user["sub"]
         user = fetch_user_by_user_id(user_id)
         if user is None:
+            # Same person, different login button: PropelAuth keeps ONE account
+            # per verified email, so a doc that already carries this email is
+            # theirs (made when they signed in with the other provider).
+            # Adopt it instead of creating a second doc for one person.
+            user = fetch_user_by_email(oauth_user.get("email"))
+            if user is not None:
+                _backfill_propel_id(user, propel_id)
+                return user, (user.user_id or propel_id)
+        else:
+            # Found by provider id but never stamped: stamp it so the next
+            # request hits #1 whichever provider they sign in with.
+            _backfill_propel_id(user, propel_id)
+        if user is None:
             info(logger, "Lazily creating user doc on first volunteering action", user_id=user_id)
             save_user(
                 user_id=user_id,
@@ -665,12 +691,7 @@ def _resolve_and_ensure_user(propel_id):
     user = fetch_user_by_email(email)
     if user is not None:
         # Backfill propel_id so every future request hits the fast path (#1).
-        if getattr(user, "propel_id", None) != propel_id:
-            user.propel_id = propel_id
-            try:
-                upsert_profile_metadata(user)
-            except Exception as e:
-                warning(logger, "Failed to backfill propel_id on user", propel_id=propel_id, error=str(e))
+        _backfill_propel_id(user, propel_id)
         return user, (user.user_id or propel_id)
 
     # Brand-new user, OAuth down: create a doc from metadata. user_id is set to
@@ -691,6 +712,79 @@ def _resolve_and_ensure_user(propel_id):
         warning(logger, "Metadata-based user creation did not yield a doc", propel_id=propel_id)
         return None, None
     return user, (user.user_id or propel_id)
+
+
+class Caller:
+    """Who is making this request, for anything that reads or writes team
+    membership.
+
+    `user`           the person's user doc — the SAME one their profile shows
+                     (`_resolve_and_ensure_user`: stored propel_id first).
+    `doc_ids`        every user doc id that belongs to this person. Normally
+                     one. People who signed in with both Google and Slack
+                     before Nov 2026 can have two (one per provider); a roster
+                     may hold either, so membership checks match on the set.
+    `slack_user_id`  their Slack id in `oauth2|slack|T…-U…` form, or None for a
+                     person with no Slack login. ONLY for Slack invites and
+                     @-mentions — never for finding the user doc.
+    """
+
+    def __init__(self, user, doc_ids, slack_user_id):
+        self.user = user
+        self.doc_ids = doc_ids
+        self.slack_user_id = slack_user_id
+
+    def owns(self, ref_or_id):
+        """True when a roster entry (DocumentReference or id string) is one of
+        this person's docs."""
+        return getattr(ref_or_id, "id", ref_or_id) in self.doc_ids
+
+
+def _user_doc_ids_where(field, value):
+    if not value:
+        return set()
+    try:
+        from db.db import get_db
+        return {doc.id for doc in get_db().collection("users").where(field, "==", value).stream()}
+    except Exception as e:
+        warning(logger, "User doc lookup failed", field=field, error=str(e))
+        return set()
+
+
+def resolve_caller(propel_id):
+    """Resolve the logged-in person once, the same way for every feature.
+
+    The profile endpoints find the user doc by the stored PropelAuth id; the
+    team endpoints used to find it by the CURRENT login's provider id. For a
+    person with one PropelAuth account and two logins (Google and Slack, same
+    email) those two disagreed: "We couldn't find your profile" on create
+    team, a team dashboard that said "no team", a Leave that answered "User
+    not found" (frontend issue #501). Everything that needs the caller's user
+    doc goes through here now.
+
+    Returns a `Caller`, or None when no identity source can resolve them.
+    """
+    if not propel_id:
+        return None
+    user, _ = _resolve_and_ensure_user(propel_id)
+    if user is None:
+        return None
+
+    oauth_user = get_oauth_user_from_propel_user_id(propel_id) or {}
+    sub = oauth_user.get("sub")
+    email = oauth_user.get("email")  # verified by the provider and PropelAuth
+
+    doc_ids = {user.id}
+    doc_ids |= _user_doc_ids_where("propel_id", propel_id)
+    doc_ids |= _user_doc_ids_where("user_id", propel_id)  # metadata-fallback docs
+    doc_ids |= _user_doc_ids_where("user_id", sub)
+    doc_ids |= _user_doc_ids_where("email_address", email)
+
+    slack_user_id = next(
+        (uid for uid in (sub, getattr(user, "user_id", None)) if is_slack_user_id(uid)),
+        None,
+    )
+    return Caller(user, doc_ids, slack_user_id)
 
 
 def save_volunteering_time(propel_id, json):
@@ -834,17 +928,11 @@ def get_all_volunteering_time(start_date=None, end_date=None):
 def get_privacy_settings(propel_id):
     """Get privacy settings for a user"""
     logger.info(f"Get Privacy Settings for {propel_id}")
-    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
-    if oauth_user is None:
-        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
-        return None
-
-    user_id = oauth_user["sub"]
-
-    # Get the user
-    user = fetch_user_by_user_id(user_id)
+    # Same lookup as the profile itself, so the toggles act on the doc the
+    # person is looking at whichever provider they signed in with (#501).
+    user, _user_id = _resolve_and_ensure_user(propel_id)
     if user is None:
-        warning(logger, "User not found", user_id=user_id)
+        warning(logger, "User not found", propel_id=propel_id)
         return None
 
     return user.get_privacy_settings()
@@ -853,17 +941,11 @@ def get_privacy_settings(propel_id):
 def update_privacy_settings(propel_id, data):
     """Update privacy settings for a user"""
     logger.info(f"Update Privacy Settings for {propel_id} {data}")
-    oauth_user = get_oauth_user_from_propel_user_id(propel_id)
-    if oauth_user is None:
-        warning(logger, "Could not get OAuth user from PropelAuth", propel_id=propel_id)
-        return None
-
-    user_id = oauth_user["sub"]
-
-    # Get the user
-    user = fetch_user_by_user_id(user_id)
+    # Same lookup as the profile itself, so the toggles act on the doc the
+    # person is looking at whichever provider they signed in with (#501).
+    user, _user_id = _resolve_and_ensure_user(propel_id)
     if user is None:
-        warning(logger, "User not found", user_id=user_id)
+        warning(logger, "User not found", propel_id=propel_id)
         return None
 
     # Update the privacy settings

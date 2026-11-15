@@ -105,8 +105,7 @@ def svc(monkeypatch):
         monkeypatch,
         "services.users_service",
         get_propel_user_details_by_id=MagicMock(),
-        get_slack_user_from_propel_user_id=MagicMock(),
-        get_user_from_slack_id=MagicMock(),
+        resolve_caller=MagicMock(),
     )
     _stub_module(
         monkeypatch,

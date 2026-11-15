@@ -10,12 +10,11 @@ from common.utils.firestore_helpers import doc_to_json, log_execution_time, regi
 from common.utils.slack import send_slack_audit, send_slack, create_slack_channel, invite_user_to_channel
 from common.utils.github import create_github_repo, validate_github_username, get_all_repos
 from common.utils.firebase import get_hackathon_by_event_id
-from common.utils.oauth_providers import extract_slack_user_id, is_slack_user_id
+from common.utils.oauth_providers import extract_slack_user_id
 from db.db import get_db, get_user_doc_reference
 from services.users_service import (
     get_propel_user_details_by_id,
-    get_slack_user_from_propel_user_id,
-    get_user_from_slack_id,
+    resolve_caller,
 )
 from services.nonprofits_service import get_single_npo
 from api.messages.message import Message
@@ -471,18 +470,17 @@ def join_team(propel_user_id, json):
 
     db = get_db()
 
-    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    if not slack_user or "sub" not in slack_user:
-        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+    # One lookup for "who is this?", shared with the profile (issue #501) —
+    # never the current login's provider id, which differs between a person's
+    # Google and Slack sign-ins.
+    caller = resolve_caller(propel_user_id)
+    if caller is None:
+        logger.warning(f"Could not resolve a user for propel_user_id={propel_user_id}")
         return Message("Error: User not found")
 
-    slack_user_id = slack_user["sub"]
-    slack_member_id = extract_slack_user_id(slack_user_id)
-    user = get_user_from_slack_id(slack_user_id)
-    if user is None:
-        logger.warning(f"Could not resolve database user for slack_user_id={slack_user_id}")
-        return Message("Error: User not found")
-
+    user = caller.user
+    slack_user_id = caller.slack_user_id
+    slack_member_id = extract_slack_user_id(slack_user_id) if slack_user_id else None
     userid = user.id
 
     team_ref = db.collection('teams').document(team_id)
@@ -504,12 +502,14 @@ def join_team(propel_user_id, json):
         team_users = team_data.get("users", [])
         user_teams = user_data.get("teams", [])
 
-        if user_ref in team_users:
+        # Any of this person's docs counts — someone with an older second
+        # account must not be listed on the roster twice.
+        if any(caller.owns(member) for member in team_users):
             logger.warning(f"User {userid} is already in team {team_id}")
             return False, None
 
-        new_team_users = list(set(team_users + [user_ref]))
-        new_user_teams = list(set(user_teams + [team_ref]))
+        new_team_users = list(team_users) + [user_ref]
+        new_user_teams = [t for t in user_teams if getattr(t, "id", t) != team_id] + [team_ref]
 
         transaction.update(team_ref, {"users": new_team_users})
         transaction.update(user_ref, {"teams": new_user_teams})
@@ -523,15 +523,15 @@ def join_team(propel_user_id, json):
         if success:
             send_slack_audit(action="join_team", message="Added", payload=json)
             message = "Joined Team"
-            if team_slack_channel and slack_user_id:
-                if is_slack_user_id(slack_user_id):
+            if team_slack_channel:
+                if slack_user_id:
                     invite_user_to_channel(slack_user_id, team_slack_channel)
                     # Send a simple message that pings the user in the channel to let them know they were added
                     send_slack(f"<@{slack_member_id}> has joined the team!", team_slack_channel)
                 else:
-                    # Non-Slack login (e.g. Google) has no Slack ID to @-mention or invite —
+                    # No Slack login (e.g. Google only): nothing to @-mention or invite —
                     # use the display name so we don't post a mangled "@oauth2" mention.
-                    display_name = (user.name or slack_user.get("name") or "A member")
+                    display_name = (user.name or "A member")
                     send_slack(f"{display_name} has joined the team!", team_slack_channel)
         else:
             message = "User was already in the team"
@@ -551,53 +551,46 @@ def unjoin_team(propel_user_id, json):
 
     db = get_db()
 
-    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    if not slack_user or "sub" not in slack_user:
-        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+    caller = resolve_caller(propel_user_id)
+    if caller is None:
+        logger.warning(f"Could not resolve a user for propel_user_id={propel_user_id}")
         return Message("Error: User not found")
 
-    slack_user_id = slack_user["sub"]
-    slack_member_id = extract_slack_user_id(slack_user_id)
-    user = get_user_from_slack_id(slack_user_id)
-    if user is None:
-        logger.warning(f"Could not resolve database user for slack_user_id={slack_user_id}")
-        return Message("Error: User not found")
-
+    user = caller.user
     userid = user.id
+    slack_member_id = extract_slack_user_id(caller.slack_user_id) if caller.slack_user_id else None
 
     team_ref = db.collection('teams').document(team_id)
-    user_ref = db.collection('users').document(userid)
 
     @firestore.transactional
     def update_team_and_user(transaction):
         team_doc = team_ref.get(transaction=transaction)
-        user_doc = user_ref.get(transaction=transaction)
-
         if not team_doc.exists:
             raise ValueError("Team not found")
-        if not user_doc.exists:
-            raise ValueError("User not found")
 
         team_data = team_doc.to_dict()
-        user_data = user_doc.to_dict()
-
         user_list = team_data.get("users", [])
-        user_teams = user_data.get("teams", [])
-
         team_slack_channel = team_data.get("slack_channel")
 
-        if user_ref not in user_list:
+        # Whichever of this person's docs the roster holds (see resolve_caller).
+        mine = [member for member in user_list if caller.owns(member)]
+        if not mine:
             logger.warning(f"User {userid} not found in team {team_id}")
             return False
 
-        new_user_list = [u for u in user_list if u.id != userid]
-        new_user_teams = [t for t in user_teams if t.id != team_id]
+        # Firestore transactions need every read before the first write.
+        my_docs = [(ref, ref.get(transaction=transaction)) for ref in mine if hasattr(ref, "get")]
 
-        transaction.update(team_ref, {"users": new_user_list})
-        transaction.update(user_ref, {"teams": new_user_teams})
+        transaction.update(team_ref, {"users": [m for m in user_list if not caller.owns(m)]})
+        for ref, snap in my_docs:
+            if not snap.exists:
+                continue
+            teams = (snap.to_dict() or {}).get("teams", [])
+            transaction.update(ref, {"teams": [t for t in teams if getattr(t, "id", t) != team_id]})
 
-        if team_slack_channel and slack_member_id:
-            send_slack(f"<@{slack_member_id}> has left the team.", team_slack_channel)
+        if team_slack_channel:
+            who = f"<@{slack_member_id}>" if slack_member_id else (user.name or "A member")
+            send_slack(f"{who} has left the team.", team_slack_channel)
 
         logger.debug(f"User {userid} removed from team {team_id}")
         return True
