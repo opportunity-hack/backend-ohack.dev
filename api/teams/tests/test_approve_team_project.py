@@ -313,8 +313,9 @@ def test_my_teams_carry_the_project_and_stay_private(env, monkeypatch):
     db.put("teams", "team-2", {"name": "Other", "users": [db.ref("users", "u1")]})  # no project yet
     hackathon = {"id": "hack-doc", "teams": [db.ref("teams", "team-1"), db.ref("teams", "team-2")]}
     monkeypatch.setattr(svc, "get_hackathon_by_event_id", lambda event_id: hackathon)
-    monkeypatch.setattr(svc, "get_propel_user_details_by_id",
-                        lambda pid: (None, "oauth2|slack|T1-U1", None, None, "Ada", None))
+    from services.users_service import Caller
+    me = type("U", (), {"id": "u1", "user_id": "oauth2|slack|T1-U1", "name": "Ada"})()
+    monkeypatch.setattr(svc, "resolve_caller", lambda pid: Caller(me, {"u1"}, me.user_id))
 
     teams = {t["id"]: t for t in svc.get_my_teams_by_event_id("propel-ada", "fall-2026")["teams"]}
 

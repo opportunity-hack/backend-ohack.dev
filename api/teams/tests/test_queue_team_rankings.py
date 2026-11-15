@@ -33,10 +33,15 @@ def env(monkeypatch):
     monkeypatch.setattr(svc, "get_hackathon_by_event_id",
                         lambda event_id: hackathon if event_id == "fall-2026" else None)
     monkeypatch.setattr(svc, "validate_github_username", lambda name: name != "bad@example.com")
-    monkeypatch.setattr(svc, "get_propel_user_details_by_id",
-                        lambda pid: (None, "oauth2|slack|T1-UCREATOR", None, None, "Ada", None))
-    state = {"creator": creator}
-    monkeypatch.setattr(svc, "get_user_doc_reference", lambda uid: state["creator"])
+    # The creator is resolved once by resolve_caller (PropelAuth account, not
+    # the login provider's id — frontend issue #501). `state["creator"] = None`
+    # simulates a person no identity source can resolve.
+    from services.users_service import Caller
+    creator_user = type("U", (), {"id": creator.id, "name": "Ada", "user_id": "oauth2|slack|T1-UCREATOR"})()
+    state = {"creator": Caller(creator_user, {creator.id}, "oauth2|slack|T1-UCREATOR")}
+    monkeypatch.setattr(svc, "resolve_caller", lambda pid: state["creator"])
+    # Picked teammates are still linked by their Slack id.
+    monkeypatch.setattr(svc, "get_user_doc_reference", lambda uid: creator)
     monkeypatch.setattr(svc, "create_slack_channel", lambda name: calls["slack_channels"].append(name) or "C123")
     monkeypatch.setattr(svc, "add_bot_to_channel", lambda cid: None)
     monkeypatch.setattr(svc, "send_slack", lambda msg, channel: calls["slack_messages"].append((channel, msg)))
@@ -237,7 +242,7 @@ def test_unknown_event(env):
 
 
 def test_missing_creator_profile_refused_before_side_effects(env):
-    """get_user_doc_reference → None used to crash AFTER the team was
+    """An unresolvable creator used to crash AFTER the team was
     inserted and the Slack channel created."""
     db, calls, state = env
     state["creator"] = None

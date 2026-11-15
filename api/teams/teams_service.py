@@ -11,6 +11,7 @@ from services.nonprofits_service import get_single_npo
 from common.utils.firestore_helpers import clear_all_caches as clear_cache, register_cache
 from services.users_service import (
     get_propel_user_details_by_id,
+    resolve_caller,
     save_user,
     get_user_from_slack_id
 )
@@ -756,20 +757,26 @@ def queue_team(propel_user_id, json):
             "We couldn't find that GitHub username. Use your username without the @ symbol, not your email.",
         )
 
-    _, user_id, _, _, name, _ = get_propel_user_details_by_id(propel_user_id)
-    slack_user_id = user_id
-
-    # Extract the raw Slack user ID (handles both OAuth formats and Google users gracefully)
-    root_slack_user_id = extract_slack_user_id(slack_user_id)
-    user = get_user_doc_reference(root_slack_user_id)
-    if user is None:
+    # The creator's user doc is the one their profile shows — found by their
+    # PropelAuth account, not by the current login's provider id, which is
+    # different for the same person's Google and Slack sign-ins (issue #501:
+    # "We couldn't find your profile" on the final submit).
+    caller = resolve_caller(propel_user_id)
+    if caller is None:
         return _refusal(
             "user_not_found",
-            "We couldn't find your profile. Open your profile page once (it creates it), then try again.",
+            "We couldn't load your account. Sign out, sign back in, then try again.",
         )
+    db = get_db()
+    user = db.collection("users").document(caller.user.id)
     users_list = [user]
 
-    db = get_db()
+    # Slack id is only for the channel invite and the @-mention; None for a
+    # person with no Slack login.
+    slack_user_id = caller.slack_user_id
+    root_slack_user_id = extract_slack_user_id(slack_user_id) if slack_user_id else None
+    creator_mention = f"<@{root_slack_user_id}>" if root_slack_user_id else (caller.user.name or "A team member")
+
     logger.debug("Team Queue")
     logger.debug(json)
 
@@ -801,7 +808,7 @@ def queue_team(propel_user_id, json):
 :rocket: Team *{team_name}* has been created! :tada:
 
 *Channel:* #{slack_channel}
-*Created by:* <@{root_slack_user_id}> (add your other team members here)
+*Created by:* {creator_mention} (add your other team members here)
 
 *Your ranked projects:*
 {ranking_block}
@@ -823,8 +830,11 @@ Let's make a difference! :muscle: :heart:
     send_slack(slack_message, "log-team-creation")
 
 
-    logger.info("Inviting user %s to slack channel %s", slack_user_id, slack_channel)
-    invite_user_to_channel(slack_user_id, slack_target)
+    if slack_user_id:
+        logger.info("Inviting the team creator to slack channel %s", slack_channel)
+        invite_user_to_channel(slack_user_id, slack_target)
+    else:
+        logger.info("Team creator has no Slack login; skipping the channel invite")
 
     # Look at teamMember.id to get the slack user id
     
@@ -852,10 +862,14 @@ Let's make a difference! :muscle: :heart:
                     name=member.get("real_name", ""),
                     nickname=member.get("name", "")
                 )
-                users_list.append(get_user_doc_reference(new_user.user_id))
+                member_ref = get_user_doc_reference(new_user.user_id) if new_user else None
             else:
-                in_db_user = get_user_doc_reference(user_db_check.user_id)
-                users_list.append(in_db_user)
+                member_ref = get_user_doc_reference(user_db_check.user_id)
+            # A None here used to crash the team-linking loop below, after the
+            # team and its Slack channel already existed.
+            if member_ref is not None and member_ref not in users_list:
+                users_list.append(member_ref)
+            if user_db_check:
                 logger.info("User %s already exists in the database", user_db_check)
 
 
@@ -924,8 +938,12 @@ Let's make a difference! :muscle: :heart:
 def get_my_teams_by_event_id(propel_id, event_id):
     logger.debug(f"Getting my teams by event ID {event_id} for user {propel_id}")
 
-    # Call get_propel_user_details_by_id(propel_id) to get user details
-    _, user_id, _, _, name, _ = get_propel_user_details_by_id(propel_id)
+    # Membership is "one of this person's user docs is on the roster" — the
+    # same person whichever provider they signed in with (issue #501). It used
+    # to compare the current login's provider id, so a team joined with Google
+    # disappeared after signing in with Slack.
+    caller = resolve_caller(propel_id)
+    user_id = getattr(caller.user, "user_id", None) if caller else None
 
     hackathon_dict = get_hackathon_by_event_id(event_id)
 
@@ -970,28 +988,12 @@ def get_my_teams_by_event_id(propel_id, event_id):
         # Collect all user references for batch fetching
         all_user_refs.extend(user_refs)
 
-    # Batch fetch all users at once (1 query instead of N*M queries)
-    if all_user_refs:
-        user_docs = db.get_all(all_user_refs)
-
-        # Create a map of user_ref.id -> user_data for fast lookup
-        user_map = {}
-        for user_doc in user_docs:
-            if user_doc.exists:
-                user_data = user_doc.to_dict()
-                user_map[user_doc.id] = user_data.get("user_id")
-
-        # Filter teams that contain the target user
-        my_teams = []
-        for item in teams_with_users:
-            team_data = item["team_data"]
-            user_refs = item["user_refs"]
-
-            # Check if any user in this team matches our target user
-            for user_ref in user_refs:
-                if user_ref.id in user_map and user_map[user_ref.id] == user_id:
-                    my_teams.append(team_data)
-                    break  # No need to check other users in this team
+    if all_user_refs and caller is not None:
+        # Roster entries are user doc refs, so no user docs need to be read.
+        my_teams = [
+            item["team_data"] for item in teams_with_users
+            if any(caller.owns(user_ref) for user_ref in item["user_refs"])
+        ]
 
         # `problem_statements` holds DocumentReferences (not JSON) — replace
         # it with `project: {id, title}` (the project the team was approved
@@ -1805,11 +1807,11 @@ def send_team_message(admin_user, teamid, json):
 
 def user_is_on_team(propel_user_id, team_id):
     """
-    Returns True if the caller (identified by their PropelAuth UUID) is one of
-    the team's users[]. Translates propel_id -> OAuth user_id via
-    get_propel_user_details_by_id (same pattern as get_my_teams_by_event_id),
-    then walks team.users[] DocumentReferences and compares each user doc's
-    `user_id` field (or its `propel_id` field as a fallback).
+    True when one of the caller's user docs is in the team's users[].
+
+    The caller is resolved by `resolve_caller` (PropelAuth account first), so
+    the answer is the same whichever provider they signed in with. It used to
+    compare the current login's provider id against each member doc.
     """
     if not propel_user_id or not team_id:
         return False
@@ -1817,31 +1819,18 @@ def user_is_on_team(propel_user_id, team_id):
     team_doc = db.collection("teams").document(team_id).get()
     if not team_doc.exists:
         return False
+    members = (team_doc.to_dict() or {}).get("users", [])
+    if not members:
+        return False
 
     try:
-        details = get_propel_user_details_by_id(propel_user_id) or ()
-        caller_oauth_user_id = details[1] if len(details) > 1 else None
+        caller = resolve_caller(propel_user_id)
     except Exception as e:
-        logger.warning("user_is_on_team: get_propel_user_details_by_id failed: %s", e)
-        caller_oauth_user_id = None
-
-    team_data = team_doc.to_dict() or {}
-    for ref in team_data.get("users", []):
-        try:
-            snap = ref.get() if hasattr(ref, "get") else db.collection("users").document(ref).get()
-            if not snap.exists:
-                continue
-            user_data = snap.to_dict() or {}
-            stored_user_id = user_data.get("user_id")
-            stored_propel_id = user_data.get("propel_id")
-            if caller_oauth_user_id and stored_user_id and stored_user_id == caller_oauth_user_id:
-                return True
-            if stored_propel_id and stored_propel_id == propel_user_id:
-                return True
-        except Exception as e:
-            logger.warning("user_is_on_team: failed to resolve a user ref on team %s: %s", team_id, e)
-            continue
-    return False
+        logger.warning("user_is_on_team: could not resolve the caller: %s", e)
+        return False
+    if caller is None:
+        return False
+    return any(caller.owns(member) for member in members)
 
 
 def _completion_done_count(checklist):
@@ -1859,8 +1848,10 @@ def _project_link(team_data, team_id):
 
 def _completer_name(propel_user_id):
     try:
-        details = get_propel_user_details_by_id(propel_user_id) or {}
-        return details.get("firstName") or details.get("email") or "A teammate"
+        # (email, user_id, last_login, profile_image, name, nickname)
+        details = get_propel_user_details_by_id(propel_user_id) or ()
+        name = details[4] if len(details) > 4 else None
+        return name or "A teammate"
     except Exception:
         return "A teammate"
 
