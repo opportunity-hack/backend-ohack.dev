@@ -189,3 +189,22 @@ class TestLeaderboardService:
         # Check that stats are calculated correctly
         assert any(stat["stat"] == "GitHub Commits" and stat["value"] == 15 for stat in result["generalStats"])
         assert any(stat["stat"] == "Pull Requests" and stat["value"] == 5 for stat in result["generalStats"])
+
+    @patch('api.leaderboard.leaderboard_service.set_cached')
+    @patch('api.leaderboard.leaderboard_service.get_cached', return_value=None)
+    @patch('api.leaderboard.leaderboard_service.get_github_organizations')
+    @patch('api.leaderboard.leaderboard_service.get_hackathon_by_event_id')
+    def test_get_github_leaderboard_event_id_lookup(self, mock_get_hackathon, mock_orgs, _get_cached, _set_cached):
+        """Use the event_id as given; fall back to the YYYY_season alias only if not found."""
+        mock_orgs.return_value = {"github_organizations": []}
+
+        # New-style ID exists as-is: no fallback lookup
+        mock_get_hackathon.side_effect = lambda eid: {"event_id": eid} if eid == "fall-2026" else None
+        get_github_leaderboard("fall-2026")
+        assert [c.args[0] for c in mock_get_hackathon.call_args_list] == ["fall-2026"]
+
+        # Legacy event stored as YYYY_season: falls back to the alias
+        mock_get_hackathon.reset_mock()
+        mock_get_hackathon.side_effect = lambda eid: {"event_id": eid} if eid == "2025_summer" else None
+        get_github_leaderboard("summer-2025")
+        assert [c.args[0] for c in mock_get_hackathon.call_args_list] == ["summer-2025", "2025_summer"]

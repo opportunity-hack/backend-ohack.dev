@@ -513,12 +513,6 @@ def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
     """
     Get GitHub leaderboard data for an event. Cached 5 minutes in Redis.
     """
-    # Normalize season-YYYY -> YYYY_season (e.g. "summer-2025" -> "2025_summer")
-    normalized_id = _normalize_event_id(event_id)
-    if normalized_id != event_id:
-        logger.info("get_github_leaderboard: normalized event_id %s -> %s", event_id, normalized_id)
-        event_id = normalized_id
-
     cache_key = f"leaderboard:{event_id}"
     cached_result = get_cached(cache_key)
     if cached_result is not None:
@@ -528,8 +522,17 @@ def get_github_leaderboard(event_id: str) -> Dict[str, Any]:
     start_time = time.time()
     logger.debug("Getting GitHub leaderboard for event ID: %s", event_id)
 
-    # Fetch hackathon ONCE and pass down to all helpers.
+    # Fetch hackathon ONCE and pass down to all helpers. Try the ID as given
+    # first (newer events use "fall-2026"), then fall back to the legacy
+    # YYYY_season alias (e.g. "summer-2025" -> "2025_summer").
     hackathon = get_hackathon_by_event_id(event_id)
+    if not hackathon:
+        normalized_id = _normalize_event_id(event_id)
+        if normalized_id != event_id:
+            logger.info("get_github_leaderboard: falling back to event_id %s -> %s", event_id, normalized_id)
+            hackathon = get_hackathon_by_event_id(normalized_id)
+            if hackathon:
+                event_id = normalized_id
 
     org_data = get_github_organizations(event_id, hackathon=hackathon)
 
