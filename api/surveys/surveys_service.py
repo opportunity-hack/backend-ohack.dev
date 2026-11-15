@@ -55,6 +55,37 @@ def _parse_event_date(date_str: Optional[str], tz, end_of_day: bool = False):
     return tz.localize(datetime(year, month, day, 0, 0, 0))
 
 
+def _parse_post_opens_at(event: Dict[str, Any], tz):
+    """constraints.survey_post_opens_at as a tz-aware datetime, or None.
+
+    A value with no offset is read as event-local time."""
+    raw = (event.get("constraints") or {}).get("survey_post_opens_at")
+    if not raw or not isinstance(raw, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(raw.strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return tz.localize(parsed)
+    return parsed
+
+
+def resolve_survey_mode(event: Dict[str, Any], requested: Optional[str] = None) -> str:
+    """The mode a request is served in.
+
+    `requested` ('live' | 'post') comes from the forced-form URLs
+    (/survey/during, /survey/complete) and from a submit, which names the form
+    the person actually filled in. It is honoured once the event has started;
+    an upcoming event stays 'upcoming' whatever is asked for."""
+    natural = compute_event_mode(event)
+    if natural == "upcoming":
+        return natural
+    if isinstance(requested, str) and requested.strip().lower() in ("live", "post"):
+        return requested.strip().lower()
+    return natural
+
+
 def compute_event_mode(event: Dict[str, Any]) -> str:
     """Return 'live', 'post', or 'upcoming' for the event's current window.
 
@@ -71,6 +102,12 @@ def compute_event_mode(event: Dict[str, Any]) -> str:
     start = _parse_event_date(event.get("start_date"), tz, end_of_day=False)
     end = _parse_event_date(event.get("end_date"), tz, end_of_day=True)
 
+    # Admin-set "post-event survey opens at" (constraints.survey_post_opens_at):
+    # lets the end-of-event survey open at the closing ceremony instead of
+    # after 23:59:59 on the last day.
+    post_opens = _parse_post_opens_at(event, tz)
+    if post_opens and now >= post_opens:
+        return "post"
     if end and now > end:
         return "post"
     if start and now < start:
@@ -157,7 +194,11 @@ def allowed_roles_for(trusted: bool, eligible_roles: List[str]) -> List[str]:
     return list(eligible_roles) if trusted else ["nonprofit"]
 
 
-def get_survey_context(event_id: str, propel_user_id: Optional[str]) -> Tuple[Dict[str, Any], int]:
+def get_survey_context(
+    event_id: str,
+    propel_user_id: Optional[str],
+    requested_mode: Optional[str] = None,
+) -> Tuple[Dict[str, Any], int]:
     """What the frontend needs to render the right form: mode, the caller's
     eligible roles, whether a CAPTCHA is required, and a basic event summary."""
     from common.utils.firebase import get_hackathon_by_event_id
@@ -166,7 +207,8 @@ def get_survey_context(event_id: str, propel_user_id: Optional[str]) -> Tuple[Di
     if not event:
         return {"success": False, "error": "Event not found"}, 404
 
-    mode = compute_event_mode(event)
+    natural_mode = compute_event_mode(event)
+    mode = resolve_survey_mode(event, requested_mode)
     logged_in = bool(propel_user_id)
     roles = get_user_event_roles(propel_user_id, event_id) if logged_in else []
     eligible = bool(roles)
@@ -184,6 +226,8 @@ def get_survey_context(event_id: str, propel_user_id: Optional[str]) -> Tuple[Di
     return {
         "success": True,
         "mode": mode,
+        "natural_mode": natural_mode,
+        "forced": mode != natural_mode,
         "logged_in": logged_in,
         "eligible": eligible if logged_in else None,
         "roles": roles,
@@ -214,7 +258,9 @@ def submit_survey_response(
     if not event:
         return {"success": False, "error": "Event not found"}, 404
 
-    mode = compute_event_mode(event)
+    # The form the person filled in wins (payload.mode), so answers are never
+    # filed under a mode whose questions they didn't see.
+    mode = resolve_survey_mode(event, payload.get("mode"))
     if mode not in ("live", "post"):
         return {"success": False, "error": "This event's feedback form is not open yet."}, 403
 
