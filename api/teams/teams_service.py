@@ -1739,70 +1739,183 @@ def get_queued_teams():
     return {"teams": teams}
 
 
+MAX_TEAM_MESSAGE_SUBJECT = 150
+
+
+def _admin_display_name(admin_user):
+    """PropelAuth's flask LoggedInUser has no first/last name (that was the
+    500 on every team message) — use whatever the token carries."""
+    first = getattr(admin_user, "first_name", None) or ""
+    last = getattr(admin_user, "last_name", None) or ""
+    full = f"{first} {last}".strip()
+    if full:
+        return full
+    email = getattr(admin_user, "email", None)
+    if email:
+        return email
+    return f"Admin ({getattr(admin_user, 'user_id', 'unknown')})"
+
+
+def _team_member_contacts(db, team_data):
+    """[{id, name, email}] for every member of the team, in roster order.
+
+    `users[]` holds DocumentReferences (or, on a few legacy docs, id strings);
+    one batched read. `email` is None when the user doc has no address.
+    """
+    refs = []
+    for member in team_data.get("users", []) or []:
+        if isinstance(member, str):
+            if member:
+                refs.append(db.collection("users").document(member))
+        elif member is not None and hasattr(member, "id"):
+            refs.append(member)
+    if not refs:
+        return []
+
+    contacts = []
+    for snap in db.get_all(refs):
+        data = snap.to_dict() if snap is not None and snap.exists else None
+        if not data:
+            continue
+        email = (data.get("email_address") or "").strip() or None
+        contacts.append({
+            "id": snap.id,
+            "name": data.get("name") or data.get("nickname") or "Teammate",
+            "email": email,
+        })
+    return contacts
+
+
 def send_team_message(admin_user, teamid, json):
     """
-    Send a message to a team
-    - Get the team document
-    - Send the message to the team Slack channel
+    Send an admin message to a team over Slack (the team channel), email
+    (every member with an address on file), or both.
+
+    Body: {message, channels?: {slack: bool, email: bool}, subject?}
+    `channels` defaults to Slack only (the old behaviour).
+
+    Returns {success, message, team_id, delivery: {slack, email}} — success is
+    true when at least one channel delivered. Nothing delivered → 502 with
+    `error: "delivery_failed"` and the same delivery breakdown.
     """
-    send_slack_audit(action="send_team_message", message="Sending", payload=json)
-    
-    
-    admin_name = f"{admin_user.first_name} ({admin_user.last_name})"
+    body = json or {}
+    message = (body.get("message") or "").strip()
+    if not message:
+        return {"error": "empty_message", "message": "Write a message first.", "success": False}, 400
+
+    channels = body.get("channels") or {"slack": True}
+    send_to_slack = bool(channels.get("slack"))
+    send_to_email = bool(channels.get("email"))
+    if not send_to_slack and not send_to_email:
+        return {"error": "no_channel", "message": "Pick Slack, email, or both.", "success": False}, 400
+
     db = get_db()
-    logger.debug("Sending Team Message")
-    
-    # Get the team document
     team_doc = db.collection('teams').document(teamid)
     team_data = team_doc.get().to_dict()
-    
     if not team_data:
-        return {
-            "message": "Error: Team not found",
-            "success": False
-        }
-    
-    # Get the message from the request
-    message = json.get("message", "")
-    
-    # Send the message to the team Slack channel
-    slack_channel = team_data["slack_channel"]
-    send_slack(message, slack_channel)
+        return {"error": "team_not_found", "message": "Team not found", "success": False}, 404
 
-    # I'd also like to send each of them an email using send_volunteer_message from volunteers_service.py where we need to get their Slack User ID and pass that in as recipient_id
-    from api.volunteers.volunteers_service import send_volunteer_message, get_user_from_slack_id
-    for user_ref in team_data.get("users", []):
-        user_data = user_ref.get().to_dict()
-        slack_user_id = user_data.get("user_id", "")
-        if slack_user_id:
-            send_volunteer_message(
-                admin_user=admin_user,
-                recipient_id=slack_user_id,
-                subject=f"Message from Opportunity Hack Team {team_data['name']}",
-                message=message
-            )
-    
+    team_name = team_data.get("name") or "your team"
+    subject = (body.get("subject") or "").strip()[:MAX_TEAM_MESSAGE_SUBJECT] or f"Update for {team_name}"
+    admin_name = _admin_display_name(admin_user)
 
-    # If communication_history doesn't exist, create it and append the timestamp, sender, text
-    if "communication_history" not in team_data:
-        team_data["communication_history"] = []
-    team_data["communication_history"].append({
-        "timestamp": datetime.now().isoformat(),
-        "sender": admin_name,
-        "text": message
-    })
-    # Update the team document
-    team_doc.set({
-        "communication_history": team_data["communication_history"]
-    }, merge=True)
-    # Clear cache
-    clear_cache()
-    
-    return {
-        "message": f"Message sent to team {teamid}",
-        "success": True,
-        "team_id": teamid
+    send_slack_audit(
+        action="send_team_message",
+        message=f"{admin_name} messaging team {team_name} ({teamid})",
+        payload={"team_id": teamid, "slack": send_to_slack, "email": send_to_email, "subject": subject},
+    )
+
+    delivery = {}
+
+    if send_to_slack:
+        slack_channel = team_data.get("slack_channel")
+        slack_result = {"sent": False, "channel": slack_channel, "error": None}
+        if not slack_channel:
+            slack_result["error"] = "This team has no Slack channel."
+        else:
+            try:
+                send_slack(message, slack_channel)
+                slack_result["sent"] = True
+            except Exception as exc:  # pylint: disable=broad-except
+                logger.exception("Team message: Slack post to #%s failed", slack_channel)
+                slack_result["error"] = str(exc) or "Slack post failed"
+        delivery["slack"] = slack_result
+
+    if send_to_email:
+        from services.volunteers_service import send_email_to_address
+
+        sent, failed, missing = [], [], []
+        seen = set()
+        try:
+            contacts = _team_member_contacts(db, team_data)
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Team message: could not read members of team %s", teamid)
+            contacts = None
+
+        if contacts is None:
+            delivery["email"] = {"sent": [], "failed": [], "missing_email": [],
+                                 "error": "Couldn't read the team's members."}
+        else:
+            for person in contacts:
+                email = person["email"]
+                if not email or "@" not in email:
+                    missing.append(person["name"])
+                    continue
+                key = email.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                try:
+                    result = send_email_to_address(
+                        email=email,
+                        message=message,
+                        subject=subject,
+                        admin_user_id=getattr(admin_user, "user_id", None),
+                        admin_user=admin_user,
+                        recipient_type="hacker",
+                        name=person["name"],
+                    )
+                except Exception as exc:  # pylint: disable=broad-except
+                    logger.exception("Team message: email to a member of %s failed", teamid)
+                    result = {"success": False, "error": str(exc)}
+                if result.get("success"):
+                    sent.append({"name": person["name"], "email": email})
+                else:
+                    failed.append({"name": person["name"], "email": email,
+                                   "error": result.get("error") or "Email failed"})
+            delivery["email"] = {"sent": sent, "failed": failed, "missing_email": missing,
+                                 "error": None if contacts else "This team has no members to email."}
+
+    slack_ok = bool(delivery.get("slack", {}).get("sent"))
+    email_ok = bool(delivery.get("email", {}).get("sent"))
+    delivered_via = [name for name, ok in (("slack", slack_ok), ("email", email_ok)) if ok]
+
+    if delivered_via:
+        history = list(team_data.get("communication_history") or [])
+        history.append({
+            "timestamp": datetime.now().isoformat(),
+            "sender": admin_name,
+            "text": message,
+            "channels": delivered_via,
+            "subject": subject if email_ok else None,
+            "email_count": len(delivery.get("email", {}).get("sent", [])),
+        })
+        team_doc.set({"communication_history": history}, merge=True)
+        clear_cache()
+
+    response = {
+        "success": bool(delivered_via),
+        "team_id": teamid,
+        "delivery": delivery,
+        "message": (
+            f"Message sent via {' and '.join(delivered_via)}." if delivered_via
+            else "Nothing was delivered."
+        ),
     }
+    if not delivered_via:
+        response["error"] = "delivery_failed"
+        return response, 502
+    return response
 
 
 def user_is_on_team(propel_user_id, team_id):
