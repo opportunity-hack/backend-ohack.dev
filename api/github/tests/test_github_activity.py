@@ -282,7 +282,7 @@ def test_get_github_activity_rejects_invalid_repo_name():
 
 
 def test_get_github_activity_404s_on_unknown_repo(monkeypatch):
-    github_service._ACTIVITY_CACHE.clear()
+    github_service.clear_activity_caches()
     monkeypatch.setattr(github_service, "get_repo_activity", lambda org, repo: (_ for _ in ()).throw(UnknownObjectException(404, {}, None)))
     payload, status = github_service.get_github_activity("org", "repo")
     assert status == 404
@@ -290,7 +290,7 @@ def test_get_github_activity_404s_on_unknown_repo(monkeypatch):
 
 
 def test_get_github_activity_503s_on_rate_limit(monkeypatch):
-    github_service._ACTIVITY_CACHE.clear()
+    github_service.clear_activity_caches()
     monkeypatch.setattr(
         github_service,
         "get_repo_activity",
@@ -301,37 +301,95 @@ def test_get_github_activity_503s_on_rate_limit(monkeypatch):
     assert payload["error"] == "github_rate_limited"
 
 
-def test_get_github_activity_caches_success_only(monkeypatch):
-    github_service._ACTIVITY_CACHE.clear()
-    call_count = {"n": 0}
+def _counting(monkeypatch, fn):
+    calls = {"n": 0}
 
-    def fake_activity(org, repo):
-        call_count["n"] += 1
-        return {"success": True, "repo": {}, "commits": {}, "contributors": [], "open_prs": 0}
+    def wrapped(org, repo):
+        calls["n"] += 1
+        return fn(org, repo)
 
-    monkeypatch.setattr(github_service, "get_repo_activity", fake_activity)
+    monkeypatch.setattr(github_service, "get_repo_activity", wrapped)
+    return calls
 
-    payload1, status1 = github_service.get_github_activity("org", "repo")
-    payload2, status2 = github_service.get_github_activity("org", "repo")
+
+def _payload(total=3, last="2026-11-15T10:00:00+00:00"):
+    return {
+        "success": True,
+        "repo": {},
+        "commits": {"total_recent": total, "last_commit_at": last},
+        "contributors": [],
+        "open_prs": 0,
+    }
+
+
+def test_get_github_activity_caches_repo_with_commits_in_long_tier(monkeypatch):
+    github_service.clear_activity_caches()
+    calls = _counting(monkeypatch, lambda org, repo: _payload())
+
+    _, status1 = github_service.get_github_activity("org", "repo")
+    _, status2 = github_service.get_github_activity("org", "repo")
 
     assert status1 == status2 == 200
-    assert call_count["n"] == 1  # second call served from cache
+    assert calls["n"] == 1
+    assert ("org", "repo") in github_service._ACTIVITY_CACHE
+    assert ("org", "repo") not in github_service._ACTIVITY_EMPTY_CACHE
 
 
-def test_get_github_activity_does_not_cache_errors(monkeypatch):
-    github_service._ACTIVITY_CACHE.clear()
-    call_count = {"n": 0}
+def test_get_github_activity_empty_repo_goes_to_short_tier(monkeypatch):
+    github_service.clear_activity_caches()
+    calls = _counting(monkeypatch, lambda org, repo: _payload(total=0, last=None))
 
-    def fake_activity(org, repo):
-        call_count["n"] += 1
+    payload, status = github_service.get_github_activity("org", "repo")
+    github_service.get_github_activity("org", "repo")
+
+    assert status == 200 and payload["commits"]["total_recent"] == 0
+    assert calls["n"] == 1  # still cached, just in the 60s tier
+    assert ("org", "repo") in github_service._ACTIVITY_EMPTY_CACHE
+    assert ("org", "repo") not in github_service._ACTIVITY_CACHE
+    assert github_service._ACTIVITY_EMPTY_CACHE.ttl < github_service._ACTIVITY_CACHE.ttl
+
+
+@pytest.mark.parametrize("bad", [None, {}, {"success": True}, {"commits": None}, "nope"])
+def test_get_github_activity_none_or_malformed_payload_is_502_not_success(monkeypatch, bad):
+    github_service.clear_activity_caches()
+    calls = _counting(monkeypatch, lambda org, repo: bad)
+
+    payload, status = github_service.get_github_activity("org", "repo")
+    again = github_service.get_github_activity("org", "repo")
+
+    assert (payload, status) == ({"error": "github_unavailable"}, 502)
+    assert again == (payload, status)
+    assert calls["n"] == 1  # briefly cached in the error tier
+    assert ("org", "repo") not in github_service._ACTIVITY_CACHE
+    assert ("org", "repo") not in github_service._ACTIVITY_EMPTY_CACHE
+
+
+def test_get_github_activity_errors_cached_only_in_short_error_tier(monkeypatch):
+    github_service.clear_activity_caches()
+
+    def boom(org, repo):
         raise UnknownObjectException(404, {}, None)
 
-    monkeypatch.setattr(github_service, "get_repo_activity", fake_activity)
+    calls = _counting(monkeypatch, boom)
 
-    github_service.get_github_activity("org", "repo")
-    github_service.get_github_activity("org", "repo")
+    first = github_service.get_github_activity("org", "repo")
+    second = github_service.get_github_activity("org", "repo")
 
-    assert call_count["n"] == 2  # never cached, so it's retried
+    assert first == second == ({"error": "repo_not_found"}, 404)
+    assert calls["n"] == 1
+    assert ("org", "repo") not in github_service._ACTIVITY_CACHE
+    assert github_service._ACTIVITY_ERROR_CACHE.ttl <= 30
+
+    # Once the short error tier expires the next request retries GitHub.
+    github_service._ACTIVITY_ERROR_CACHE.clear()
+    github_service.get_github_activity("org", "repo")
+    assert calls["n"] == 2
+
+
+def test_get_github_activity_invalid_name_never_cached():
+    github_service.clear_activity_caches()
+    github_service.get_github_activity("org", "bad repo name!")
+    assert len(github_service._ACTIVITY_ERROR_CACHE) == 0
 
 
 # ---------------------------------------------------------------------------
@@ -351,7 +409,7 @@ def test_get_repo_activity_refuses_private_repo_before_reading_commits(monkeypat
 
 
 def test_get_github_activity_private_repo_looks_exactly_like_not_found(monkeypatch):
-    github_service._ACTIVITY_CACHE.clear()
+    github_service.clear_activity_caches()
     calls = []
     repo = FakeRepo(calls, [], private=True)
     _patch_github(monkeypatch, FakeGithubClient(calls, repo=repo))
@@ -363,3 +421,21 @@ def test_get_github_activity_private_repo_looks_exactly_like_not_found(monkeypat
 
     assert (private_payload, private_status) == (missing_payload, missing_status) == ({"error": "repo_not_found"}, 404)
     assert ("opportunity-hack", "internal-repo") not in github_service._ACTIVITY_CACHE
+
+
+def test_get_repo_activity_uses_fast_fail_client(monkeypatch):
+    """Default PyGithub retry sleeps through rate limits and pinned every
+    gunicorn thread on event day — public reads must use retry=None + a
+    short timeout."""
+    seen = {}
+
+    def fake_github(*args, **kwargs):
+        seen.update(kwargs)
+        return FakeGithubClient([], repo=FakeRepo([], []))
+
+    monkeypatch.setattr(github_utils, "Github", fake_github)
+    github_utils.get_repo_activity("opportunity-hack", "test-repo")
+
+    assert seen["retry"] is None
+    assert seen["timeout"] <= 10
+    assert seen["per_page"] == 100
