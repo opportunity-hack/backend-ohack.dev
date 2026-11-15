@@ -24,7 +24,9 @@ def survey_context(event_id):
     """Public. Tells the frontend the survey mode (live/post/upcoming), the
     caller's eligible roles, and whether a CAPTCHA token is needed."""
     try:
-        result, status = get_survey_context(event_id, _propel_user_id())
+        result, status = get_survey_context(
+            event_id, _propel_user_id(), request.args.get("mode")
+        )
         return jsonify(result), status
     except Exception as e:
         logger.exception("Error fetching survey context: %s", str(e))

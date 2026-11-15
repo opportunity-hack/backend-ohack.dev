@@ -528,6 +528,19 @@ def validate_hackathon_data_partial(data):
                     _skip("constraints.judging_schedule_published", "must be a boolean")
                     c.pop("judging_schedule_published")
 
+            # When the end-of-event survey opens (ISO datetime; null clears).
+            if c.get("survey_post_opens_at") is not None:
+                raw_opens = c["survey_post_opens_at"]
+                valid_opens = isinstance(raw_opens, str)
+                if valid_opens:
+                    try:
+                        datetime.fromisoformat(raw_opens.strip().replace("Z", "+00:00"))
+                    except ValueError:
+                        valid_opens = False
+                if not valid_opens:
+                    _skip("constraints.survey_post_opens_at", "must be an ISO datetime")
+                    c.pop("survey_post_opens_at")
+
             if "peer_vote_enabled" in c and c["peer_vote_enabled"] is not None:
                 if not isinstance(c["peer_vote_enabled"], bool):
                     _skip("constraints.peer_vote_enabled", "must be a boolean")
