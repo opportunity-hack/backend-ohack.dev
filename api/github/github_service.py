@@ -3,7 +3,7 @@ import logging
 from typing import Dict, Any, List
 from cachetools import TTLCache
 from db.db import get_db
-from common.utils.github import create_issue, get_issues, get_repo_activity, PrivateRepoError
+from common.utils.github import create_issue, get_issues, get_repo_activity, PrivateRepoError, note_github_rate_limit
 
 logger = logging.getLogger("api.github.github_service")
 logger.setLevel(logging.DEBUG)
@@ -13,6 +13,9 @@ logger.setLevel(logging.DEBUG)
 # Only successful responses are cached — errors stay uncached so transient
 # GitHub failures retry on the next request.
 _ISSUES_CACHE = TTLCache(maxsize=512, ttl=600)
+# Failed issue reads (rate limit, missing repo, GitHub down) are cached briefly
+# so every project page / dashboard viewer doesn't re-hit GitHub for them.
+_ISSUES_ERROR_CACHE = TTLCache(maxsize=512, ttl=30)
 
 # GET /api/github/activity — team dashboard "Code activity" card and the
 # public judging schedule's Code column (every team's repo, fetched by every
@@ -104,6 +107,7 @@ def _fetch_github_activity(org_name: str, repo_name: str):
         logger.info("get_github_activity: refusing private repo org=%s repo=%s", org_name, repo_name)
         return {"error": "repo_not_found"}, 404
     except RateLimitExceededException as e:
+        note_github_rate_limit(e)
         reset_at = None
         try:
             reset_at = e.headers.get("x-ratelimit-reset") if e.headers else None
@@ -482,9 +486,23 @@ def get_github_issues(org_name: str, repo_name: str, state: str ) -> Dict[str, A
         cached_result = _ISSUES_CACHE.get(cache_key)
         if cached_result is not None:
             return cached_result
+        cached_error = _ISSUES_ERROR_CACHE.get(cache_key)
+        if cached_error is not None:
+            return cached_error
 
-        # Get issues using the utility function
-        issues = get_issues(org_name=org_name, repo_name=repo_name, state=state)
+        from github import RateLimitExceededException
+        try:
+            issues = get_issues(org_name=org_name, repo_name=repo_name, state=state)
+        except RateLimitExceededException:
+            logger.warning("get_github_issues: rate limited org=%s repo=%s", org_name, repo_name)
+            result = {"error": "github_rate_limited"}
+            _ISSUES_ERROR_CACHE[cache_key] = result
+            return result
+        except Exception as e:
+            logger.warning("get_github_issues: failed org=%s repo=%s: %s", org_name, repo_name, e)
+            result = {"error": f"Failed to retrieve issues: {str(e)}"}
+            _ISSUES_ERROR_CACHE[cache_key] = result
+            return result
 
         if "error" in issues:
             return {"error": issues["error"]}
