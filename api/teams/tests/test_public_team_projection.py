@@ -235,14 +235,12 @@ def test_my_teams_omit_private_fields(monkeypatch):
     team_doc.exists = True
     team_doc.id = "team-1"
     team_doc.to_dict.return_value = {**_full_team(), "users": [user_ref]}
-    user_doc = MagicMock()
-    user_doc.exists = True
-    user_doc.id = "user-doc-1"
-    user_doc.to_dict.return_value = {"user_id": "oauth2|slack|T1-U1"}
     db = MagicMock()
-    db.get_all.side_effect = [[team_doc], [user_doc]]
+    db.get_all.side_effect = [[team_doc]]
 
-    monkeypatch.setattr(api_ts, "get_propel_user_details_by_id", lambda pid: (None, "oauth2|slack|T1-U1", None, None, "Ada", None))
+    from services.users_service import Caller
+    me = types.SimpleNamespace(id="user-doc-1", user_id="oauth2|slack|T1-U1", name="Ada")
+    monkeypatch.setattr(api_ts, "resolve_caller", lambda pid: Caller(me, {"user-doc-1"}, me.user_id))
     monkeypatch.setattr(api_ts, "get_hackathon_by_event_id", lambda eid: {"teams": [object()]})
     monkeypatch.setattr(api_ts, "get_db", lambda: db)
 

@@ -233,28 +233,15 @@ def _seed_firestore_user_from_oauth(propel_id, oauth):
     PropelAuth fallback path. Permanent self-heal.
     """
     try:
-        from db.db import fetch_user_by_user_id, insert_user, update_user
-        from model.user import User
-        from datetime import datetime
-        existing = fetch_user_by_user_id(propel_id)
-        last_login = datetime.utcnow().isoformat() + "Z"
-        if existing is None:
-            u = User()
-            u.user_id = propel_id
-            u.propel_id = propel_id
-            u.email_address = oauth.get("email") or ""
-            u.name = oauth.get("name") or oauth.get("given_name") or ""
-            u.nickname = oauth.get("given_name") or ""
-            u.profile_image = (
-                oauth.get("https://slack.com/user_image_192")
-                or oauth.get("picture")
-                or ""
-            )
-            u.last_login = last_login
-            insert_user(u)
-            logger.info("Self-heal: inserted Firestore user record for propel_id=%s", propel_id)
-        # If the record already exists we don't touch it — fetch_users() will
-        # pick up our positive lookup via the cached index, no write needed.
+        # ONE way to find-or-create a person's user doc: the resolver the
+        # profile uses. It looks up by PropelAuth id, then provider id, then
+        # verified email, and only then creates a doc. This function used to
+        # insert its own doc keyed on the PropelAuth id whenever none had that
+        # id as `user_id` — a second, empty account for anyone who already had
+        # a Slack or Google doc, which then became "their profile" while their
+        # teams stayed on the first one (frontend issue #501).
+        from services.users_service import _resolve_and_ensure_user
+        _resolve_and_ensure_user(propel_id)
     except Exception:
         logger.exception("Self-heal user-seed failed for propel_id=%s", propel_id)
 
@@ -281,15 +268,21 @@ def _resolve_public_user_profiles(propel_ids):
             all_users = fetch_users() or []
             indexed = {}
             for u in all_users:
-                pid = getattr(u, "user_id", None)
-                if not pid:
-                    continue
-                indexed[pid] = {
+                entry = {
                     "name": getattr(u, "name", "") or getattr(u, "nickname", "") or "",
                     "nickname": getattr(u, "nickname", "") or "",
                     "profile_image": getattr(u, "profile_image", "") or "",
                     "db_id": getattr(u, "id", None),
                 }
+                # The board stores PropelAuth ids. A user doc carries that id
+                # in `propel_id` (and, for docs made by the old seed, also as
+                # `user_id`), so index both; propel_id wins.
+                legacy_pid = getattr(u, "user_id", None)
+                if legacy_pid:
+                    indexed.setdefault(legacy_pid, entry)
+                pid = getattr(u, "propel_id", None)
+                if pid:
+                    indexed[pid] = entry
             _USER_PROFILES_CACHE["profiles"] = indexed
             _USER_PROFILES_CACHE["expires_at"] = now + 60
         except Exception:

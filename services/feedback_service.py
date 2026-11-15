@@ -11,7 +11,7 @@ from firebase_admin import firestore
 from common.log import get_logger
 from common.utils.slack import send_slack_audit, send_slack
 from db.db import get_db
-from services.users_service import get_slack_user_from_propel_user_id, get_user_from_slack_id
+from services.users_service import _resolve_and_ensure_user
 from api.messages.message import Message
 
 logger = get_logger("feedback_service")
@@ -29,12 +29,12 @@ def save_feedback(propel_user_id, json):
     logger.info("Saving Feedback")
     send_slack_audit(action="save_feedback", message="Saving", payload=json)
 
-    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    if slack_user is None:
-        logger.warning(f"Could not resolve Slack user for propel_user_id={propel_user_id}")
+    # Same user doc the profile shows, whichever provider they signed in with.
+    user, feedback_giver_id = _resolve_and_ensure_user(propel_user_id)
+    if user is None:
+        logger.warning(f"Could not resolve a user for propel_user_id={propel_user_id}")
         return None
-    user_db_id = get_user_from_slack_id(slack_user["sub"]).id
-    feedback_giver_id = slack_user["sub"]
+    user_db_id = user.id
 
     doc_id = uuid.uuid1().hex
     feedback_receiver_id = json.get("feedback_receiver_id")
@@ -124,8 +124,13 @@ def get_user_feedback(propel_user_id):
     logger.info(f"Getting feedback for propel_user_id: {propel_user_id}")
     db = get_db()
 
-    slack_user = get_slack_user_from_propel_user_id(propel_user_id)
-    db_user_id = get_user_from_slack_id(slack_user["sub"]).id
+    user, _user_id = _resolve_and_ensure_user(propel_user_id)
+    if user is None:
+        # Raise rather than return an empty list: this function is cached
+        # for 10 minutes and "we couldn't tell who you are" is not "you have
+        # no feedback".
+        raise LookupError(f"Could not resolve a user for propel_user_id={propel_user_id}")
+    db_user_id = user.id
 
     feedback_docs = db.collection('feedback').where("feedback_receiver_id", "==", db_user_id).order_by("timestamp", direction=firestore.Query.DESCENDING).stream()
 
