@@ -1,4 +1,5 @@
 from typing import Dict, List, Optional, Union, Any, Tuple
+import re
 import uuid
 import time
 import threading
@@ -2844,6 +2845,69 @@ def mentor_checkout(user_id: str, event_id: str) -> Dict[str, Any]:
     }
 
 
+# Generic value the check-in page sends when no availability slot is "now" —
+# it tells hackers nothing, so it's left out of the announcement.
+_GENERIC_MENTOR_TIME_SLOT = "custom time slot"
+_ETC_IN_PARENS_RE = re.compile(r",?\s*etc\.?\s*(?=\))", re.IGNORECASE)
+
+
+def _join_list(value: Any) -> str:
+    if isinstance(value, list):
+        return ", ".join(str(v).strip() for v in value if str(v).strip())
+    return str(value or "").strip()
+
+
+def _mentor_attendance_label(volunteer: Dict[str, Any]) -> str:
+    """'📍 In person' / '💻 Virtual' from the mentor form's answer, '' if unknown."""
+    answer = volunteer.get('inPerson')
+    if isinstance(answer, bool):
+        return "📍 In person" if answer else "💻 Virtual"
+    if isinstance(answer, str) and answer.strip():
+        lowered = answer.strip().lower()
+        if lowered.startswith("yes"):
+            return "📍 In person"
+        if lowered.startswith("no"):
+            return "💻 Virtual"
+    flag = volunteer.get('isInPerson')
+    if isinstance(flag, bool):
+        return "📍 In person" if flag else "💻 Virtual"
+    return ""
+
+
+def _build_mentor_checkin_message(volunteer: Dict[str, Any], name_mention: str,
+                                  time_slot: Optional[str] = None,
+                                  profile_url: Optional[str] = None) -> str:
+    """Compact #ask-a-mentor announcement: headline, skills, links — no blank lines."""
+    headline = [f":reversecongaparrot: *Mentor available:* {name_mention} just checked in"]
+    attendance = _mentor_attendance_label(volunteer)
+    if attendance:
+        headline.append(attendance)
+    slot = (time_slot or "").strip()
+    if slot and slot.lower() != _GENERIC_MENTOR_TIME_SLOT:
+        headline.append(f"🕒 {slot}")
+    lines = [" · ".join(headline)]
+
+    expertise = _join_list(volunteer.get('expertise'))
+    if expertise:
+        lines.append(f"*Can help with:* {expertise}")
+    stack = _ETC_IN_PARENS_RE.sub("", _join_list(volunteer.get('softwareEngineeringSpecifics')))
+    if stack:
+        lines.append(f"*Stack:* {stack}")
+
+    footer = []
+    linkedin = str(volunteer.get('linkedinProfile') or "").strip()
+    if linkedin and not linkedin.lower().startswith(("http://", "https://")) and "linkedin.com" in linkedin.lower():
+        linkedin = f"https://{linkedin}"
+    if linkedin.lower().startswith(("http://", "https://")):
+        footer.append(f"<{linkedin}|LinkedIn>")
+    if profile_url:
+        footer.append(f"<{profile_url}|OHack profile>")
+    footer.append(f"Need help? Reply in thread or DM {name_mention}")
+    lines.append(" · ".join(footer))
+
+    return "\n".join(lines)
+
+
 def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optional[str] = None) -> bool:
     """
     Send a Slack notification when a mentor checks in.
@@ -2856,10 +2920,6 @@ def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optio
         return False
 
     email = volunteer.get('email', '')
-    areas_of_expertise = volunteer.get('expertise', [])
-    specialties = volunteer.get('softwareEngineeringSpecifics', [])
-    linked_in = volunteer.get('linkedinProfile', None)
-    in_person = volunteer.get('inPerson', None)
 
     # Resolve Slack user id — use stored value first, then fall back to email lookup
     # (catches mentors who applied/logged in with Google but have Slack under the same email)
@@ -2889,7 +2949,7 @@ def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optio
     name_mention = f"<@{slack_user_id}>"
 
     # Resolve OHack profile URL via users collection
-    profile_line = ""
+    profile_url = None
     try:
         user_doc = None
         if volunteer.get('user_id'):
@@ -2897,51 +2957,23 @@ def send_mentor_checkin_notification(volunteer: Dict[str, Any], time_slot: Optio
         if not user_doc and email:
             user_doc = get_user_by_email(email)
         if user_doc and user_doc.get('id'):
-            first = volunteer.get('firstName', '')
-            last = volunteer.get('lastName', '')
-            display_name = volunteer.get('name') or f"{first} {last}".strip() or 'their profile'
             profile_url = f"https://www.ohack.dev/profile/{user_doc['id']}"
-            profile_line = f"*Profile:* <{profile_url}|View {display_name}'s profile>"
     except Exception as e:
         logger.warning(f"Could not resolve OHack profile for {email}: {e}")
 
-    # Format expertise / specialties / time slot
-    expertise_text = ""
-    if areas_of_expertise:
-        expertise_text = f"*Expertise:* {', '.join(areas_of_expertise) if isinstance(areas_of_expertise, list) else areas_of_expertise}"
-
-    specialties_text = ""
-    if specialties:
-        specialties_text = f"*Specialties:* {', '.join(specialties) if isinstance(specialties, list) else specialties}"
-
-    time_text = f"*Time Slot:* {time_slot}" if time_slot else ""
-
-    lines = [
-        ":reversecongaparrot:  *Mentor Available!*",
-        "",
-        f"{name_mention} has checked in and is available to help teams!",
-        "",
-    ]
-    for part in [expertise_text, specialties_text, time_text,
-                 f"*LinkedIn:* {linked_in}" if linked_in else "",
-                 f"*In-Person:* {in_person}" if in_person else "",
-                 profile_line]:
-        if part:
-            lines.append(part)
-
-    lines += [
-        "",
-        f"If you're a hacker and need help, reach out to {name_mention} directly or post in #ask-a-mentor so everyone can benefit.",
-    ]
-
-    slack_message = "\n".join(lines)
+    slack_message = _build_mentor_checkin_message(
+        volunteer, name_mention, time_slot=time_slot, profile_url=profile_url
+    )
 
     try:
         send_slack(
             message=slack_message,
             channel="ask-a-mentor",
             icon_emoji=":raising_hand:",
-            username="Mentor Check-in"
+            username="Mentor Check-in",
+            # LinkedIn + profile previews used to double the message height.
+            unfurl_links=False,
+            unfurl_media=False,
         )
         logger.info(f"Sent Slack notification about mentor check-in for {email}")
         return True

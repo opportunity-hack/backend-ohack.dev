@@ -4,6 +4,7 @@ import pytz
 
 from api.surveys.surveys_service import (
     compute_event_mode,
+    resolve_survey_mode,
     _parse_event_date,
     _user_doc_id,
     allowed_roles_for,
@@ -77,3 +78,50 @@ class TestAllowedRolesFor:
         # anonymous / logged-in-but-not-selected
         assert allowed_roles_for(False, []) == ["nonprofit"]
         assert allowed_roles_for(False, ["hacker"]) == ["nonprofit"]
+
+
+
+class TestPostOpensAt:
+    def _event(self, opens_at):
+        return {
+            "start_date": _date(-1),
+            "end_date": _date(1),
+            "timezone": TZ,
+            "constraints": {"survey_post_opens_at": opens_at},
+        }
+
+    def test_post_once_opens_at_has_passed(self):
+        past = (datetime.now(pytz.timezone(TZ)) - timedelta(hours=1)).isoformat()
+        assert compute_event_mode(self._event(past)) == "post"
+
+    def test_live_until_opens_at(self):
+        future = (datetime.now(pytz.timezone(TZ)) + timedelta(hours=1)).isoformat()
+        assert compute_event_mode(self._event(future)) == "live"
+
+    def test_offsetless_value_is_event_local(self):
+        past = (datetime.now(pytz.timezone(TZ)) - timedelta(hours=1)).replace(tzinfo=None)
+        assert compute_event_mode(self._event(past.isoformat())) == "post"
+
+    def test_bad_value_is_ignored(self):
+        assert compute_event_mode(self._event("soon")) == "live"
+        assert compute_event_mode(self._event(None)) == "live"
+
+
+class TestResolveSurveyMode:
+    LIVE = {"start_date": _date(-1), "end_date": _date(1), "timezone": TZ}
+    ENDED = {"start_date": _date(-5), "end_date": _date(-3), "timezone": TZ}
+    UPCOMING = {"start_date": _date(3), "end_date": _date(5), "timezone": TZ}
+
+    def test_no_request_is_natural(self):
+        assert resolve_survey_mode(self.LIVE) == "live"
+        assert resolve_survey_mode(self.ENDED, "") == "post"
+
+    def test_request_wins_once_started(self):
+        assert resolve_survey_mode(self.LIVE, "post") == "post"
+        assert resolve_survey_mode(self.ENDED, "LIVE") == "live"
+
+    def test_upcoming_cannot_be_forced(self):
+        assert resolve_survey_mode(self.UPCOMING, "post") == "upcoming"
+
+    def test_unknown_request_is_ignored(self):
+        assert resolve_survey_mode(self.LIVE, "complete") == "live"

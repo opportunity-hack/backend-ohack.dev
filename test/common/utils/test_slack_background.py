@@ -128,6 +128,8 @@ def test_async_send_slack_runs_send_slack_off_thread():
         "icon_emoji": ":tada:",
         "username": "Hackathon Bot",
         "blocks": None,
+        "unfurl_links": None,
+        "unfurl_media": None,
     }
     assert seen["thread"].startswith("slack-bg")
     assert seen["thread"] != threading.current_thread().name
