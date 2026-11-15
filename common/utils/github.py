@@ -1,10 +1,12 @@
 
 import os
+import time
+from itertools import islice
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from github import Github
 from dotenv import load_dotenv
-from github import GithubException
+from github import GithubException, RateLimitExceededException
 import logging
 
 logger = logging.getLogger("common.utils.github")
@@ -32,7 +34,53 @@ class PrivateRepoError(Exception):
 GITHUB_READ_TIMEOUT_SECONDS = 8
 
 
+# Process-wide circuit breaker: once GitHub says the token is rate-limited,
+# every fast-fail read raises immediately until the reset instead of spending
+# another request (each one is a 403 that pushes the reset no further, but
+# still costs a thread + an outbound call). Per process, like every cache here.
+_RATE_LIMIT_MAX_PAUSE_SECONDS = 3600
+_RATE_LIMIT_DEFAULT_PAUSE_SECONDS = 60
+_rate_limited_until = 0.0
+
+
+def github_rate_limited_until():
+    """Epoch seconds the breaker stays open until, or None when closed."""
+    return _rate_limited_until if _rate_limited_until > time.time() else None
+
+
+def note_github_rate_limit(exc=None):
+    """Open the breaker until GitHub's x-ratelimit-reset (capped at 1h; 60s
+    when the header is missing, e.g. a secondary rate limit)."""
+    global _rate_limited_until
+    now = time.time()
+    reset = None
+    headers = getattr(exc, "headers", None) or {}
+    for key in ("x-ratelimit-reset", "X-RateLimit-Reset"):
+        try:
+            if headers.get(key):
+                reset = float(headers.get(key))
+                break
+        except (TypeError, ValueError, AttributeError):
+            reset = None
+    if not reset or reset <= now:
+        reset = now + _RATE_LIMIT_DEFAULT_PAUSE_SECONDS
+    _rate_limited_until = min(reset, now + _RATE_LIMIT_MAX_PAUSE_SECONDS)
+    logger.warning("GitHub rate limited — skipping GitHub reads for %ds", int(_rate_limited_until - now))
+
+
+def reset_github_rate_limit():
+    global _rate_limited_until
+    _rate_limited_until = 0.0
+
+
 def _fast_fail_github(**kwargs):
+    until = github_rate_limited_until()
+    if until:
+        raise RateLimitExceededException(
+            403,
+            {"message": "GitHub rate limit (circuit open)"},
+            {"x-ratelimit-reset": str(int(until))},
+        )
     return Github(
         os.getenv('GITHUB_TOKEN'),
         timeout=GITHUB_READ_TIMEOUT_SECONDS,
@@ -85,7 +133,7 @@ def create_github_repo(
     below. The legacy README is kept only as the fallback when the seed
     could not be built.
     """
-    g = Github(os.getenv('GITHUB_TOKEN'))
+    g = _fast_fail_github()
     org = get_github_organization(g, org_name)
     
     repo_exists = does_repo_exist(repository_name, hackathon_event_id, org_name, org=org)
@@ -246,7 +294,7 @@ Examples of winning DevPost submissions:
 
 def does_repo_exist(repo_name, hackathon_event_id, org_name, org=None):
     if org is None:
-        g = Github(os.getenv('GITHUB_TOKEN'))
+        g = _fast_fail_github()
         org = get_github_organization(g, org_name)
     try:
         repo = org.get_repo(repo_name)
@@ -397,7 +445,7 @@ def get_repo_activity(org_name, repo_name):
 
 
 def get_all_repos(org_name):
-    g = Github(os.getenv('GITHUB_TOKEN'))
+    g = _fast_fail_github()
     org = g.get_organization(org_name)
     repos = org.get_repos()
     
@@ -422,7 +470,7 @@ def create_issue(
         assignees=None,
         labels=None
     ):
-    g = Github(os.getenv('GITHUB_TOKEN'))
+    g = _fast_fail_github()
     org = g.get_organization(org_name)
     
     try:
@@ -441,27 +489,32 @@ def create_issue(
         print(e)
         raise ValueError(e.data['message'])
     
+# Pages of 100 instead of PyGithub's 30, capped: the callers show counts +
+# the top few titles, and a giant repo must not cost dozens of requests.
+MAX_ISSUES_SCANNED = 500
+
+
 def get_issues(
         repo_name,
         org_name,
         state=None
     ):
-    g = _fast_fail_github()
-    org = g.get_organization(org_name)
-    
+    if state is not None:
+        state = state.lower()
+        if state not in ['open', 'closed', 'all']:
+            raise ValueError("State must be 'open', 'closed', or 'all'")
+
+    g = _fast_fail_github(per_page=100)
     try:
-        repo = org.get_repo(repo_name)
-        if state is not None:
-            state = state.lower()
-            if state not in ['open', 'closed', 'all']:
-                raise ValueError("State must be 'open', 'closed', or 'all'")
-        
+        # get_repo("org/repo") — one call; org.get_repo() cost an extra
+        # GET /orgs/<org> per request (the endpoint in the Nov 2026 outage logs).
+        repo = g.get_repo(f"{org_name}/{repo_name}")
         issues = repo.get_issues(state=state)
-        # Filter out pull requests to get only issues
-        issues = [issue for issue in issues if not issue.pull_request]
-        
+
         issue_list = []
-        for issue in issues:
+        for issue in islice(issues, MAX_ISSUES_SCANNED):
+            if issue.pull_request:  # pull requests come back as issues
+                continue
             issue_list.append({
                 "issue_number": issue.number,
                 "title": issue.title,
@@ -471,10 +524,11 @@ def get_issues(
                 "updated_at": issue.updated_at
             })
         return issue_list
+    except RateLimitExceededException as e:
+        note_github_rate_limit(e)
+        raise
     except GithubException as e:
         logger.error(f"Error getting issues: {e}")
-        # print traceback
-        import traceback
-        logger.error(traceback.format_exc())
-
-        raise ValueError(e.data['message'])
+        data = getattr(e, "data", None)
+        message = data.get("message") if isinstance(data, dict) else None
+        raise ValueError(message or str(e))
