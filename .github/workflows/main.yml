@@ -114,6 +114,7 @@ jobs:
             api/broadcasts/tests \
             api/giveaways/tests \
             api/judging/tests \
+            api/mentors/tests \
             api/peer_votes/tests \
             api/praisebot/tests \
             api/problemstatements/tests \

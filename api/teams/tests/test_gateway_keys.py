@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import types
+from datetime import datetime, timezone
 from unittest.mock import MagicMock
 
 import pytest
@@ -90,6 +91,13 @@ def service(monkeypatch):
     module = importlib.import_module(SERVICE_MODULE)
     fake_db = FakeDB()
     monkeypatch.setattr(module, "get_db", lambda: fake_db)
+    # Pin the clock to before GATEWAY_KEY_EXPIRES: minting correctly refuses
+    # once the event's expiry has passed, so on the real clock every mint
+    # test fails from Nov 16 2026 on.
+    monkeypatch.setattr(
+        module, "_utc_now",
+        lambda: datetime(2026, 11, 13, 1, 0, 0, tzinfo=timezone.utc),
+    )
     yield module, fake_db
     sys.modules.pop(SERVICE_MODULE, None)
 
@@ -1052,3 +1060,13 @@ def test_admin_gateway_keys_route_400s_without_ids(client):
     res = client.get("/api/team/admin/gateway-keys", headers=HEADERS)
     assert res.status_code == 400
     assert res.get_json()["error"] == "team_ids_required"
+
+
+def test_minting_refuses_after_expiry_on_the_real_clock_seam(service, monkeypatch):
+    module, _ = service
+    monkeypatch.setattr(
+        module, "_utc_now",
+        lambda: datetime(2026, 11, 17, 0, 0, 0, tzinfo=timezone.utc),
+    )
+    with pytest.raises(RuntimeError, match="in the past"):
+        module._key_duration()
