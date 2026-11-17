@@ -108,13 +108,19 @@ def _effective_expires(stored):
     return GATEWAY_KEY_EXPIRES
 
 
+def _utc_now():
+    """The clock `_key_duration` reads. A seam so tests can pin it: the suite
+    went red the moment GATEWAY_KEY_EXPIRES passed (Nov 16 2026)."""
+    return datetime.now(timezone.utc)
+
+
 def _key_duration(now=None, expires=GATEWAY_KEY_EXPIRES):
     """Seconds from `now` until `expires`, as the LiteLLM duration string
     ("<n>s") that /key/generate and /key/update accept. Raises once the
     expiry instant has passed — a key minted then would be dead on arrival,
     and provisioning is best-effort in approve_team, so failing loudly beats
     handing a team an unusable key."""
-    now = now or datetime.now(timezone.utc)
+    now = now or _utc_now()
     until = _parse_iso(expires)
     seconds = int((until - now).total_seconds())
     if seconds <= 0:
