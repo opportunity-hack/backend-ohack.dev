@@ -30,6 +30,7 @@ Security notes:
   exists via ``get_blob_metadata`` before accepting the claim.
 """
 
+import math
 import os
 import re
 import secrets
@@ -52,6 +53,7 @@ COLLECTION = "reimbursements"
 # this are rejected. The 60-day substantiation guideline is the treasurer's
 # follow-up concern; the API ceiling is 120 days.
 MAX_EXPENSE_AGE_DAYS = 120
+DATE_SKEW_DAYS = 1  # local-calendar vs UTC tolerance, see validate_expense_date
 MAX_AMOUNT_DOLLARS = 10000
 MAX_RECEIPT_BYTES = 10 * 1024 * 1024  # 10 MB
 
@@ -97,6 +99,26 @@ _REQUIRED_SUBMIT_FIELDS = (
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Receipt paths are minted by create_receipt_upload_url; accept only that
+# exact shape so a claim can never point at some other object in the bucket.
+_RECEIPT_BLOB_RE = re.compile(
+    r"^reimbursements/[0-9a-f]{32}/receipt_[0-9a-f]{32}\.(jpg|png|webp|pdf)$"
+)
+
+# Length caps on free text (public, unauthenticated input; a Firestore doc
+# is capped at 1 MiB and admins read these in a dialog).
+MAX_FIELD_LENGTHS = {
+    "submitterName": 200,
+    "submitterEmail": 254,
+    "phone": 40,
+    "vendor": 200,
+    "eventId": 200,
+    "businessPurpose": 2000,
+    "fedDescription": 2000,
+    "receiptFilename": 255,
+}
+MAX_REVIEW_NOTE_LENGTH = 2000
+
 # NOTE on RateLimiter: like api/contact, this is a process-global throttle
 # (ratelimiter sleeps when max_calls are exceeded in the period), NOT a
 # per-IP limiter — there is no per-key support in the library. It still
@@ -131,6 +153,20 @@ def verify_recaptcha(token: str) -> bool:
         return False
 
 
+def _audit(action: str, message: str) -> None:
+    """Best-effort Slack audit line so the treasurer learns a claim arrived
+    or moved. Never raises; silent under ENVIRONMENT=test. Lazy import keeps
+    this module importable without Slack config. No email/phone in the text."""
+    if os.environ.get("ENVIRONMENT") == "test":
+        return
+    try:
+        from common.utils.slack import send_slack_audit
+
+        send_slack_audit(action=action, message=" ".join(message.split()), payload={})
+    except Exception as e:
+        logger.warning("Reimbursement audit failed (%s): %s", action, type(e).__name__)
+
+
 def generate_reference_id(today: Optional[date] = None) -> str:
     """REIMB-YYYY-XXXXXX with 6 random uppercase alphanumerics."""
     year = (today or _today_utc()).year
@@ -148,10 +184,14 @@ def validate_expense_date(value: Any) -> Optional[str]:
         parsed = datetime.strptime(value, "%Y-%m-%d").date()
     except ValueError:
         return "expenseDate must be a valid YYYY-MM-DD date"
+    # The submitter picks the date on their own calendar, which can be a day
+    # ahead of or behind UTC (9 PM in Arizona is already tomorrow in UTC), so
+    # both edges get one day of slack rather than rejecting a date the form
+    # just accepted.
     today = _today_utc()
-    if parsed > today:
+    if (parsed - today).days > DATE_SKEW_DAYS:
         return "expenseDate must not be in the future"
-    if (today - parsed).days > MAX_EXPENSE_AGE_DAYS:
+    if (today - parsed).days > MAX_EXPENSE_AGE_DAYS + DATE_SKEW_DAYS:
         return "expenseDate must not be more than %d days old" % MAX_EXPENSE_AGE_DAYS
     return None
 
@@ -161,9 +201,12 @@ def validate_amount(value: Any) -> Optional[int]:
     Booleans are rejected explicitly (bool is an int subclass in Python)."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    if value <= 0 or value > MAX_AMOUNT_DOLLARS:
+    # NaN compares False to everything, so it must be rejected explicitly
+    # (json.loads accepts a bare NaN) or int(round(nan)) raises -> 500.
+    if not math.isfinite(value) or value <= 0 or value > MAX_AMOUNT_DOLLARS:
         return None
-    return int(round(value * 100))
+    cents = int(round(value * 100))
+    return cents if cents >= 1 else None
 
 
 def _err(code: str, message: str, status: int = 400) -> Tuple[Dict[str, Any], int]:
@@ -171,11 +214,7 @@ def _err(code: str, message: str, status: int = 400) -> Tuple[Dict[str, Any], in
 
 
 def _reference_id_exists(db: Any, reference_id: str) -> bool:
-    for doc in db.collection(COLLECTION).stream():
-        data = doc.to_dict() or {}
-        if data.get("reference_id") == reference_id:
-            return True
-    return False
+    return _find_by_reference(db, reference_id) is not None
 
 
 def _verify_receipt_blob(
@@ -183,7 +222,7 @@ def _verify_receipt_blob(
 ) -> Tuple[Optional[Dict[str, Any]], Optional[Tuple[Dict[str, Any], int]]]:
     """Verify the uploaded receipt blob. Returns (receipt_dict, None) on
     success, (None, (error_payload, status)) on failure."""
-    if not isinstance(blob_path, str) or not blob_path.startswith("reimbursements/"):
+    if not isinstance(blob_path, str) or not _RECEIPT_BLOB_RE.match(blob_path):
         return None, _err(
             "invalid_receipt", "receiptBlobPath must be a reimbursement upload"
         )
@@ -214,6 +253,11 @@ def _verify_receipt_blob(
             "Uploaded receipt is not an allowed file type",
         )
     size = meta.get("size") or 0
+    if size <= 0:
+        return None, _err(
+            "receipt_not_found",
+            "Receipt upload is empty — please upload it again",
+        )
     if size > MAX_RECEIPT_BYTES:
         return None, _err(
             "receipt_too_large", "Receipt must be under 10 MB"
@@ -233,13 +277,28 @@ def validate_submission_payload(
     """Pure validation of a POST /api/reimbursements body (no I/O except the
     receipt-blob check, which lives in create_reimbursement). Returns
     (cleaned, None) or (None, (error_payload, status))."""
-    data = data or {}
-    missing = [f for f in _REQUIRED_SUBMIT_FIELDS if data.get(f) in (None, "")]
+    if not isinstance(data, dict):
+        return None, _err("missing_fields", "Request body must be a JSON object")
+    missing = [
+        f for f in _REQUIRED_SUBMIT_FIELDS
+        if data.get(f) is None or (isinstance(data.get(f), str) and not data.get(f).strip())
+    ]
     if missing:
         return None, _err(
             "missing_fields",
             "Missing required fields: %s" % ", ".join(missing),
         )
+    for field, limit in MAX_FIELD_LENGTHS.items():
+        value = data.get(field)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return None, _err("invalid_field", "%s must be a string" % field)
+        if len(value.strip()) > limit:
+            return None, _err(
+                "field_too_long",
+                "%s must be at most %d characters" % (field, limit),
+            )
     email = str(data["submitterEmail"]).strip().lower()
     if not _EMAIL_RE.match(email):
         return None, _err("invalid_email", "submitterEmail must be a valid email address")
@@ -291,7 +350,8 @@ def create_reimbursement(
     ip_address: Optional[str], data: Optional[Dict[str, Any]]
 ) -> Tuple[Dict[str, Any], int]:
     """Create a reimbursement claim. Returns (payload, status)."""
-    data = data or {}
+    if not isinstance(data, dict):
+        return _err("missing_fields", "Request body must be a JSON object")
     recaptcha_token = data.get("recaptchaToken")
     if not verify_recaptcha(recaptcha_token) and os.environ.get("FLASK_ENV") != "development":
         logger.warning("reCAPTCHA verification failed for reimbursement submission")
@@ -341,6 +401,11 @@ def create_reimbursement(
     })
     db.collection(COLLECTION).document(doc_id).set(doc)
     logger.info("Reimbursement %s created (%s)", reference_id, doc_id)
+    _audit(
+        "reimbursement_submitted",
+        "%s: %s requested $%.2f (%s) — review at /admin/reimbursements"
+        % (reference_id, doc["submitter_name"], doc["amount_cents"] / 100.0, doc["vendor"]),
+    )
     return {
         "success": True,
         "id": doc_id,
@@ -361,7 +426,8 @@ def create_receipt_upload_url(
     ip_address: Optional[str], data: Optional[Dict[str, Any]]
 ) -> Tuple[Dict[str, Any], int]:
     """Mint a signed GCS PUT URL for a receipt. Returns (payload, status)."""
-    data = data or {}
+    if not isinstance(data, dict):
+        return _err("missing_fields", "Request body must be a JSON object")
     recaptcha_token = data.get("recaptchaToken")
     if not verify_recaptcha(recaptcha_token) and os.environ.get("FLASK_ENV") != "development":
         return _err("invalid_recaptcha", "reCAPTCHA verification failed")
@@ -373,7 +439,7 @@ def create_receipt_upload_url(
         )
     try:
         content_length = int(data.get("contentLength"))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return _err("receipt_missing", "contentLength is required")
     if content_length <= 0 or content_length > MAX_RECEIPT_BYTES:
         return _err("receipt_too_large", "Receipt must be under 10 MB")
@@ -393,7 +459,7 @@ def create_receipt_upload_url(
         )
     except Exception as e:
         logger.exception("Failed to generate signed receipt upload URL: %s", e)
-        return {"error": "Could not create an upload URL"}, 500
+        return _err("upload_url_failed", "Could not create an upload URL", 500)
     return payload, 200
 
 
@@ -424,12 +490,13 @@ def _admin_view(doc: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _find_by_reference(db: Any, reference_id: str) -> Optional[Dict[str, Any]]:
-    # Stream + filter in Python: no composite index needed.
-    for doc in db.collection(COLLECTION).stream():
+    # Single-field equality is auto-indexed (no composite index). This runs
+    # on the PUBLIC status route, so it must never scan the whole collection.
+    query = db.collection(COLLECTION).where("reference_id", "==", reference_id).limit(1)
+    for doc in query.stream():
         data = doc.to_dict() or {}
-        if data.get("reference_id") == reference_id:
-            data["id"] = doc.id
-            return data
+        data["id"] = doc.id
+        return data
     return None
 
 
@@ -443,7 +510,7 @@ def get_reimbursement_status(
             "missing_fields", "email and reference_id query params are required"
         )
     db = get_db()
-    doc = _find_by_reference(db, reference_id.strip())
+    doc = _find_by_reference(db, reference_id.strip().upper())
     if doc is None:
         return {"success": False, "error": "not_found",
                 "message": "No reimbursement matches that email and reference id"}, 404
@@ -507,7 +574,8 @@ def admin_review_reimbursement(
     """Admin PATCH. Only ``status`` and ``reviewNote`` are read from the
     payload — status/reviewed_by/paid_at/status_history from the client are
     ignored (server-owned). Enforces the transition map and no self-approval."""
-    data = data or {}
+    if not isinstance(data, dict):
+        return _err("missing_fields", "Request body must be a JSON object")
     reviewer = reviewer or {}
     new_status = data.get("status")
     review_note = data.get("reviewNote")
@@ -517,7 +585,16 @@ def admin_review_reimbursement(
         )
     if review_note is not None and not isinstance(review_note, str):
         return _err("invalid_review_note", "reviewNote must be a string")
-    if new_status is not None and new_status not in STATUSES:
+    if review_note is not None:
+        review_note = review_note.strip()
+        if len(review_note) > MAX_REVIEW_NOTE_LENGTH:
+            return _err(
+                "field_too_long",
+                "reviewNote must be at most %d characters" % MAX_REVIEW_NOTE_LENGTH,
+            )
+    if new_status is not None and (
+        not isinstance(new_status, str) or new_status not in STATUSES
+    ):
         return _err(
             "invalid_status",
             "status must be one of %s" % ", ".join(STATUSES),
@@ -536,6 +613,11 @@ def admin_review_reimbursement(
     reviewer_propel_id = reviewer.get("propel_id")
     submitter_email = str(existing.get("submitter_email") or "").lower()
     submitter_propel_id = existing.get("submitter_propel_id")
+    # Fail closed: without a verified reviewer identity the no-self-approval
+    # rule can't be checked and the history would say an anonymous "admin".
+    if not reviewer_email and not reviewer_propel_id:
+        return {"success": False, "error": "reviewer_unknown",
+                "message": "Could not verify who is reviewing this claim"}, 403
     if reviewer_email and reviewer_email == submitter_email:
         return {"success": False, "error": "self_approval",
                 "message": "You cannot review your own reimbursement claim"}, 403
@@ -577,6 +659,13 @@ def admin_review_reimbursement(
         if new_status == "paid":
             update["paid_at"] = now
     doc_ref.update(update)
+    if new_status is not None:
+        _audit(
+            "reimbursement_reviewed",
+            "%s: %s -> %s by %s"
+            % (existing.get("reference_id"), existing.get("status"), new_status,
+               reviewer_email or reviewer_propel_id),
+        )
     logger.info(
         "Reimbursement %s reviewed: %s -> %s by %s",
         doc_id, existing.get("status"), new_status or existing.get("status"),

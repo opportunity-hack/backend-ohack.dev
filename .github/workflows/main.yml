@@ -117,6 +117,7 @@ jobs:
             api/peer_votes/tests \
             api/praisebot/tests \
             api/problemstatements/tests \
+            api/reimbursements/tests \
             api/submissions/tests \
             api/surveys/tests \
             api/teams/tests \

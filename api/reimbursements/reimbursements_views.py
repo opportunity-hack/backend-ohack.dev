@@ -46,7 +46,7 @@ def _reviewer_from_request():
 def submit_reimbursement():
     """Public claim submission. Body is camelCase per the API contract."""
     data = request.get_json(silent=True)
-    if not data:
+    if not data or not isinstance(data, dict):
         return {
             "success": False,
             "error": "missing_fields",
@@ -72,7 +72,7 @@ def receipt_upload_url():
     GCS, never through Flask). Body: {contentType, contentLength,
     recaptchaToken}."""
     data = request.get_json(silent=True)
-    if not data:
+    if not data or not isinstance(data, dict):
         return {
             "success": False,
             "error": "missing_fields",
@@ -84,7 +84,8 @@ def receipt_upload_url():
         )
     except Exception as e:
         logger.exception("Error minting receipt upload URL: %s", str(e))
-        return {"error": "Could not create an upload URL"}, 500
+        return {"success": False, "error": "upload_url_failed",
+                "message": "Could not create an upload URL"}, 500
     return payload, status
 
 
@@ -121,7 +122,8 @@ def admin_list_reimbursements():
         )
     except Exception as e:
         logger.exception("Error listing reimbursements: %s", str(e))
-        return {"success": False, "error": str(e)}, 500
+        return {"success": False, "error": "internal_error",
+                "message": "An error occurred while processing your request"}, 500
     return payload, status
 
 
@@ -136,7 +138,8 @@ def admin_get_reimbursement(reimbursement_id):
         )
     except Exception as e:
         logger.exception("Error fetching reimbursement %s: %s", reimbursement_id, str(e))
-        return {"success": False, "error": str(e)}, 500
+        return {"success": False, "error": "internal_error",
+                "message": "An error occurred while processing your request"}, 500
     return payload, status
 
 
@@ -148,7 +151,7 @@ def admin_review_reimbursement(reimbursement_id):
     reviewedBy / paidAt / statusHistory in the payload is ignored by the
     service. Self-approval is rejected with 403 self_approval."""
     data = request.get_json(silent=True)
-    if not data:
+    if not data or not isinstance(data, dict):
         return {
             "success": False,
             "error": "missing_fields",
@@ -160,5 +163,6 @@ def admin_review_reimbursement(reimbursement_id):
         )
     except Exception as e:
         logger.exception("Error reviewing reimbursement %s: %s", reimbursement_id, str(e))
-        return {"success": False, "error": str(e)}, 500
+        return {"success": False, "error": "internal_error",
+                "message": "An error occurred while processing your request"}, 500
     return payload, status

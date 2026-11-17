@@ -18,7 +18,9 @@ from api.reimbursements import reimbursements_service as svc
 
 
 def _today_str():
-    return date.today().isoformat()
+    # UTC, like the service: a local-clock date made these fail every
+    # evening in US timezones.
+    return svc._today_utc().isoformat()
 
 
 def _valid_payload(**overrides):
@@ -35,7 +37,7 @@ def _valid_payload(**overrides):
         "paymentMethod": "personal_card",
         "reimbursementMethod": "ach",
         "attestation": True,
-        "receiptBlobPath": "reimbursements/abc123/receipt_abc123.jpg",
+        "receiptBlobPath": "reimbursements/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/receipt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg",
         "receiptFilename": "receipt.jpg",
         "receiptContentType": "image/jpeg",
         "recaptchaToken": "test-token",
@@ -114,21 +116,21 @@ def test_amount_cents_rounding(env):
 
 
 def test_future_expense_date_rejected(env):
-    future = (date.today() + timedelta(days=1)).isoformat()
+    future = (svc._today_utc() + timedelta(days=2)).isoformat()
     payload, status = _submit(env, expenseDate=future)
     assert status == 400
     assert payload["error"] == "invalid_date"
 
 
 def test_expense_date_over_120_days_rejected(env):
-    old = (date.today() - timedelta(days=121)).isoformat()
+    old = (svc._today_utc() - timedelta(days=122)).isoformat()
     payload, status = _submit(env, expenseDate=old)
     assert status == 400
     assert payload["error"] == "invalid_date"
 
 
 def test_expense_date_120_days_ok(env):
-    old = (date.today() - timedelta(days=120)).isoformat()
+    old = (svc._today_utc() - timedelta(days=120)).isoformat()
     payload, status = _submit(env, expenseDate=old)
     assert status == 201
 
@@ -229,9 +231,9 @@ def test_success_stores_snake_case_doc(env):
     assert doc["currency"] == "USD"
     assert doc["attestation"] is True
     assert doc["submitter_propel_id"] is None
-    assert doc["receipt"]["blob_path"] == "reimbursements/abc123/receipt_abc123.jpg"
+    assert doc["receipt"]["blob_path"] == "reimbursements/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/receipt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg"
     assert doc["receipt"]["final_url"] == (
-        "https://cdn.ohack.dev/reimbursements/abc123/receipt_abc123.jpg")
+        "https://cdn.ohack.dev/reimbursements/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/receipt_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.jpg")
     assert doc["receipt"]["size_bytes"] == 12345
     assert doc["status"] == "submitted"
     assert doc["status_history"] == [
@@ -474,3 +476,80 @@ def test_admin_get_full_doc_and_404(env):
     assert payload["status_history"]
     payload, status = svc.admin_get_reimbursement("missing")
     assert status == 404
+
+
+# ---------------------------------------------------------------------------
+# Review hardening (peer review of #373)
+# ---------------------------------------------------------------------------
+
+def test_nan_and_sub_cent_amounts_rejected(env):
+    for bad in (float("nan"), float("inf"), 0.001):
+        payload, status = _submit(env, amount=bad)
+        assert status == 400 and payload["error"] == "invalid_amount", bad
+
+
+@pytest.mark.parametrize("path", [
+    "reimbursements/../users/x/receipt.jpg",
+    "reimbursements/abc/receipt_abc.jpg",
+    "reimbursements/%s/receipt_%s.exe" % ("a" * 32, "a" * 32),
+])
+def test_receipt_blob_path_must_match_minted_shape(env, path):
+    payload, status = _submit(env, receiptBlobPath=path)
+    assert status == 400 and payload["error"] == "invalid_receipt"
+
+
+def test_empty_receipt_blob_rejected(env):
+    with patch("common.utils.cdn.get_blob_metadata", return_value={
+            "exists": True, "size": 0, "content_type": "image/jpeg"}):
+        payload, status = _submit(env)
+    assert status == 400 and payload["error"] == "receipt_not_found"
+
+
+def test_overlong_and_non_string_fields_rejected(env):
+    payload, status = _submit(env, businessPurpose="x" * 2001)
+    assert status == 400 and payload["error"] == "field_too_long"
+    payload, status = _submit(env, vendor=["Costco"])
+    assert status == 400 and payload["error"] == "invalid_field"
+    payload, status = _submit(env, vendor="   ")
+    assert status == 400 and payload["error"] == "missing_fields"
+
+
+def test_non_object_bodies_are_400(env):
+    assert svc.create_reimbursement("ip", ["x"])[1] == 400
+    assert svc.create_receipt_upload_url("ip", "x")[1] == 400
+    assert svc.admin_review_reimbursement("id", ["x"], _reviewer())[1] == 400
+
+
+def test_status_lookup_is_case_insensitive_on_reference(env):
+    created, _ = _submit(env)
+    payload, status = svc.get_reimbursement_status(
+        "ada@example.com", "  " + created["referenceId"].lower() + " ")
+    assert status == 200 and payload["referenceId"] == created["referenceId"]
+
+
+def test_review_without_reviewer_identity_fails_closed(env):
+    created, _ = _submit(env)
+    for reviewer in (None, {}, {"email": "", "propel_id": None}):
+        payload, status = svc.admin_review_reimbursement(
+            created["id"], {"status": "approved"}, reviewer)
+        assert status == 403 and payload["error"] == "reviewer_unknown"
+    assert _get_doc(env, created["id"])["status"] == "submitted"
+
+
+def test_review_note_trimmed_and_capped(env):
+    created, _ = _submit(env)
+    payload, status = svc.admin_review_reimbursement(
+        created["id"], {"reviewNote": "x" * 2001}, _reviewer())
+    assert status == 400 and payload["error"] == "field_too_long"
+    svc.admin_review_reimbursement(
+        created["id"], {"status": "needs_info", "reviewNote": "  need totals  "},
+        _reviewer())
+    assert _get_doc(env, created["id"])["review_note"] == "need totals"
+
+
+def test_expense_date_tolerates_one_day_of_timezone_skew(env):
+    # A submitter whose local calendar is a day ahead of / behind UTC.
+    ahead = (svc._today_utc() + timedelta(days=1)).isoformat()
+    assert _submit(env, expenseDate=ahead)[1] == 201
+    oldest_local = (svc._today_utc() - timedelta(days=121)).isoformat()
+    assert _submit(env, expenseDate=oldest_local)[1] == 201
