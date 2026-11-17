@@ -25,6 +25,14 @@ logger = logging.getLogger("myapp")
 ENGAGED_MIN_ACTIONS = 5
 ENGAGED_MIN_TEAMS = 1
 
+# Engagement score = one number to scan and sort by. Points are deliberately
+# simple so an organizer can explain any score from its breakdown.
+SCORE_PER_ACTION = 1
+SCORE_PER_TEAM = 2
+SCORE_CHECKED_IN = 2
+SCORE_PER_HOUR = 1
+SCORE_MAX_HOUR_POINTS = 10   # a forgotten check-out must not win the ranking
+
 LEVEL_ENGAGED = "engaged"            # suggested for a certificate
 LEVEL_SOME = "some_activity"         # used the panel, under the bar — review
 LEVEL_CHECKED_IN_ONLY = "checked_in_only"
@@ -171,6 +179,25 @@ def engagement_level(checked_in: bool, panel_actions: int, teams_helped: int) ->
     return LEVEL_CHECKED_IN_ONLY if checked_in else LEVEL_NONE
 
 
+def engagement_score(checkin: Dict[str, Any], fields: Dict[str, Any]) -> Dict[str, Any]:
+    """{"score", "score_breakdown": [{label, detail, points}]} for one mentor."""
+    hours = int(checkin.get("checked_in_hours") or 0)
+    parts = [
+        ("Mentor panel actions", "%d x %d" % (fields["panel_actions"], SCORE_PER_ACTION),
+         fields["panel_actions"] * SCORE_PER_ACTION),
+        ("Teams helped", "%d x %d" % (fields["teams_helped"], SCORE_PER_TEAM),
+         fields["teams_helped"] * SCORE_PER_TEAM),
+        ("Checked in", "yes" if checkin.get("checked_in") else "no",
+         SCORE_CHECKED_IN if checkin.get("checked_in") else 0),
+        ("Hours checked in", "%d full hours, max %d points" % (hours, SCORE_MAX_HOUR_POINTS),
+         min(hours * SCORE_PER_HOUR, SCORE_MAX_HOUR_POINTS)),
+    ]
+    return {
+        "score": sum(p[2] for p in parts),
+        "score_breakdown": [{"label": l, "detail": d, "points": pts} for l, d, pts in parts],
+    }
+
+
 def summarize_mentor_engagement(
     mentor_docs: List[Dict[str, Any]],
     teams: List[Dict[str, Any]],
@@ -229,14 +256,15 @@ def summarize_mentor_engagement(
             "in_person": vol.get("inPerson"),
             **checkin,
             **fields,
+            **engagement_score(checkin, fields),
             "level": engagement_level(checkin["checked_in"], fields["panel_actions"],
                                       fields["teams_helped"]),
         })
 
     order = [LEVEL_ENGAGED, LEVEL_SOME, LEVEL_CHECKED_IN_ONLY, LEVEL_NONE]
-    # Most engaged first: level, then panel work, teams reached, hours on shift.
-    rows.sort(key=lambda r: (order.index(r["level"]), -r["panel_actions"], -r["teams_helped"],
-                             -r["checked_in_hours"], str(r["name"] or "").lower()))
+    # Most engaged first: level, then score, then panel work.
+    rows.sort(key=lambda r: (order.index(r["level"]), -r["score"], -r["panel_actions"],
+                             str(r["name"] or "").lower()))
     for i, row in enumerate(rows, start=1):
         row["rank"] = i
     unmatched.sort(key=lambda r: -r["panel_actions"])

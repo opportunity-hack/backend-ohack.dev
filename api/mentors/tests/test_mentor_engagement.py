@@ -109,3 +109,16 @@ def test_one_team_is_enough_and_rows_are_ranked_most_engaged_first():
     rows = svc.summarize_mentor_engagement(vols, teams)["mentors"]
     assert [(r["rank"], r["volunteer_id"]) for r in rows] == [(1, "top"), (2, "mid"), (3, "low"), (4, "idle")]
     assert [r["level"] for r in rows] == [svc.LEVEL_ENGAGED, svc.LEVEL_ENGAGED, svc.LEVEL_SOME, svc.LEVEL_NONE]
+
+
+def test_score_adds_up_and_caps_hours():
+    vols = [_vol("ann", "p-ann", "ann@x.org",
+                 checkInTimeList=["2026-11-14T09:00:00-07:00"],
+                 checkoutTimeList=["2026-11-15T09:00:00-07:00"])]  # forgot to check out: 24h
+    teams = [_team("t1", mentor_notes=[{"author_propel_id": "p-ann", "created_at": "2026-11-14T19:00:00"}] * 3)]
+    row = svc.summarize_mentor_engagement(vols, teams)["mentors"][0]
+    # 3 actions + 1 team x 2 + checked in 2 + hours capped at 10
+    assert row["score"] == 3 + 2 + 2 + 10
+    assert sum(p["points"] for p in row["score_breakdown"]) == row["score"]
+    idle = svc.summarize_mentor_engagement([_vol("bob", "p-bob", "bob@x.org")], [])["mentors"][0]
+    assert idle["score"] == 0
