@@ -166,7 +166,7 @@ def test_attestation_false_rejected(env):
 def test_bad_payment_and_reimbursement_methods_rejected(env):
     payload, status = _submit(env, paymentMethod="company_card")
     assert status == 400 and payload["error"] == "invalid_payment_method"
-    payload, status = _submit(env, reimbursementMethod="venmo")
+    payload, status = _submit(env, reimbursementMethod="bitcoin")
     assert status == 400 and payload["error"] == "invalid_reimbursement_method"
 
 
@@ -331,6 +331,14 @@ def _reviewer(email="treasurer@example.com"):
     return {"propel_id": "propel-treasurer", "email": email, "name": "Treasurer"}
 
 
+def _body(status):
+    """Review body for a status; paid must carry the payment reference."""
+    body = {"status": status}
+    if status == "paid":
+        body["paymentReference"] = "TXN-123"
+    return body
+
+
 def _move_to(env, doc_id, target):
     """Walk the transition map to `target` from submitted (paid needs
     submitted -> approved -> paid; denied is one step)."""
@@ -339,7 +347,7 @@ def _move_to(env, doc_id, target):
             "denied": ["denied"], "paid": ["approved", "paid"]}[target]
     for step in path:
         payload, status = svc.admin_review_reimbursement(
-            doc_id, {"status": step}, _reviewer())
+            doc_id, _body(step), _reviewer())
         assert status == 200, payload
 
 
@@ -357,7 +365,7 @@ def test_valid_transitions(env, from_to):
     doc_id = _seed(env)
     _move_to(env, doc_id, start)
     payload, status = svc.admin_review_reimbursement(
-        doc_id, {"status": end}, _reviewer())
+        doc_id, _body(end), _reviewer())
     assert status == 200, payload
     assert payload["status"] == end
     doc = _get_doc(env, doc_id)
@@ -382,7 +390,7 @@ def test_invalid_transitions_are_409(env, from_to):
     doc_id = _seed(env)
     _move_to(env, doc_id, start)
     payload, status = svc.admin_review_reimbursement(
-        doc_id, {"status": end}, _reviewer())
+        doc_id, _body(end), _reviewer())
     assert status == 409
     assert payload["error"] == "invalid_transition"
     assert _get_doc(env, doc_id)["status"] == start
@@ -553,3 +561,96 @@ def test_expense_date_tolerates_one_day_of_timezone_skew(env):
     assert _submit(env, expenseDate=ahead)[1] == 201
     oldest_local = (svc._today_utc() - timedelta(days=121)).isoformat()
     assert _submit(env, expenseDate=oldest_local)[1] == 201
+
+
+# ---------------------------------------------------------------------------
+# Payment-app payouts (PayPal / Venmo / Zelle) + payment reference
+# ---------------------------------------------------------------------------
+
+def _app(method, handle, **extra):
+    fields = {"reimbursementMethod": method, "payoutHandle": handle,
+              "payoutAccountName": "Ada Lovelace"}
+    fields.update(extra)
+    return fields
+
+
+@pytest.mark.parametrize("method,handle,stored,kind", [
+    ("venmo", "ada-lovelace", "@ada-lovelace", "username"),
+    ("venmo", "@Ada_L0velace", "@Ada_L0velace", "username"),
+    ("paypal", " Ada@Example.com ", "ada@example.com", "email"),
+    ("paypal", "+1 (480) 555-0100", "14805550100", "phone"),
+    ("zelle", "480-555-0100", "4805550100", "phone"),
+    ("zelle", "ada@example.com", "ada@example.com", "email"),
+])
+def test_payout_app_details_are_validated_and_normalized(env, method, handle, stored, kind):
+    payload, status = _submit(env, **_app(method, handle))
+    assert status == 201, payload
+    payout = _get_doc(env, payload["id"])["payout"]
+    assert payout == {"method": method, "handle": stored, "handle_type": kind,
+                      "account_name": "Ada Lovelace"}
+
+
+@pytest.mark.parametrize("fields", [
+    _app("venmo", "ab"),                       # too short for a username
+    _app("venmo", "ada lovelace"),
+    _app("venmo", "@ada-lovelace", payoutPhoneLast4="12a4"),
+    _app("paypal", "not-an-email-or-phone"),
+    _app("zelle", "555-0100"),                 # 7 digits
+    _app("zelle", "ada@nowhere"),
+    {"reimbursementMethod": "venmo", "payoutAccountName": "Ada"},       # no handle
+    {"reimbursementMethod": "zelle", "payoutHandle": "ada@example.com"},  # no name
+])
+def test_bad_payout_details_rejected(env, fields):
+    payload, status = _submit(env, **fields)
+    assert status == 400 and payload["error"] == "invalid_payout", payload
+
+
+def test_venmo_last4_stored_and_ach_check_carry_no_payout(env):
+    payload, _ = _submit(env, **_app("venmo", "@ada-lovelace", payoutPhoneLast4="0100"))
+    assert _get_doc(env, payload["id"])["payout"]["phone_last4"] == "0100"
+    # A handle sent with ACH / check is ignored, never stored.
+    for method in ("ach", "check"):
+        payload, status = _submit(env, reimbursementMethod=method,
+                                  payoutHandle="@ada-lovelace")
+        assert status == 201
+        assert _get_doc(env, payload["id"])["payout"] is None
+
+
+def test_payout_never_in_public_status_and_never_editable(env):
+    created, _ = _submit(env, **_app("venmo", "@ada-lovelace"))
+    public, status = svc.get_reimbursement_status(
+        "ada@example.com", created["referenceId"])
+    assert status == 200
+    assert "payout" not in public and "ada-lovelace" not in str(public)
+    # The admin PATCH cannot redirect a payout.
+    svc.admin_review_reimbursement(created["id"], {
+        "status": "approved",
+        "payout": {"handle": "@attacker"}, "payoutHandle": "@attacker",
+        "reimbursementMethod": "zelle",
+    }, _reviewer())
+    doc = _get_doc(env, created["id"])
+    assert doc["payout"]["handle"] == "@ada-lovelace"
+    assert doc["reimbursement_method"] == "venmo"
+
+
+def test_paid_requires_and_stores_payment_reference(env):
+    created, _ = _submit(env)
+    _move_to(env, created["id"], "approved")
+    payload, status = svc.admin_review_reimbursement(
+        created["id"], {"status": "paid", "paymentReference": "  "}, _reviewer())
+    assert status == 400 and payload["error"] == "payment_reference_required"
+    assert _get_doc(env, created["id"])["status"] == "approved"
+    payload, status = svc.admin_review_reimbursement(
+        created["id"], {"status": "paid", "paymentReference": " Venmo 4012 "},
+        _reviewer())
+    assert status == 200
+    doc = _get_doc(env, created["id"])
+    assert doc["payment_reference"] == "Venmo 4012" and doc["paid_at"]
+
+
+def test_payment_reference_only_read_on_paid_transition(env):
+    created, _ = _submit(env)
+    svc.admin_review_reimbursement(
+        created["id"], {"status": "approved", "paymentReference": "early"},
+        _reviewer())
+    assert _get_doc(env, created["id"])["payment_reference"] == ""

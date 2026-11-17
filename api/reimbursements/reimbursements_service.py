@@ -14,8 +14,10 @@ bank details.
 
 Security notes:
 - No bank account / routing numbers are stored anywhere in v1. The
-  ``reimbursement_method`` field records only ``ach`` or ``check``; ACH
-  details are collected later through a secure follow-up, never in this API.
+  For ``ach`` / ``check`` the ``reimbursement_method`` field records only the
+  choice; ACH details are collected later through a secure follow-up, never
+  in this API. For ``paypal`` / ``venmo`` / ``zelle`` the claim carries a
+  ``payout`` map (handle + name on the account) — see PAYOUT_APP_METHODS.
 - Server-owned fields (``status``, ``reviewed_by``, ``paid_at``,
   ``status_history``, ``reference_id``, ``*_at`` timestamps) are never
   accepted from a client payload — the admin PATCH reads only ``status``
@@ -64,7 +66,24 @@ ALLOWED_RECEIPT_CONTENT_TYPES = {
     "application/pdf": "pdf",
 }
 ALLOWED_PAYMENT_METHODS = ("personal_card", "personal_cash", "other")
-ALLOWED_REIMBURSEMENT_METHODS = ("ach", "check")
+ALLOWED_REIMBURSEMENT_METHODS = ("ach", "check", "paypal", "venmo", "zelle")
+
+# Payment-app payouts. Unlike bank account / routing numbers (never stored
+# here), a PayPal / Venmo / Zelle handle is something people hand out to be
+# paid, so it is collected with the claim. The risks are the ones every
+# payer has with these rails, and the rules below exist for them:
+# - Sends are effectively irreversible, so a typo pays a stranger: the handle
+#   is validated per method, the form makes the submitter type it twice, and
+#   the name on the account is required so the payer can match it to what
+#   the app shows before sending.
+# - "Please pay this other account instead" is the classic payout-redirect
+#   fraud: payout details are written once at submission and no route can
+#   change them (the admin PATCH never reads them).
+# - A handle is still personal data: admin routes only, never in the public
+#   status projection, never in the Slack audit text.
+PAYOUT_APP_METHODS = ("paypal", "venmo", "zelle")
+_VENMO_RE = re.compile(r"^@?([A-Za-z0-9][A-Za-z0-9_-]{4,29})$")
+MAX_PAYMENT_REFERENCE_LENGTH = 200
 
 STATUSES = ("submitted", "under_review", "needs_info", "approved", "denied", "paid")
 
@@ -87,7 +106,9 @@ ALLOWED_TRANSITIONS = {
 SERVER_OWNED_FIELDS = frozenset({
     "status", "reviewed_by", "reviewed_at", "paid_at", "status_history",
     "reference_id", "submitted_at", "created_at", "updated_at",
-    "submitter_propel_id", "amount_cents",
+    "submitter_propel_id", "amount_cents", "payment_reference",
+    # Written once at submission; no route updates it (payout-redirect fraud).
+    "payout",
 })
 
 _REQUIRED_SUBMIT_FIELDS = (
@@ -116,6 +137,9 @@ MAX_FIELD_LENGTHS = {
     "businessPurpose": 2000,
     "fedDescription": 2000,
     "receiptFilename": 255,
+    "payoutHandle": 254,
+    "payoutAccountName": 200,
+    "payoutPhoneLast4": 4,
 }
 MAX_REVIEW_NOTE_LENGTH = 2000
 
@@ -207,6 +231,58 @@ def validate_amount(value: Any) -> Optional[int]:
         return None
     cents = int(round(value * 100))
     return cents if cents >= 1 else None
+
+
+def normalize_phone(value: str) -> Optional[str]:
+    """Digits-only phone ("+1 (480) 555-0100" -> "14805550100"), or None when
+    it isn't a plausible number (10-15 digits)."""
+    if not re.match(r"^\+?[\d\s().-]+$", value or ""):
+        return None
+    digits = re.sub(r"\D", "", value)
+    return digits if 10 <= len(digits) <= 15 else None
+
+
+def validate_payout(
+    method: str, data: Dict[str, Any]
+) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
+    """Payout details for the chosen method. Returns (payout, None) or
+    (None, error message). ACH / check carry none: bank details are never
+    collected here and a check address is arranged by the treasurer."""
+    if method not in PAYOUT_APP_METHODS:
+        return None, None
+    handle = str(data.get("payoutHandle") or "").strip()
+    account_name = str(data.get("payoutAccountName") or "").strip()
+    if not handle:
+        return None, "payoutHandle is required for %s" % method
+    if not account_name:
+        return None, "payoutAccountName (the name on the account) is required for %s" % method
+    payout: Dict[str, Any] = {"method": method, "account_name": account_name}
+    if method == "venmo":
+        match = _VENMO_RE.match(handle)
+        if not match:
+            return None, "payoutHandle must be a Venmo username like @your-name"
+        payout["handle"] = "@" + match.group(1)
+        payout["handle_type"] = "username"
+        last4 = str(data.get("payoutPhoneLast4") or "").strip()
+        if last4:
+            # Venmo asks the sender for these when paying someone new.
+            if not re.match(r"^\d{4}$", last4):
+                return None, "payoutPhoneLast4 must be 4 digits"
+            payout["phone_last4"] = last4
+        return payout, None
+    # PayPal and Zelle both pay to an email address or a mobile number.
+    if "@" in handle:
+        if not _EMAIL_RE.match(handle):
+            return None, "payoutHandle must be a valid email address or mobile number"
+        payout["handle"] = handle.lower()
+        payout["handle_type"] = "email"
+        return payout, None
+    phone = normalize_phone(handle)
+    if phone is None:
+        return None, "payoutHandle must be a valid email address or mobile number"
+    payout["handle"] = phone
+    payout["handle_type"] = "phone"
+    return payout, None
 
 
 def _err(code: str, message: str, status: int = 400) -> Tuple[Dict[str, Any], int]:
@@ -328,7 +404,11 @@ def validate_submission_payload(
             "reimbursementMethod must be one of %s"
             % ", ".join(ALLOWED_REIMBURSEMENT_METHODS),
         )
+    payout, payout_error = validate_payout(data["reimbursementMethod"], data)
+    if payout_error:
+        return None, _err("invalid_payout", payout_error)
     return {
+        "payout": payout,
         "submitter_name": str(data["submitterName"]).strip(),
         "submitter_email": email,
         "phone": str(data.get("phone") or "").strip(),
@@ -396,6 +476,7 @@ def create_reimbursement(
         "reviewed_by": None,
         "reviewed_at": None,
         "paid_at": None,
+        "payment_reference": "",
         "review_note": "",
         "ip_address": ip_address or "",
     })
@@ -579,6 +660,17 @@ def admin_review_reimbursement(
     reviewer = reviewer or {}
     new_status = data.get("status")
     review_note = data.get("reviewNote")
+    payment_reference = data.get("paymentReference")
+    if payment_reference is not None:
+        if not isinstance(payment_reference, str):
+            return _err("invalid_payment_reference", "paymentReference must be a string")
+        payment_reference = payment_reference.strip()
+        if len(payment_reference) > MAX_PAYMENT_REFERENCE_LENGTH:
+            return _err(
+                "field_too_long",
+                "paymentReference must be at most %d characters"
+                % MAX_PAYMENT_REFERENCE_LENGTH,
+            )
     if new_status is None and review_note is None:
         return _err(
             "missing_fields", "Provide status and/or reviewNote"
@@ -658,6 +750,14 @@ def admin_review_reimbursement(
         update["reviewed_at"] = now
         if new_status == "paid":
             update["paid_at"] = now
+            # The books need to tie this claim to a real transfer: the app's
+            # transaction id, a check number, or an ACH trace. Read ONLY on
+            # the paid transition, so it can't be rewritten afterwards.
+            if not payment_reference:
+                return {"success": False, "error": "payment_reference_required",
+                        "message": "Add the payment reference (transaction id, "
+                                   "check number, or ACH trace) to mark this paid"}, 400
+            update["payment_reference"] = payment_reference
     doc_ref.update(update)
     if new_status is not None:
         _audit(

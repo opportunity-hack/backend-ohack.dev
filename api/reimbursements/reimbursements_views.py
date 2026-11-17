@@ -147,7 +147,8 @@ def admin_get_reimbursement(reimbursement_id):
 @auth.require_user
 @auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
 def admin_review_reimbursement(reimbursement_id):
-    """Admin review. Body: {status, reviewNote} only — any status /
+    """Admin review. Body: {status, reviewNote, paymentReference (required
+    when status is paid)} only — any status /
     reviewedBy / paidAt / statusHistory in the payload is ignored by the
     service. Self-approval is rejected with 403 self_approval."""
     data = request.get_json(silent=True)
