@@ -115,8 +115,8 @@ def checkin_check_in(arguments, admin):
 @register_tool(
     "checkin_reset",
     "Clear check-ins for one event and volunteer type. volunteer.admin "
-    "only. Scope is required: volunteer_ids (at most MAX_RESET_IDS) or "
-    "all=true.",
+    "only. Scope is required: volunteer_ids (at most %d) or all=true "
+    "(everyone of that type who is checked in)." % checkin_service.MAX_RESET_IDS,
     {
         "type": "object",
         "properties": {
