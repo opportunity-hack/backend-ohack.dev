@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "9668c17b-b377-47da-8416-7aa984d80e46",
+  "status": "current",
+  "command": "deliver",
+  "type": "architecture",
+  "input": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/.archify/architecture-mcp-reimbursements-20261122-113500/candidate.json",
+  "output": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/docs/diagrams/mcp-reimbursements-architecture.html",
+  "specification": {
+    "sha256": "ebe60714340571771717e728a3a969501f5c7bdcd345bd9a5c5917cf77e96c85",
+    "bytes": 4091
+  },
+  "artifact": {
+    "sha256": "509bbbef52f4cd5552c8b911170461f15da7abd176fd48251e35df45e7c235ca",
+    "bytes": 944000
+  }
+}

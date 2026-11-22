@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "receiptId": "640fc007-da5d-4165-bd82-c332095ad548",
+  "status": "current",
+  "command": "deliver",
+  "type": "sequence",
+  "input": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/.archify/sequence-mcp-reimbursement-review-20261122-114200/candidate.json",
+  "output": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/docs/diagrams/mcp-reimbursement-review-sequence.html",
+  "specification": {
+    "sha256": "ed0c1087bc0b0c1a8b1b95ebd0d7a55a105fc8773f623c99b1904cffc838bea1",
+    "bytes": 4668
+  },
+  "artifact": {
+    "sha256": "e6ef8360f027719705a92b682ed815c14ef1d64c941adfe45cc99c6697ea2098",
+    "bytes": 934852
+  }
+}

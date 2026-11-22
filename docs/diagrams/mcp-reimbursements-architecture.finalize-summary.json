@@ -1,0 +1,77 @@
+{
+  "schemaVersion": 1,
+  "ok": true,
+  "command": "finalize",
+  "status": "pass",
+  "type": "architecture",
+  "quality": "showcase",
+  "specification": {
+    "path": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/.archify/architecture-mcp-reimbursements-20261122-113500/candidate.json",
+    "sha256": "ebe60714340571771717e728a3a969501f5c7bdcd345bd9a5c5917cf77e96c85",
+    "bytes": 4091
+  },
+  "artifact": {
+    "path": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/docs/diagrams/mcp-reimbursements-architecture.html",
+    "sha256": "509bbbef52f4cd5552c8b911170461f15da7abd176fd48251e35df45e7c235ca",
+    "bytes": 944000
+  },
+  "gates": {
+    "validate": "pass",
+    "deliver": "pass",
+    "check": "pass",
+    "browser-check": "pass"
+  },
+  "diagnostics": [],
+  "diagnosticSummary": {
+    "total": 0,
+    "shown": 0,
+    "truncated": false
+  },
+  "evidence": {
+    "receipt": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/docs/diagrams/mcp-reimbursements-architecture.finalize.json",
+    "summaryReceipt": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/docs/diagrams/mcp-reimbursements-architecture.finalize-summary.json",
+    "browserCheckReceipt": "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/docs/diagrams/mcp-reimbursements-architecture.browser-check.json"
+  },
+  "repositoryReferences": {
+    "status": "verified",
+    "revision": "c377ebd1bea448e5a04ade52278f4620fc5db66d",
+    "count": 14
+  },
+  "codeAnalysisOffer": {
+    "action": "offer-code-analysis",
+    "reason": "Archify’s built-in Architecture Diagnosis adds component findings, a radial star map, and a rotatable 3D view of repository dependencies.",
+    "instruction": "Use the referenced pitch once per repository and wait for consent before starting.",
+    "dependencies": "installed",
+    "diagramButton": true,
+    "quality": "showcase",
+    "start": {
+      "argv": [
+        "/usr/bin/node",
+        "/home/hatch/workspace/archify-skill/agent/skills/archify/bin/archify.mjs",
+        "start",
+        "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements",
+        "--ir",
+        "/home/hatch/workspace/ohack-mcp/worktrees/mcp-reimbursements/.archify/architecture-mcp-reimbursements-20261122-113500/candidate.json",
+        "--quality",
+        "showcase"
+      ]
+    },
+    "reference": "references/delivery-contract.md#architecture-diagnosis-offer"
+  },
+  "update": {
+    "status": "current",
+    "installedVersion": "3.3.0",
+    "availableVersion": "3.3.0",
+    "releaseNotes": null,
+    "checkedAt": "2026-11-22T18:25:19.718Z",
+    "source": "cache",
+    "noticeRequired": false,
+    "noticeText": null
+  },
+  "visualReview": "not-requested",
+  "durationMs": 14083,
+  "browserCheck": {
+    "requested": true,
+    "ran": true
+  }
+}
