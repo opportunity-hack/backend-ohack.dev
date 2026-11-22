@@ -84,7 +84,15 @@ adds its module here:
 
 - `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize)
 - `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
-- `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
+- `feat/mcp-teams` — `team_*` (approve, roster, messaging, gateway keys):
+  `team_list_queued` (IN_REVIEW teams), `team_approve` (confirm; creates
+  the GitHub repo, posts to Slack, mints gateway keys),
+  `team_edit` (confirm), `team_add_member` / `team_remove_member`
+  (confirm), `team_remove` (confirm), `team_message` (confirm; Slack
+  and/or email), `team_gateway_key_statuses` (metadata only, max 200
+  teams), `team_rotate_gateway_key` (confirm; key1|key2),
+  `team_provision_gateway_key` (confirm; idempotent re-provision).
+  All `volunteer.admin`-only; identity comes from the token.
 - `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
 - `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
 - `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds)

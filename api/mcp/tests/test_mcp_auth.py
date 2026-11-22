@@ -71,7 +71,10 @@ def test_malformed_json_is_parse_error(load):
     assert r.json["error"]["code"] == -32700
 
 
-def test_tools_list_empty_with_no_tools_registered(load):
+def test_tools_list_returns_registered_tools(load):
+    # The first tool module (teams) is registered at import, so the list
+    # is no longer empty: it holds every registered tool. (The empty case
+    # is covered at the dispatcher level in test_mcp_protocol.)
     client = load(passthrough_auth_module())[1].test_client()
     r = client.post(
         "/api/mcp",
@@ -79,7 +82,20 @@ def test_tools_list_empty_with_no_tools_registered(load):
         headers=HEADERS,
     )
     assert r.status_code == 200
-    assert r.json["result"] == {"tools": []}
+    names = [entry["name"] for entry in r.json["result"]["tools"]]
+    for tool in (
+        "team_list_queued",
+        "team_approve",
+        "team_edit",
+        "team_add_member",
+        "team_remove_member",
+        "team_remove",
+        "team_message",
+        "team_gateway_key_statuses",
+        "team_rotate_gateway_key",
+        "team_provision_gateway_key",
+    ):
+        assert tool in names
 
 
 def test_ping_through_the_route(load):
