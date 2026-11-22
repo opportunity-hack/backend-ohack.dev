@@ -10,8 +10,10 @@ MCP, no anonymous access, and no new credential type.
   server-initiated notifications in v1).
 - Stateless per the MCP 2026-07-28 revision: no sessions, no
   `Mcp-Session-Id`, no required `initialize` handshake. `initialize` is
-  answered for older clients but never required; plain JSON responses,
-  not SSE streams.
+  answered for older clients but never required (it echoes the client's
+  `protocolVersion` when that is one of
+  `protocol.SUPPORTED_PROTOCOL_VERSIONS`, else answers the latest);
+  plain JSON responses, not SSE streams.
 
 ## Auth
 
@@ -32,7 +34,7 @@ Gate, in order, on every request:
    (defense in depth) and filters `tools/list` to what the caller may
    call. All tools are `volunteer.admin`-only except the three
    check-in tools, which also accept `checkin.admin`
-   (`checkin_roster`, `checkin_list_checked_in`, `checkin_check_in`);
+   (`checkin_roster`, `checkin_checked_in`, `checkin_check_in`);
    `checkin_reset` stays `volunteer.admin`-only.
 
 Identity for writes comes from the verified token only. Tool arguments
@@ -43,7 +45,9 @@ operator obtains a token through the existing login flow.
 
 Every `tools/call` writes a structured log line and a fire-and-forget
 `send_slack_audit(action="mcp_tool_call", ...)` with the tool name,
-caller PropelAuth id, and outcome (arguments are not sent).
+caller PropelAuth id, and outcome (arguments are not sent). A call the
+dispatcher refuses (`-32001`, `-32602`, ...) or that crashes (`-32603`)
+is audited with `is_error: True`.
 
 ## Protocol
 
@@ -60,7 +64,14 @@ REST (`self_approval` 403, `already_approved` 409, ...).
 Side-effecting tools take a required boolean `confirm: true` argument
 (finalize a poll, approve a team, reset check-ins, refund a deposit,
 ...). A model cannot move money or state by accident; the dispatcher
-refuses the call with `-32602` without it.
+refuses the call with `-32602` without it. The registry adds `confirm`
+to the listed schema of every `requires_confirm` tool (as a required
+boolean), so a tool module cannot forget to advertise it.
+
+An argument sent as JSON `null` is treated as absent (model clients
+send `null` for optional arguments they do not use). Payloads are
+serialized with `default=str`, so datetimes in a service payload are
+fine.
 
 ## Adding a tool
 
@@ -74,30 +85,57 @@ refuses the call with `-32602` without it.
    business logic, no HTTP calls back into the app's own REST routes.
 3. `tools/__init__.py` imports every module in the package, so a new
    tool module needs no registry edit.
-4. Add tests in `api/mcp/tests/test_<domain>_tools.py` (see below) and
-   document the tool in the catalog below.
+4. Add tests in `api/mcp/tests/test_mcp_<domain>.py` (see below),
+   including the module's own `tools/list` assertion — check that your
+   names are IN the list, never that the list equals them, and leave
+   `test_mcp_auth.py` alone. Document the tools under your heading in
+   the catalog below.
 
 ## Tool catalog
 
-No tools are registered yet — this PR is the framework. Each domain PR
-adds its module here:
+One subsection per domain module. Each domain PR replaces only the
+placeholder line under its own heading, so the stacked PRs merge without
+touching each other's lines.
 
-- `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize):
-  `meet_list_polls` (optional `status` filter), `meet_get_poll`,
-  `meet_create_poll`, `meet_update_poll`, `meet_delete_poll`,
-  `meet_delete_vote`, `meet_finalize_poll`. All `volunteer.admin`-only.
-  The five writers take required `confirm: true`; closing a poll is
-  `meet_update_poll` with `status: "closed"` (there is no cancel tool).
-  Finalize creates the Google Calendar event + Meet link; a calendar
-  failure leaves the poll open and re-finalizing is 409.
-- `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
-- `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
-- `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
-- `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
-- `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds)
-- `feat/mcp-completion` — `completion_*` (project completion status,
-  GitHub activity; Slack stand-ups are NOT included — the backend
-  tracks no stand-up activity, see that PR)
+### Meetings (`feat/mcp-meet`)
+
+`api/mcp/tools/meet.py`, all `volunteer.admin`-only, thin wrappers over
+`api/meet/meet_service.py`:
+
+- `meet_list_polls` (optional `status` filter, applied here — the
+  service has none), `meet_get_poll` — read-only.
+- `meet_create_poll`, `meet_update_poll`, `meet_delete_poll`,
+  `meet_delete_vote`, `meet_finalize_poll` — writers, `confirm: true`.
+  Closing a poll is `meet_update_poll` with `status: "closed"` (there
+  is no cancel tool). Finalize creates the Google Calendar event + Meet
+  link; a calendar failure leaves the poll open and re-finalizing is
+  409. Deleting a poll does not cancel a sent calendar event.
+
+### Reimbursements (`feat/mcp-reimbursements`)
+
+_Not merged yet — `reimbursement_*` (admin review)._
+
+### Teams (`feat/mcp-teams`)
+
+_Not merged yet — `team_*` (approve, roster, messaging, gateway keys)._
+
+### Check-in (`feat/mcp-checkin`)
+
+_Not merged yet — `checkin_*` (desk tools, per-tool permissions)._
+
+### Surveys (`feat/mcp-surveys`)
+
+_Not merged yet — `survey_*` (read-only admin analytics)._
+
+### Volunteers (`feat/mcp-volunteers`)
+
+_Not merged yet — `volunteers_*` (roster, select, refunds)._
+
+### Project completion (`feat/mcp-completion`)
+
+_Not merged yet — `completion_*` (project completion status, GitHub
+activity; Slack stand-ups are NOT included — the backend tracks no
+stand-up activity)._
 
 ## Client setup
 
@@ -147,14 +185,23 @@ ENVIRONMENT=test SLACK_WEBHOOK= SLACK_BOT_TOKEN= RESEND_API_KEY= \
 
 ```python
 monkeypatch.setitem(sys.modules, "api.meet.meet_service", stub)
-# A from-import binds the parent package's already-set attribute when
-# ``api.meet`` was imported earlier (e.g. by the auth tests, against the
-# real service), so point that attribute at the stub too.
-if "api.meet" in sys.modules:
-    monkeypatch.setattr(sys.modules["api.meet"], "meet_service", stub)
 import api.mcp.tools as tools_pkg
 monkeypatch.setattr(tools_pkg, "_registered", False)
 sys.modules.pop("api.mcp.tools.meet", None)
 sys.modules.pop("api.mcp.mcp_views", None)
 views = importlib.import_module("api.mcp.mcp_views")
 ```
+
+Two gotchas the snippet does not show:
+
+- `from api.meet import meet_service` resolves through the parent
+  package's attribute when the real service module was already imported
+  (by an earlier test file), so the `sys.modules` stub is bypassed and
+  the real service runs. Point the parent attribute at the stub too:
+  `monkeypatch.setattr(sys.modules["api.meet"], "meet_service", stub, raising=False)`.
+- Re-importing a tool module re-runs its `@register_tool` decorators,
+  which raise "already registered" unless the module's own names are
+  removed from `registry.TOOL_REGISTRY` first. Save and restore the
+  registry around the test (`saved = dict(registry.TOOL_REGISTRY)` ...
+  `TOOL_REGISTRY.clear(); TOOL_REGISTRY.update(saved)`) so other test
+  files keep their tools.
