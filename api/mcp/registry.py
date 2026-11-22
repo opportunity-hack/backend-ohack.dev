@@ -11,6 +11,7 @@ is the caller identity from the verified PropelAuth token
 (``{"propel_id", "email", "name"}``) — handlers must never take identity
 from tool arguments.
 """
+import copy
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 # PropelAuth permission strings used by the MCP tools.
@@ -50,6 +51,26 @@ class ToolDef(object):
 
 TOOL_REGISTRY = {}  # type: Dict[str, ToolDef]
 
+_CONFIRM_SPEC = {
+    "type": "boolean",
+    "description": "Must be true: this tool changes state.",
+}
+
+
+def _with_confirm(input_schema):
+    # type: (Dict[str, Any]) -> Dict[str, Any]
+    """A copy of ``input_schema`` that declares ``confirm`` as a required
+    boolean. Every ``requires_confirm`` tool gets this, so ``tools/list``
+    always tells the client about the gate the dispatcher enforces, even
+    when a tool module forgot to declare or require it."""
+    schema = copy.deepcopy(input_schema or {"type": "object"})
+    schema.setdefault("properties", {}).setdefault("confirm", dict(_CONFIRM_SPEC))
+    required = list(schema.get("required") or [])
+    if "confirm" not in required:
+        required.append("confirm")
+    schema["required"] = required
+    return schema
+
 
 def register_tool(
     name,  # type: str
@@ -73,7 +94,9 @@ def register_tool(
         TOOL_REGISTRY[name] = ToolDef(
             name=name,
             description=description,
-            input_schema=input_schema,
+            input_schema=(
+                _with_confirm(input_schema) if requires_confirm else input_schema
+            ),
             permissions=permissions,
             handler=handler,
             requires_confirm=requires_confirm,

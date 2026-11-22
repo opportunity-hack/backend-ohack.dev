@@ -28,6 +28,7 @@ as-is; nothing is added to any audit payload.
 import types
 from typing import Any, Dict, Tuple
 
+from common.log import get_logger
 from api.mcp.registry import VOLUNTEER_ADMIN, register_tool
 from api.teams.gateway_keys import (
     MAX_STATUS_BATCH,
@@ -44,6 +45,8 @@ from api.teams.teams_service import (
     remove_team_member,
     send_team_message,
 )
+
+logger = get_logger(__name__)
 
 _PERMISSIONS = (VOLUNTEER_ADMIN,)
 
@@ -334,7 +337,7 @@ def team_message(arguments, admin):
     {
         "type": "object",
         "properties": {
-            "team_ids": {"type": "array"},
+            "team_ids": {"type": "array", "items": {"type": "string"}},
         },
         "required": ["team_ids"],
         "additionalProperties": False,
@@ -343,7 +346,13 @@ def team_message(arguments, admin):
 )
 def team_gateway_key_statuses(arguments, admin):
     # type: (Dict[str, Any], Dict[str, Any]) -> Tuple[Dict[str, Any], int]
-    team_ids = arguments["team_ids"]
+    # Same cleaning as the REST route (which splits ?team_ids=a,b,c): only
+    # non-empty strings are ids; anything else must not reach Firestore.
+    team_ids = [
+        t.strip()
+        for t in arguments["team_ids"]
+        if isinstance(t, str) and t.strip()
+    ]
     if not team_ids:
         return {"error": "team_ids_required"}, 400
     if len(team_ids) > MAX_STATUS_BATCH:
@@ -376,8 +385,16 @@ def team_rotate_gateway_key(arguments, admin):
     try:
         return rotate_team_gateway_key(arguments["team_id"], arguments["key"]), 200
     except RuntimeError as e:
+        logger.warning(
+            "Gateway key rotate refused for team %s: %s", arguments["team_id"], e
+        )
         return {"error": str(e)}, 404
     except Exception as e:
+        # Logged like the REST route: a handled failure never reaches the
+        # dispatcher's own crash log.
+        logger.error(
+            "Gateway key rotate failed for team %s: %s", arguments["team_id"], e
+        )
         return {"error": "rotation failed: %s" % e}, 502
 
 
@@ -404,4 +421,7 @@ def team_provision_gateway_key(arguments, admin):
     try:
         return provision_team_gateway_key(arguments["team_id"]), 200
     except Exception as e:
+        logger.error(
+            "Gateway key provision failed for team %s: %s", arguments["team_id"], e
+        )
         return {"error": "provisioning failed: %s" % e}, 502

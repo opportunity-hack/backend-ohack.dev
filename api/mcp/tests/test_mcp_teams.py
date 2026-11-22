@@ -151,6 +151,12 @@ def client():
     import api.mcp.tools as tools_pkg
 
     mp.setattr(tools_pkg, "_registered", False)
+    # Re-importing the tool module re-runs @register_tool, which raises
+    # "already registered" when an earlier test file loaded the real
+    # module. Start from an empty registry and restore the original on
+    # teardown so other test files keep their tools.
+    saved_registry = dict(registry.TOOL_REGISTRY)
+    registry.TOOL_REGISTRY.clear()
     sys.modules.pop("api.mcp.tools.teams", None)
     sys.modules.pop("api.mcp.mcp_views", None)
     views = importlib.import_module("api.mcp.mcp_views")
@@ -161,7 +167,7 @@ def client():
     sys.modules.pop("api.mcp.tools.teams", None)
     sys.modules.pop("api.mcp.mcp_views", None)
     registry.TOOL_REGISTRY.clear()
-    tools_pkg._registered = False
+    registry.TOOL_REGISTRY.update(saved_registry)
 
 
 @pytest.fixture(autouse=True)
@@ -415,3 +421,11 @@ def test_non_admin_caller_is_denied(monkeypatch):
     )
     assert response.status_code == 200
     assert response.json["error"]["code"] == -32001
+
+
+def test_gateway_key_statuses_drops_non_string_and_blank_ids(client):
+    # Only real ids reach the service, like the REST route's ?team_ids= split.
+    _call(client, "team_gateway_key_statuses", {"team_ids": [" team-1 ", "", 7]})
+    assert CALLS["list_gateway_key_statuses"] == [["team-1"]]
+    response = _call(client, "team_gateway_key_statuses", {"team_ids": ["", None]})
+    assert "team_ids_required" in response["result"]["content"][0]["text"]

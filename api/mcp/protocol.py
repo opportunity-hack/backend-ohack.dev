@@ -22,9 +22,22 @@ callable, so tests exercise it without Flask or PropelAuth.
 import json
 from typing import Any, Callable, Dict, Optional, Tuple
 
+from common.log import get_logger
 from api.mcp import registry
 
+logger = get_logger(__name__)
+
 PROTOCOL_VERSION = "2026-07-28"
+# Revisions whose tools-only wire format this dispatcher already speaks.
+# ``initialize`` echoes the client's version when it is one of these (the
+# spec's negotiation rule), so a client that predates PROTOCOL_VERSION
+# still connects; anything else is answered with PROTOCOL_VERSION.
+SUPPORTED_PROTOCOL_VERSIONS = (
+    PROTOCOL_VERSION,
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+)
 SERVER_NAME = "ohack-admin-mcp"
 SERVER_VERSION = "0.1.0"
 
@@ -142,20 +155,35 @@ def _admin_from_user(user):
 
 
 def _tool_result(payload, status):
-    # type: (Dict[str, Any], int) -> Dict[str, Any]
-    """Map a service ``(payload, status)`` to an MCP tool result."""
-    is_error = status >= 400 or payload.get("success") is False or "error" in payload
+    # type: (Any, int) -> Dict[str, Any]
+    """Map a service ``(payload, status)`` to an MCP tool result.
+
+    Most services return a dict, but some return a bare list (e.g. a
+    roster). A bare payload is a success unless the status says otherwise;
+    only dict payloads can carry the ``success`` / ``error`` markers.
+    """
+    if isinstance(payload, dict):
+        is_error = status >= 400 or payload.get("success") is False or "error" in payload
+    else:
+        is_error = status >= 400
+    # default=str: service payloads can carry datetimes / Firestore
+    # timestamps, which must not turn a successful call into a 500.
     return {
-        "content": [{"type": "text", "text": json.dumps(payload)}],
+        "content": [{"type": "text", "text": json.dumps(payload, default=str)}],
         "isError": bool(is_error),
     }
 
 
 def _handle_initialize(body, request_id):
     # type: (Dict[str, Any], Any) -> Dict[str, Any]
+    params = body.get("params")
+    requested = params.get("protocolVersion") if isinstance(params, dict) else None
+    version = (
+        requested if requested in SUPPORTED_PROTOCOL_VERSIONS else PROTOCOL_VERSION
+    )
     return _result_response(
         {
-            "protocolVersion": PROTOCOL_VERSION,
+            "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": SERVER_NAME, "version": SERVER_VERSION},
         },
@@ -194,6 +222,10 @@ def _handle_tools_call(body, user, has_permission, request_id):
         return _error_response(
             _INVALID_PARAMS, "tools/call arguments must be an object", request_id
         )
+    # Model clients often send ``null`` for an optional argument they do
+    # not use. Treat it as absent, so it is neither a type error nor a
+    # value a handler forwards to the service as "clear this field".
+    arguments = {k: v for k, v in arguments.items() if v is not None}
 
     tool = registry.get_tool(name)
     if tool is None:
@@ -218,11 +250,14 @@ def _handle_tools_call(body, user, has_permission, request_id):
 
     try:
         payload, status = tool.handler(arguments, _admin_from_user(user))
+        result = _tool_result(payload, status)
     except Exception:
+        # Details go to the server log only, never to the client.
+        logger.exception("MCP tool %s failed unexpectedly", name)
         return _error_response(
             _INTERNAL_ERROR, "The tool failed unexpectedly", request_id
         )
-    return _result_response(_tool_result(payload, status), request_id)
+    return _result_response(result, request_id)
 
 
 def dispatch(body, user, has_permission):

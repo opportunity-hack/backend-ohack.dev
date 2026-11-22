@@ -71,10 +71,10 @@ def test_malformed_json_is_parse_error(load):
     assert r.json["error"]["code"] == -32700
 
 
-def test_tools_list_returns_registered_tools(load):
-    # The first tool module (teams) is registered at import, so the list
-    # is no longer empty: it holds every registered tool. (The empty case
-    # is covered at the dispatcher level in test_mcp_protocol.)
+def test_tools_list_through_the_route(load):
+    # Deliberately says nothing about WHICH tools exist: each tool module
+    # asserts its own names in its own test file, so adding a module never
+    # edits this test. (The empty registry is covered in test_mcp_protocol.)
     client = load(passthrough_auth_module())[1].test_client()
     r = client.post(
         "/api/mcp",
@@ -82,20 +82,35 @@ def test_tools_list_returns_registered_tools(load):
         headers=HEADERS,
     )
     assert r.status_code == 200
-    names = [entry["name"] for entry in r.json["result"]["tools"]]
-    for tool in (
-        "team_list_queued",
-        "team_approve",
-        "team_edit",
-        "team_add_member",
-        "team_remove_member",
-        "team_remove",
-        "team_message",
-        "team_gateway_key_statuses",
-        "team_rotate_gateway_key",
-        "team_provision_gateway_key",
-    ):
-        assert tool in names
+    tools = r.json["result"]["tools"]
+    names = [entry["name"] for entry in tools]
+    assert names == sorted(names)
+    for entry in tools:
+        assert set(entry) == {"name", "description", "inputSchema"}
+
+
+def test_failed_tool_call_is_audited_as_an_error(load, monkeypatch):
+    # A JSON-RPC error (here: unknown tool) has no ``result``; the audit
+    # line must still record the call as failed, never as a success.
+    views, app = load(passthrough_auth_module())
+    audited = []
+    monkeypatch.setattr(
+        views, "_audit_tool_call", lambda name, caller, is_error: audited.append(
+            (name, is_error)
+        )
+    )
+    r = app.test_client().post(
+        "/api/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "no_such\ntool", "arguments": {}},
+        },
+        headers=HEADERS,
+    )
+    assert r.json["error"]["code"] == -32601
+    assert audited == [("no_such tool", True)]
 
 
 def test_ping_through_the_route(load):
