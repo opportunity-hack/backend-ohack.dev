@@ -240,7 +240,12 @@ def test_tools_list_shows_all_six_volunteer_tools(client):
     http_client, _stub = client
     r = _post(http_client, {"jsonrpc": "2.0", "id": 1, "method": "tools/list"})
     assert r.status_code == 200
-    names = [entry["name"] for entry in r.json["result"]["tools"]]
+    # Only this module's tools: sibling tool modules may be registered too.
+    names = [
+        entry["name"]
+        for entry in r.json["result"]["tools"]
+        if entry["name"].startswith("volunteers_")
+    ]
     assert names == ALL_TOOLS
 
 
