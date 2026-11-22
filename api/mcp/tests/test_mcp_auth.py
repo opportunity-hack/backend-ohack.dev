@@ -71,7 +71,7 @@ def test_malformed_json_is_parse_error(load):
     assert r.json["error"]["code"] == -32700
 
 
-def test_tools_list_empty_with_no_tools_registered(load):
+def test_tools_list_shows_the_registered_meet_tools(load):
     client = load(passthrough_auth_module())[1].test_client()
     r = client.post(
         "/api/mcp",
@@ -79,7 +79,15 @@ def test_tools_list_empty_with_no_tools_registered(load):
         headers=HEADERS,
     )
     assert r.status_code == 200
-    assert r.json["result"] == {"tools": []}
+    assert [entry["name"] for entry in r.json["result"]["tools"]] == [
+        "meet_create_poll",
+        "meet_delete_poll",
+        "meet_delete_vote",
+        "meet_finalize_poll",
+        "meet_get_poll",
+        "meet_list_polls",
+        "meet_update_poll",
+    ]
 
 
 def test_ping_through_the_route(load):

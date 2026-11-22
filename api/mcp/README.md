@@ -65,7 +65,7 @@ refuses the call with `-32602` without it.
 ## Adding a tool
 
 1. Add a module in `api/mcp/tools/` (one per domain, e.g.
-   `meet_tools.py`). Register each tool with `@register_tool` — name,
+   `meet.py`). Register each tool with `@register_tool` — name,
    description, JSON Schema for arguments, permission tuple, and
    `requires_confirm` where it moves state.
 2. Handlers are thin: validate nothing the dispatcher hasn't already,
@@ -82,7 +82,14 @@ refuses the call with `-32602` without it.
 No tools are registered yet — this PR is the framework. Each domain PR
 adds its module here:
 
-- `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize)
+- `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize):
+  `meet_list_polls` (optional `status` filter), `meet_get_poll`,
+  `meet_create_poll`, `meet_update_poll`, `meet_delete_poll`,
+  `meet_delete_vote`, `meet_finalize_poll`. All `volunteer.admin`-only.
+  The five writers take required `confirm: true`; closing a poll is
+  `meet_update_poll` with `status: "closed"` (there is no cancel tool).
+  Finalize creates the Google Calendar event + Meet link; a calendar
+  failure leaves the poll open and re-finalizing is 409.
 - `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
 - `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
 - `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
@@ -140,9 +147,14 @@ ENVIRONMENT=test SLACK_WEBHOOK= SLACK_BOT_TOKEN= RESEND_API_KEY= \
 
 ```python
 monkeypatch.setitem(sys.modules, "api.meet.meet_service", stub)
+# A from-import binds the parent package's already-set attribute when
+# ``api.meet`` was imported earlier (e.g. by the auth tests, against the
+# real service), so point that attribute at the stub too.
+if "api.meet" in sys.modules:
+    monkeypatch.setattr(sys.modules["api.meet"], "meet_service", stub)
 import api.mcp.tools as tools_pkg
 monkeypatch.setattr(tools_pkg, "_registered", False)
-sys.modules.pop("api.mcp.tools.meet_tools", None)
+sys.modules.pop("api.mcp.tools.meet", None)
 sys.modules.pop("api.mcp.mcp_views", None)
 views = importlib.import_module("api.mcp.mcp_views")
 ```
