@@ -79,13 +79,16 @@ refuses the call with `-32602` without it.
 
 ## Tool catalog
 
-No tools are registered yet — this PR is the framework. Each domain PR
-adds its module here:
+The check-in tools are registered; each domain PR adds its module here:
 
 - `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize)
 - `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
 - `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
-- `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
+- `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions):
+  `checkin_roster`, `checkin_checked_in`, `checkin_check_in`
+  (`volunteer.admin` or `checkin.admin`; check-in takes `confirm: true`
+  and is idempotent), `checkin_reset` (`volunteer.admin` only,
+  `confirm: true`, scoped by `volunteer_ids` (max 500) or `all: true`)
 - `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
 - `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds)
 - `feat/mcp-completion` — `completion_*` (project completion status,

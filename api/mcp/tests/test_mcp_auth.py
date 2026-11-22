@@ -71,7 +71,9 @@ def test_malformed_json_is_parse_error(load):
     assert r.json["error"]["code"] == -32700
 
 
-def test_tools_list_empty_with_no_tools_registered(load):
+def test_tools_list_returns_registered_tools(load):
+    # The check-in tools are registered by the time the endpoint loads,
+    # so tools/list shows them (filtered to what the caller may call).
     client = load(passthrough_auth_module())[1].test_client()
     r = client.post(
         "/api/mcp",
@@ -79,7 +81,12 @@ def test_tools_list_empty_with_no_tools_registered(load):
         headers=HEADERS,
     )
     assert r.status_code == 200
-    assert r.json["result"] == {"tools": []}
+    assert [entry["name"] for entry in r.json["result"]["tools"]] == [
+        "checkin_check_in",
+        "checkin_checked_in",
+        "checkin_reset",
+        "checkin_roster",
+    ]
 
 
 def test_ping_through_the_route(load):
