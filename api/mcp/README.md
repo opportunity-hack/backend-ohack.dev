@@ -79,11 +79,13 @@ refuses the call with `-32602` without it.
 
 ## Tool catalog
 
-No tools are registered yet — this PR is the framework. Each domain PR
-adds its module here:
+Registered tools (each domain PR adds its module here):
 
 - `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize)
-- `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
+- `feat/mcp-reimbursements` — `reimbursement_list`,
+  `reimbursement_get`, `reimbursement_review` (admin review; review
+  requires `confirm: true`, self-approval is refused by the service
+  with 403 `self_approval`, marking paid requires `paymentReference`)
 - `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
 - `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
 - `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
@@ -146,3 +148,19 @@ sys.modules.pop("api.mcp.tools.meet_tools", None)
 sys.modules.pop("api.mcp.mcp_views", None)
 views = importlib.import_module("api.mcp.mcp_views")
 ```
+
+One gotcha the snippet above does not show: `from api.meet import
+meet_service` resolves via the parent package's attribute when the real
+service module was already imported (by an earlier test file), so the
+`sys.modules` stub is bypassed and the real service runs. Point the
+parent attribute at the stub too:
+
+```python
+import api.meet as meet_pkg
+monkeypatch.setattr(meet_pkg, "meet_service", stub, raising=False)
+```
+
+Re-importing a tool module also re-runs its `@register_tool`
+decorators, which raise "already registered" unless
+`registry.TOOL_REGISTRY` is cleared first (see
+`test_mcp_reimbursements.py`).
