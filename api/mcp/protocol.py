@@ -142,9 +142,17 @@ def _admin_from_user(user):
 
 
 def _tool_result(payload, status):
-    # type: (Dict[str, Any], int) -> Dict[str, Any]
-    """Map a service ``(payload, status)`` to an MCP tool result."""
-    is_error = status >= 400 or payload.get("success") is False or "error" in payload
+    # type: (Any, int) -> Dict[str, Any]
+    """Map a service ``(payload, status)`` to an MCP tool result.
+
+    Most services return a dict, but some return a bare list (e.g. a
+    roster). A bare payload is a success unless the status says otherwise;
+    only dict payloads can carry the ``success`` / ``error`` markers.
+    """
+    if isinstance(payload, dict):
+        is_error = status >= 400 or payload.get("success") is False or "error" in payload
+    else:
+        is_error = status >= 400
     return {
         "content": [{"type": "text", "text": json.dumps(payload)}],
         "isError": bool(is_error),

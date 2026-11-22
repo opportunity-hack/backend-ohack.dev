@@ -47,6 +47,12 @@ def tools():
             "message": "Already approved",
         }, 409
 
+    def bare_list(arguments, admin):
+        return [{"id": "a"}, {"id": "b"}], 200
+
+    def bare_list_error(arguments, admin):
+        return [{"id": "a"}], 404
+
     registry.register_tool(
         "test_echo",
         "Echo the arguments back",
@@ -87,6 +93,18 @@ def tools():
         {"type": "object", "properties": {}},
         ("volunteer.admin",),
     )(service_error)
+    registry.register_tool(
+        "test_bare_list",
+        "A tool whose service returns a bare list",
+        {"type": "object", "properties": {}},
+        ("volunteer.admin",),
+    )(bare_list)
+    registry.register_tool(
+        "test_bare_list_error",
+        "A tool whose service returns a bare list with an error status",
+        {"type": "object", "properties": {}},
+        ("volunteer.admin",),
+    )(bare_list_error)
     yield
     registry.TOOL_REGISTRY.clear()
     registry.TOOL_REGISTRY.update(saved)
@@ -240,6 +258,22 @@ def test_call_service_error_passes_through_as_is_error(tools):
     assert result["isError"] is True
     payload = json.loads(result["content"][0]["text"])
     assert payload["error"] == "already_approved"
+
+
+def test_call_bare_list_payload_is_a_success_result(tools):
+    # Some services return a bare list (e.g. a roster). The dispatcher
+    # must serialize it, not crash on payload.get().
+    response, _ = protocol.dispatch(_call("test_bare_list", {}), USER, _allow_all)
+    result = response["result"]
+    assert result["isError"] is False
+    assert json.loads(result["content"][0]["text"]) == [{"id": "a"}, {"id": "b"}]
+
+
+def test_call_bare_list_payload_with_error_status_is_error(tools):
+    response, _ = protocol.dispatch(
+        _call("test_bare_list_error", {}), USER, _allow_all
+    )
+    assert response["result"]["isError"] is True
 
 
 def test_call_rejects_non_object_params_and_arguments(tools):
