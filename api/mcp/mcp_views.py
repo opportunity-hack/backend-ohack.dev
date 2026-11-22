@@ -74,17 +74,27 @@ def mcp_endpoint():
         and body.get("method") == "tools/call"
         and response is not None
     ):
-        params = body.get("params") or {}
+        params = body.get("params")
+        if not isinstance(params, dict):
+            params = {}
         caller = protocol._admin_from_user(auth_user)
-        result = response.get("result") or {}
-        is_error = result.get("isError") if isinstance(result, dict) else None
+        # A JSON-RPC error (forbidden, bad params, handler crash) is a
+        # failed call too: the audit must not record it as a success.
+        if "error" in response:
+            is_error = True
+        else:
+            result = response.get("result")
+            is_error = bool(result.get("isError")) if isinstance(result, dict) else False
+        # The name is client text and may not match any tool: keep the
+        # log / Slack line short and single-line.
+        tool_name = " ".join(str(params.get("name")).split())[:80]
         logger.info(
             "MCP tools/call %s by %s is_error=%s",
-            params.get("name"),
+            tool_name,
             caller.get("propel_id"),
             is_error,
         )
-        _audit_tool_call(params.get("name"), caller, is_error)
+        _audit_tool_call(tool_name, caller, is_error)
     if response is None:
         return "", status
     return jsonify(response), status
