@@ -253,7 +253,12 @@ def test_tools_list_shows_the_seven_meet_tools(meet_client):
         headers=HEADERS,
     )
     assert response.status_code == 200
-    names = [entry["name"] for entry in response.json["result"]["tools"]]
+    # Only this module's tools: sibling tool modules may be registered too.
+    names = [
+        entry["name"]
+        for entry in response.json["result"]["tools"]
+        if entry["name"].startswith("meet_")
+    ]
     assert names == MEET_TOOL_NAMES
 
 

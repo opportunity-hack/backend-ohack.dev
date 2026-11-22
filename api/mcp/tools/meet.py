@@ -20,7 +20,7 @@ calendar failure leaves the poll open (``calendar_failed`` 502,
 ``already_finalized``. There is no cancel tool: closing a poll is
 ``meet_update_poll`` with ``status: "closed"``.
 """
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 from api.meet import meet_service
 from api.mcp.registry import VOLUNTEER_ADMIN, register_tool
