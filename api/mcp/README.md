@@ -79,15 +79,35 @@ refuses the call with `-32602` without it.
 
 ## Tool catalog
 
-No tools are registered yet — this PR is the framework. Each domain PR
-adds its module here:
+### Volunteer tools (`volunteers_*`, all `volunteer.admin`-only)
+
+Thin wrappers over `services.volunteers_service`:
+
+| Tool | Wraps | Notes |
+|---|---|---|
+| `volunteers_list_by_event` | `get_volunteers_by_event(event_id, type, page, limit, selected)` | type mentor\|judge\|hacker\|volunteer\|sponsor; page 1, limit 20 by default; `total` counts the page, not the event (same caveat as REST) |
+| `volunteers_select` | `update_volunteer_selection(volunteer_id, selected, updated_by)` | the ONLY writer of `isSelected`; `selected` must be a JSON boolean (schema-enforced, `-32602` otherwise); `confirm: true` |
+| `volunteers_refund_deposit` | `refund_hacker_deposit(volunteer_id, admin_user_id, override)` | Stripe refund, irreversible, money movement; `confirm: true`; `ValueError` → 400, `RuntimeError` (Stripe/config) → 502, same as REST; `override: true` refunds a donate-disposition deposit |
+| `volunteers_bulk_refund_deposits` | `bulk_refund_eligible_hacker_deposits(event_id, admin_user_id)` | refunds every paid + disposition=refund hacker for the event; `confirm: true`; donate-disposition excluded, per-row failures collected |
+| `volunteers_message` | `send_volunteer_message(...)` | Slack + email to a volunteer; `confirm: true`; not-found → 404, no email → 400, other send failures → 500, same as REST |
+| `volunteers_resend_status` | `get_resend_email_statuses(email_ids)` / `list_all_resend_emails(filter_emails, force)` | with `email_ids` → per-ID delivery status; without → cached sent-email index (filter by recipient `emails`, `force` refreshes the cache). Read-only, no `confirm` |
+
+Omitted on purpose: `find_volunteer_by_caller_identity` (the shared
+identity resolver, not a tool — no volunteer tool needs caller identity,
+every tool addresses a volunteer/event by id and admin identity comes
+from the token), `send_email_to_address` (generic send-to-any-address,
+not volunteer-scoped; `volunteers_message` covers admin-to-volunteer
+messaging), and the self-service application / mentor check-in flows.
+
+Remaining domain PRs add their modules here:
 
 - `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize)
 - `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
 - `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
 - `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
 - `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
-- `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds)
+- `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds,
+  messaging, Resend status) — implemented, see below
 - `feat/mcp-completion` — `completion_*` (project completion status,
   GitHub activity; Slack stand-ups are NOT included — the backend
   tracks no stand-up activity, see that PR)

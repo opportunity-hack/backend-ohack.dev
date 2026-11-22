@@ -71,7 +71,10 @@ def test_malformed_json_is_parse_error(load):
     assert r.json["error"]["code"] == -32700
 
 
-def test_tools_list_empty_with_no_tools_registered(load):
+def test_tools_list_returns_registered_tools(load):
+    # The core PR had no tool modules, so this asserted an empty list.
+    # With the volunteers tools registered, tools/list returns exactly
+    # those six tools (sorted by name) for a volunteer.admin caller.
     client = load(passthrough_auth_module())[1].test_client()
     r = client.post(
         "/api/mcp",
@@ -79,7 +82,15 @@ def test_tools_list_empty_with_no_tools_registered(load):
         headers=HEADERS,
     )
     assert r.status_code == 200
-    assert r.json["result"] == {"tools": []}
+    names = [entry["name"] for entry in r.json["result"]["tools"]]
+    assert names == [
+        "volunteers_bulk_refund_deposits",
+        "volunteers_list_by_event",
+        "volunteers_message",
+        "volunteers_refund_deposit",
+        "volunteers_resend_status",
+        "volunteers_select",
+    ]
 
 
 def test_ping_through_the_route(load):
