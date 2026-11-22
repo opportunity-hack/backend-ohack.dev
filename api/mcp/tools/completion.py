@@ -88,7 +88,12 @@ def _parse_github_url(link):
         segments = [seg for seg in link.split("/") if seg]
     if len(segments) != 2:
         return None, None
-    return segments[0], segments[1]
+    repo = segments[1]
+    if repo.endswith(".git"):
+        repo = repo[: -len(".git")]
+    if not repo:
+        return None, None
+    return segments[0], repo
 
 
 @register_tool(
@@ -114,9 +119,11 @@ def completion_team_status(arguments, admin):
 
 @register_tool(
     "completion_event_status",
-    "Project submission rollup for one hackathon event: total teams, "
-    "how many submitted (submitted or late) vs still draft, and the "
-    "per-team status rows.",
+    "Project submission rollup for one hackathon: total teams, how many "
+    "submitted (submitted or late) vs still draft, and the per-team "
+    "status rows. hackathon_id is the hackathon's database document id "
+    "(the id GET /api/team/<hackathon_id> takes), NOT the event_id slug "
+    "such as 2026_fall; an unknown id reads as zero teams.",
     {
         "type": "object",
         "properties": {"hackathon_id": {"type": "string"}},
@@ -185,7 +192,10 @@ def completion_github_activity(arguments, admin):
     if team is None:
         return _NOT_FOUND, 404
     links = team.get("github_links") or []
-    link = (links[0] or {}).get("link") if links else None
+    # Approval stores [{"link", "name"}]; an admin edit can leave a bare
+    # URL string, which must read as a link rather than crash.
+    first = links[0] if isinstance(links, list) and links else None
+    link = first.get("link") if isinstance(first, dict) else first
     org, repo = _parse_github_url(link)
     if org is None or repo is None:
         return {

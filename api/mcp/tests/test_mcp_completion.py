@@ -456,3 +456,30 @@ def test_tools_list_includes_completion_tools(client):
         "completion_mark_submitted",
         "completion_team_status",
     ]
+
+
+def test_parse_github_url_shapes(client):
+    parse = sys.modules[TOOL_MODULE]._parse_github_url
+    assert parse("https://github.com/opportunity-hack/Repo") == ("opportunity-hack", "Repo")
+    assert parse("https://github.com/opportunity-hack/Repo.git/") == ("opportunity-hack", "Repo")
+    assert parse("opportunity-hack/Repo") == ("opportunity-hack", "Repo")
+    assert parse("https://gitlab.com/opportunity-hack/Repo") == (None, None)
+    assert parse("https://github.com/opportunity-hack") == (None, None)
+    assert parse(None) == (None, None)
+
+
+def test_github_activity_accepts_a_bare_url_string_link(client):
+    # An admin edit can leave github_links as plain URL strings instead of
+    # the {"link", "name"} dicts approval writes; that must not crash.
+    http, _state = client
+    TEAMS_BY_ID["team-str"] = dict(
+        TEAM_SUBMITTED,
+        id="team-str",
+        github_links=["https://github.com/opportunity-hack/TeamRocket-FoodBank"],
+    )
+    try:
+        response = _call(http, "completion_github_activity", {"team_id": "team-str"})
+    finally:
+        TEAMS_BY_ID.pop("team-str", None)
+    assert "result" in response, response
+    assert response["result"]["isError"] is False

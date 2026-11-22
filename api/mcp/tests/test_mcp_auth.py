@@ -71,25 +71,46 @@ def test_malformed_json_is_parse_error(load):
     assert r.json["error"]["code"] == -32700
 
 
-def test_tools_list_empty_with_no_tools_registered(load):
-    # The completion tools are registered by register_all() on import,
-    # so prove the empty-list shape with the registry cleared.
-    from api.mcp import registry
+def test_tools_list_through_the_route(load):
+    # Deliberately says nothing about WHICH tools exist: each tool module
+    # asserts its own names in its own test file, so adding a module never
+    # edits this test. (The empty registry is covered in test_mcp_protocol.)
+    client = load(passthrough_auth_module())[1].test_client()
+    r = client.post(
+        "/api/mcp",
+        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+        headers=HEADERS,
+    )
+    assert r.status_code == 200
+    tools = r.json["result"]["tools"]
+    names = [entry["name"] for entry in tools]
+    assert names == sorted(names)
+    for entry in tools:
+        assert set(entry) == {"name", "description", "inputSchema"}
 
-    saved = dict(registry.TOOL_REGISTRY)
-    registry.TOOL_REGISTRY.clear()
-    try:
-        client = load(passthrough_auth_module())[1].test_client()
-        r = client.post(
-            "/api/mcp",
-            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-            headers=HEADERS,
+
+def test_failed_tool_call_is_audited_as_an_error(load, monkeypatch):
+    # A JSON-RPC error (here: unknown tool) has no ``result``; the audit
+    # line must still record the call as failed, never as a success.
+    views, app = load(passthrough_auth_module())
+    audited = []
+    monkeypatch.setattr(
+        views, "_audit_tool_call", lambda name, caller, is_error: audited.append(
+            (name, is_error)
         )
-        assert r.status_code == 200
-        assert r.json["result"] == {"tools": []}
-    finally:
-        registry.TOOL_REGISTRY.clear()
-        registry.TOOL_REGISTRY.update(saved)
+    )
+    r = app.test_client().post(
+        "/api/mcp",
+        json={
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "no_such\ntool", "arguments": {}},
+        },
+        headers=HEADERS,
+    )
+    assert r.json["error"]["code"] == -32601
+    assert audited == [("no_such tool", True)]
 
 
 def test_ping_through_the_route(load):

@@ -10,8 +10,10 @@ MCP, no anonymous access, and no new credential type.
   server-initiated notifications in v1).
 - Stateless per the MCP 2026-07-28 revision: no sessions, no
   `Mcp-Session-Id`, no required `initialize` handshake. `initialize` is
-  answered for older clients but never required; plain JSON responses,
-  not SSE streams.
+  answered for older clients but never required (it echoes the client's
+  `protocolVersion` when that is one of
+  `protocol.SUPPORTED_PROTOCOL_VERSIONS`, else answers the latest);
+  plain JSON responses, not SSE streams.
 
 ## Auth
 
@@ -32,7 +34,7 @@ Gate, in order, on every request:
    (defense in depth) and filters `tools/list` to what the caller may
    call. All tools are `volunteer.admin`-only except the three
    check-in tools, which also accept `checkin.admin`
-   (`checkin_roster`, `checkin_list_checked_in`, `checkin_check_in`);
+   (`checkin_roster`, `checkin_checked_in`, `checkin_check_in`);
    `checkin_reset` stays `volunteer.admin`-only.
 
 Identity for writes comes from the verified token only. Tool arguments
@@ -43,7 +45,9 @@ operator obtains a token through the existing login flow.
 
 Every `tools/call` writes a structured log line and a fire-and-forget
 `send_slack_audit(action="mcp_tool_call", ...)` with the tool name,
-caller PropelAuth id, and outcome (arguments are not sent).
+caller PropelAuth id, and outcome (arguments are not sent). A call the
+dispatcher refuses (`-32001`, `-32602`, ...) or that crashes (`-32603`)
+is audited with `is_error: True`.
 
 ## Protocol
 
@@ -60,12 +64,19 @@ REST (`self_approval` 403, `already_approved` 409, ...).
 Side-effecting tools take a required boolean `confirm: true` argument
 (finalize a poll, approve a team, reset check-ins, refund a deposit,
 ...). A model cannot move money or state by accident; the dispatcher
-refuses the call with `-32602` without it.
+refuses the call with `-32602` without it. The registry adds `confirm`
+to the listed schema of every `requires_confirm` tool (as a required
+boolean), so a tool module cannot forget to advertise it.
+
+An argument sent as JSON `null` is treated as absent (model clients
+send `null` for optional arguments they do not use). Payloads are
+serialized with `default=str`, so datetimes in a service payload are
+fine.
 
 ## Adding a tool
 
 1. Add a module in `api/mcp/tools/` (one per domain, e.g.
-   `meet_tools.py`). Register each tool with `@register_tool` — name,
+   `meet.py`). Register each tool with `@register_tool` — name,
    description, JSON Schema for arguments, permission tuple, and
    `requires_confirm` where it moves state.
 2. Handlers are thin: validate nothing the dispatcher hasn't already,
@@ -74,58 +85,66 @@ refuses the call with `-32602` without it.
    business logic, no HTTP calls back into the app's own REST routes.
 3. `tools/__init__.py` imports every module in the package, so a new
    tool module needs no registry edit.
-4. Add tests in `api/mcp/tests/test_<domain>_tools.py` (see below) and
-   document the tool in the catalog below.
+4. Add tests in `api/mcp/tests/test_mcp_<domain>.py` (see below),
+   including the module's own `tools/list` assertion — check that your
+   names are IN the list, never that the list equals them, and leave
+   `test_mcp_auth.py` alone. Document the tools under your heading in
+   the catalog below.
 
 ## Tool catalog
 
-No tools are registered yet — this PR is the framework. Each domain PR
-adds its module here:
+One subsection per domain module. Each domain PR replaces only the
+placeholder line under its own heading, so the stacked PRs merge without
+touching each other's lines.
 
-- `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize)
-- `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
-- `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
-- `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
-- `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
-- `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds)
-- `feat/mcp-completion` — `completion_*` (project completion status,
-  GitHub activity; Slack stand-ups are NOT included — the backend
-  tracks no stand-up activity, see below)
+### Meetings (`feat/mcp-meet`)
 
-### `completion_*` tools (all `volunteer.admin`)
+_Not merged yet — `meet_*` (scheduling polls; calendar finalize)._
 
-- `completion_team_status` (`team_id`) — one team's submission status
-  (`draft`/`submitted`/`late`, from
-  `api/submissions/submissions_service.py:70` `SUBMITTED_STATUSES`),
-  submitted-at timestamp, which required write-up fields
-  (`project_tagline`, `project_story`) are still missing, Slack
-  channel, and linked GitHub repo. Reads the full team doc via
-  `services.teams_service.get_team_admin` (not `get_team`, whose
-  `public_team_view` strips fields).
-- `completion_event_status` (`hackathon_id`) — rollup over
-  `api.teams.teams_service.get_teams_by_hackathon_id`: total teams,
-  submitted vs still draft, and the per-team status rows.
-- `completion_mark_submitted` (`team_id`, `confirm: true`) — the only
-  status writer: admin-forced submission via
-  `api.submissions.submissions_service.submit_project(admin=True)`,
-  recorded as `late` past the close, idempotent (`already_submitted`
-  200 on a re-submit), 400 `incomplete` when the required write-up
-  fields are missing. There is no service function that sets an
-  arbitrary `project_submission_status`, so no such tool exists.
+### Reimbursements (`feat/mcp-reimbursements`)
+
+_Not merged yet — `reimbursement_*` (admin review)._
+
+### Teams (`feat/mcp-teams`)
+
+_Not merged yet — `team_*` (approve, roster, messaging, gateway keys)._
+
+### Check-in (`feat/mcp-checkin`)
+
+_Not merged yet — `checkin_*` (desk tools, per-tool permissions)._
+
+### Surveys (`feat/mcp-surveys`)
+
+_Not merged yet — `survey_*` (read-only admin analytics)._
+
+### Volunteers (`feat/mcp-volunteers`)
+
+_Not merged yet — `volunteers_*` (roster, select, refunds)._
+
+### Project completion (`feat/mcp-completion`)
+
+`api/mcp/tools/completion.py`, all `volunteer.admin`-only:
+
+- `completion_team_status` (`team_id`) — submission status
+  (`draft` / `submitted` / `late`), submitted-at, which required
+  write-up fields (`project_tagline`, `project_story`) are missing,
+  Slack channel, linked GitHub repo. Reads the full team doc
+  (`services.teams_service.get_team_admin`).
+- `completion_event_status` (`hackathon_id`) — rollup: total teams,
+  submitted vs draft, per-team rows. `hackathon_id` is the hackathon's
+  database document id (what `GET /api/team/<hackathon_id>` takes),
+  NOT the `event_id` slug; an unknown id reads as zero teams.
+- `completion_mark_submitted` (`team_id`) — `confirm: true`; the only
+  status writer: `submit_project(admin=True)`, recorded `late` past the
+  close, idempotent (`already_submitted`), 400 `incomplete` when the
+  write-up is missing fields.
 - `completion_github_activity` (`team_id`) — commits, contributors,
-  and open PRs for the team's linked repo: org/repo are parsed out of
-  the `github_links` URL stored at approval time, then
-  `api.github.github_service.get_github_activity` is called. Its
-  error shapes pass through (`repo_not_found` 404,
-  `github_rate_limited` 503, `github_unavailable` 502).
+  open PRs for the repo in the team's `github_links`; service errors
+  pass through (`repo_not_found` 404, `github_rate_limited` 503,
+  `github_unavailable` 502), plus 404 `no_github_repo`.
 
-No Slack stand-up tool: the backend has no channel-history reader.
-`common/utils/slack.py` only sends, audits, and looks up users and
-channels, and no `conversations.history` read exists anywhere in
-`api/`, `services/`, or `common/`; the only "standups" hits are a
-hearts-service gamification award. A stand-up tool would need new
-service code (a `conversations.history` read plus a stand-up
-definition), not a wrapper.
+No Slack stand-up tool: the backend has no channel-history reader, so
+that would be new service code, not a wrapper.
 
 ## Client setup
 
@@ -177,7 +196,21 @@ ENVIRONMENT=test SLACK_WEBHOOK= SLACK_BOT_TOKEN= RESEND_API_KEY= \
 monkeypatch.setitem(sys.modules, "api.meet.meet_service", stub)
 import api.mcp.tools as tools_pkg
 monkeypatch.setattr(tools_pkg, "_registered", False)
-sys.modules.pop("api.mcp.tools.meet_tools", None)
+sys.modules.pop("api.mcp.tools.meet", None)
 sys.modules.pop("api.mcp.mcp_views", None)
 views = importlib.import_module("api.mcp.mcp_views")
 ```
+
+Two gotchas the snippet does not show:
+
+- `from api.meet import meet_service` resolves through the parent
+  package's attribute when the real service module was already imported
+  (by an earlier test file), so the `sys.modules` stub is bypassed and
+  the real service runs. Point the parent attribute at the stub too:
+  `monkeypatch.setattr(sys.modules["api.meet"], "meet_service", stub, raising=False)`.
+- Re-importing a tool module re-runs its `@register_tool` decorators,
+  which raise "already registered" unless the module's own names are
+  removed from `registry.TOOL_REGISTRY` first. Save and restore the
+  registry around the test (`saved = dict(registry.TOOL_REGISTRY)` ...
+  `TOOL_REGISTRY.clear(); TOOL_REGISTRY.update(saved)`) so other test
+  files keep their tools.
