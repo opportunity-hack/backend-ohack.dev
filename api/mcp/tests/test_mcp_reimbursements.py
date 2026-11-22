@@ -117,8 +117,10 @@ def harness(monkeypatch):
         from api.mcp import registry
 
         # Re-importing the tool module would raise "already registered"
-        # unless the registry is cleared first.
-        registry.TOOL_REGISTRY.clear()
+        # unless the registry is cleared first. monkeypatch restores the
+        # original registry afterwards, so other test files keep their
+        # tools (a bare .clear() left the shared registry empty).
+        monkeypatch.setattr(registry, "TOOL_REGISTRY", {})
         monkeypatch.setattr(tools_pkg, "_registered", False)
         sys.modules.pop(TOOLS_MODULE, None)
         sys.modules.pop(VIEWS, None)
