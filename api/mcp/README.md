@@ -10,8 +10,10 @@ MCP, no anonymous access, and no new credential type.
   server-initiated notifications in v1).
 - Stateless per the MCP 2026-07-28 revision: no sessions, no
   `Mcp-Session-Id`, no required `initialize` handshake. `initialize` is
-  answered for older clients but never required; plain JSON responses,
-  not SSE streams.
+  answered for older clients but never required (it echoes the client's
+  `protocolVersion` when that is one of
+  `protocol.SUPPORTED_PROTOCOL_VERSIONS`, else answers the latest);
+  plain JSON responses, not SSE streams.
 
 ## Auth
 
@@ -32,7 +34,7 @@ Gate, in order, on every request:
    (defense in depth) and filters `tools/list` to what the caller may
    call. All tools are `volunteer.admin`-only except the three
    check-in tools, which also accept `checkin.admin`
-   (`checkin_roster`, `checkin_list_checked_in`, `checkin_check_in`);
+   (`checkin_roster`, `checkin_checked_in`, `checkin_check_in`);
    `checkin_reset` stays `volunteer.admin`-only.
 
 Identity for writes comes from the verified token only. Tool arguments
@@ -43,7 +45,9 @@ operator obtains a token through the existing login flow.
 
 Every `tools/call` writes a structured log line and a fire-and-forget
 `send_slack_audit(action="mcp_tool_call", ...)` with the tool name,
-caller PropelAuth id, and outcome (arguments are not sent).
+caller PropelAuth id, and outcome (arguments are not sent). A call the
+dispatcher refuses (`-32001`, `-32602`, ...) or that crashes (`-32603`)
+is audited with `is_error: True`.
 
 ## Protocol
 
@@ -60,12 +64,19 @@ REST (`self_approval` 403, `already_approved` 409, ...).
 Side-effecting tools take a required boolean `confirm: true` argument
 (finalize a poll, approve a team, reset check-ins, refund a deposit,
 ...). A model cannot move money or state by accident; the dispatcher
-refuses the call with `-32602` without it.
+refuses the call with `-32602` without it. The registry adds `confirm`
+to the listed schema of every `requires_confirm` tool (as a required
+boolean), so a tool module cannot forget to advertise it.
+
+An argument sent as JSON `null` is treated as absent (model clients
+send `null` for optional arguments they do not use). Payloads are
+serialized with `default=str`, so datetimes in a service payload are
+fine.
 
 ## Adding a tool
 
 1. Add a module in `api/mcp/tools/` (one per domain, e.g.
-   `meet_tools.py`). Register each tool with `@register_tool` — name,
+   `meet.py`). Register each tool with `@register_tool` — name,
    description, JSON Schema for arguments, permission tuple, and
    `requires_confirm` where it moves state.
 2. Handlers are thin: validate nothing the dispatcher hasn't already,
@@ -74,43 +85,69 @@ refuses the call with `-32602` without it.
    business logic, no HTTP calls back into the app's own REST routes.
 3. `tools/__init__.py` imports every module in the package, so a new
    tool module needs no registry edit.
-4. Add tests in `api/mcp/tests/test_<domain>_tools.py` (see below) and
-   document the tool in the catalog below.
+4. Add tests in `api/mcp/tests/test_mcp_<domain>.py` (see below),
+   including the module's own `tools/list` assertion — check that your
+   names are IN the list, never that the list equals them, and leave
+   `test_mcp_auth.py` alone. Document the tools under your heading in
+   the catalog below.
 
 ## Tool catalog
 
-### Volunteer tools (`volunteers_*`, all `volunteer.admin`-only)
+One subsection per domain module. Each domain PR replaces only the
+placeholder line under its own heading, so the stacked PRs merge without
+touching each other's lines.
 
-Thin wrappers over `services.volunteers_service`:
+### Meetings (`feat/mcp-meet`)
 
-| Tool | Wraps | Notes |
-|---|---|---|
-| `volunteers_list_by_event` | `get_volunteers_by_event(event_id, type, page, limit, selected)` | type mentor\|judge\|hacker\|volunteer\|sponsor; page 1, limit 20 by default; `total` counts the page, not the event (same caveat as REST) |
-| `volunteers_select` | `update_volunteer_selection(volunteer_id, selected, updated_by)` | the ONLY writer of `isSelected`; `selected` must be a JSON boolean (schema-enforced, `-32602` otherwise); `confirm: true` |
-| `volunteers_refund_deposit` | `refund_hacker_deposit(volunteer_id, admin_user_id, override)` | Stripe refund, irreversible, money movement; `confirm: true`; `ValueError` → 400, `RuntimeError` (Stripe/config) → 502, same as REST; `override: true` refunds a donate-disposition deposit |
-| `volunteers_bulk_refund_deposits` | `bulk_refund_eligible_hacker_deposits(event_id, admin_user_id)` | refunds every paid + disposition=refund hacker for the event; `confirm: true`; donate-disposition excluded, per-row failures collected |
-| `volunteers_message` | `send_volunteer_message(...)` | Slack + email to a volunteer; `confirm: true`; not-found → 404, no email → 400, other send failures → 500, same as REST |
-| `volunteers_resend_status` | `get_resend_email_statuses(email_ids)` / `list_all_resend_emails(filter_emails, force)` | with `email_ids` → per-ID delivery status; without → cached sent-email index (filter by recipient `emails`, `force` refreshes the cache). Read-only, no `confirm` |
+_Not merged yet — `meet_*` (scheduling polls; calendar finalize)._
 
-Omitted on purpose: `find_volunteer_by_caller_identity` (the shared
-identity resolver, not a tool — no volunteer tool needs caller identity,
-every tool addresses a volunteer/event by id and admin identity comes
-from the token), `send_email_to_address` (generic send-to-any-address,
-not volunteer-scoped; `volunteers_message` covers admin-to-volunteer
-messaging), and the self-service application / mentor check-in flows.
+### Reimbursements (`feat/mcp-reimbursements`)
 
-Remaining domain PRs add their modules here:
+_Not merged yet — `reimbursement_*` (admin review)._
 
-- `feat/mcp-meet` — `meet_*` (scheduling polls; calendar finalize)
-- `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
-- `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
-- `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
-- `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
-- `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds,
-  messaging, Resend status) — implemented, see below
-- `feat/mcp-completion` — `completion_*` (project completion status,
-  GitHub activity; Slack stand-ups are NOT included — the backend
-  tracks no stand-up activity, see that PR)
+### Teams (`feat/mcp-teams`)
+
+_Not merged yet — `team_*` (approve, roster, messaging, gateway keys)._
+
+### Check-in (`feat/mcp-checkin`)
+
+_Not merged yet — `checkin_*` (desk tools, per-tool permissions)._
+
+### Surveys (`feat/mcp-surveys`)
+
+_Not merged yet — `survey_*` (read-only admin analytics)._
+
+### Volunteers (`feat/mcp-volunteers`)
+
+`api/mcp/tools/volunteers_tools.py`, all `volunteer.admin`-only, thin
+wrappers over `services/volunteers_service.py`:
+
+- `volunteers_list_by_event` (`event_id`, `type`, `page` from 1,
+  `limit` 1-200 default 20, optional `selected`) — read-only; `total`
+  counts the page, not the event (same caveat as REST).
+- `volunteers_resend_status` — read-only; with `email_ids` the per-ID
+  delivery status, without them the cached sent-email index (optional
+  recipient `emails` filter; `force` refreshes the cache).
+- `volunteers_select` — `confirm: true`; the ONLY writer of
+  `isSelected`; `selected` must be a JSON boolean.
+- `volunteers_refund_deposit` (`override: true` refunds a
+  donate-disposition deposit), `volunteers_bulk_refund_deposits` —
+  `confirm: true`; real Stripe refunds, irreversible. `ValueError` →
+  400, `RuntimeError` (Stripe/config) → 502, same as REST. Each posts
+  the same Slack audit the REST routes post (`hacker_deposit_refund` /
+  `hacker_deposit_bulk_refund`), because the service does not.
+- `volunteers_message` — `confirm: true`; Slack + email to one
+  volunteer; blank message → 400, not-found → 404, no email → 400.
+
+Omitted on purpose: `send_email_to_address` (send-to-any-address, not
+volunteer-scoped) and the self-service application / mentor check-in
+flows.
+
+### Project completion (`feat/mcp-completion`)
+
+_Not merged yet — `completion_*` (project completion status, GitHub
+activity; Slack stand-ups are NOT included — the backend tracks no
+stand-up activity)._
 
 ## Client setup
 
@@ -162,7 +199,21 @@ ENVIRONMENT=test SLACK_WEBHOOK= SLACK_BOT_TOKEN= RESEND_API_KEY= \
 monkeypatch.setitem(sys.modules, "api.meet.meet_service", stub)
 import api.mcp.tools as tools_pkg
 monkeypatch.setattr(tools_pkg, "_registered", False)
-sys.modules.pop("api.mcp.tools.meet_tools", None)
+sys.modules.pop("api.mcp.tools.meet", None)
 sys.modules.pop("api.mcp.mcp_views", None)
 views = importlib.import_module("api.mcp.mcp_views")
 ```
+
+Two gotchas the snippet does not show:
+
+- `from api.meet import meet_service` resolves through the parent
+  package's attribute when the real service module was already imported
+  (by an earlier test file), so the `sys.modules` stub is bypassed and
+  the real service runs. Point the parent attribute at the stub too:
+  `monkeypatch.setattr(sys.modules["api.meet"], "meet_service", stub, raising=False)`.
+- Re-importing a tool module re-runs its `@register_tool` decorators,
+  which raise "already registered" unless the module's own names are
+  removed from `registry.TOOL_REGISTRY` first. Save and restore the
+  registry around the test (`saved = dict(registry.TOOL_REGISTRY)` ...
+  `TOOL_REGISTRY.clear(); TOOL_REGISTRY.update(saved)`) so other test
+  files keep their tools.

@@ -516,3 +516,69 @@ def test_non_admin_caller_is_denied(non_admin_client):
     # And tools/list hides every volunteer tool from them.
     r = _post(http_client, {"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
     assert r.json["result"] == {"tools": []}
+
+
+def _capture_audits(monkeypatch):
+    audits = []
+    tools_module = sys.modules[MODULE]
+    monkeypatch.setattr(
+        tools_module, "_audit", lambda action, message: audits.append((action, message))
+    )
+    return audits
+
+
+def test_refund_posts_the_same_slack_audit_as_rest(client, monkeypatch):
+    # The refund service does not audit itself (the REST view does), so the
+    # tool must: who, which volunteer, refund id, amount.
+    http_client, _stub = client
+    audits = _capture_audits(monkeypatch)
+    _post(http_client, _call(
+        "volunteers_refund_deposit", {"volunteer_id": "vol-1", "confirm": True},
+    ))
+    assert len(audits) == 1
+    action, message = audits[0]
+    assert action == "hacker_deposit_refund"
+    for expected in (ADMIN_ID, "vol-1", "re_123", "5000"):
+        assert expected in message
+
+
+def test_failed_refund_posts_no_audit(client, monkeypatch):
+    http_client, stub = client
+    audits = _capture_audits(monkeypatch)
+    stub.state["refund_error"] = ValueError("Deposit already refunded")
+    r = _post(http_client, _call(
+        "volunteers_refund_deposit", {"volunteer_id": "vol-1", "confirm": True},
+    ))
+    assert _payload(r)[0]["isError"] is True
+    assert audits == []
+
+
+def test_bulk_refund_posts_slack_audit(client, monkeypatch):
+    http_client, _stub = client
+    audits = _capture_audits(monkeypatch)
+    _post(http_client, _call(
+        "volunteers_bulk_refund_deposits", {"event_id": "evt-1", "confirm": True},
+    ))
+    assert [action for action, _ in audits] == ["hacker_deposit_bulk_refund"]
+    assert "evt-1" in audits[0][1] and "1 refunded" in audits[0][1]
+
+
+def test_message_blank_is_refused_before_the_service(client):
+    http_client, stub = client
+    r = _post(http_client, _call(
+        "volunteers_message",
+        {"volunteer_id": "vol-1", "message": "   ", "confirm": True},
+    ))
+    result, payload = _payload(r)
+    assert result["isError"] is True and payload["error"] == "Message is required"
+    assert "message" not in stub.calls
+
+
+def test_list_clamps_page_and_limit(client):
+    http_client, _stub = client
+    r = _post(http_client, _call(
+        "volunteers_list_by_event",
+        {"event_id": "evt-1", "type": "hacker", "page": 0, "limit": 100000},
+    ))
+    _result, payload = _payload(r)
+    assert payload["page"] == 1 and payload["limit"] == 200

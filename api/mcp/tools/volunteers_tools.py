@@ -48,6 +48,7 @@ Omitted on purpose (pinned from ``services.volunteers_service``):
 import types
 from typing import Any, Dict, Tuple
 
+from common.log import get_logger
 from api.mcp.registry import VOLUNTEER_ADMIN, register_tool
 from services.volunteers_service import (
     bulk_refund_eligible_hacker_deposits,
@@ -59,7 +60,26 @@ from services.volunteers_service import (
     update_volunteer_selection,
 )
 
+logger = get_logger(__name__)
+
 _VOLUNTEER_TYPES = ("mentor", "judge", "hacker", "volunteer", "sponsor")
+_MAX_LIST_LIMIT = 200
+
+
+def _audit(action, message):
+    # type: (str, str) -> None
+    """Slack audit line for a money movement. The refund service does not
+    audit itself — the REST views do — so the tools must post the same
+    line or an MCP refund leaves no record of who refunded what. (The
+    dispatcher's own audit carries the tool name only, never arguments.)
+    Best-effort: a Slack failure never fails a refund that already
+    happened."""
+    try:
+        from common.utils.slack import send_slack_audit
+
+        send_slack_audit(action=action, message=message)
+    except Exception as e:
+        logger.warning("MCP audit %s failed: %s", action, type(e).__name__)
 _DEFAULT_MESSAGE_SUBJECT = "Message from Opportunity Hack Team"
 
 
@@ -90,7 +110,8 @@ def _failure(message, status):
 @register_tool(
     "volunteers_list_by_event",
     "List volunteer applications for an event, by type, with pagination "
-    "and an optional isSelected filter.",
+    "and an optional isSelected filter. page starts at 1; limit is 1-200 "
+    "(default 20).",
     {
         "type": "object",
         "properties": {
@@ -107,18 +128,23 @@ def _failure(message, status):
 )
 def volunteers_list_by_event(arguments, admin):
     # type: (Dict[str, Any], Dict[str, Any]) -> Tuple[Dict[str, Any], int]
+    # The service turns these straight into a Firestore offset/limit: a
+    # page below 1 is a negative offset (a crash), and an unbounded limit
+    # is the whole roster in one result.
+    page = max(1, arguments.get("page", 1))
+    limit = max(1, min(arguments.get("limit", 20), _MAX_LIST_LIMIT))
     volunteers = get_volunteers_by_event(
         arguments["event_id"],
         arguments["type"],
-        arguments.get("page", 1),
-        arguments.get("limit", 20),
+        page,
+        limit,
         arguments.get("selected"),
     )
     return _success(
         {
             "volunteers": volunteers,
-            "page": arguments.get("page", 1),
-            "limit": arguments.get("limit", 20),
+            "page": page,
+            "limit": limit,
             # Same caveat as the REST admin list: this counts the page,
             # not the event — the service has no total-count query.
             "total": len(volunteers),
@@ -179,11 +205,12 @@ def volunteers_select(arguments, admin):
 )
 def volunteers_refund_deposit(arguments, admin):
     # type: (Dict[str, Any], Dict[str, Any]) -> Tuple[Dict[str, Any], int]
+    override = bool(arguments.get("override", False))
     try:
         updated = refund_hacker_deposit(
             volunteer_id=arguments["volunteer_id"],
             admin_user_id=admin.get("propel_id"),
-            override=bool(arguments.get("override", False)),
+            override=override,
         )
     except ValueError as e:
         # Caller-facing validation: not a hacker, no deposit, already
@@ -192,6 +219,18 @@ def volunteers_refund_deposit(arguments, admin):
     except RuntimeError as e:
         # Stripe rejection or missing STRIPE_SECRET_KEY. Same 502 as REST.
         return _failure(str(e), 502)
+    _audit(
+        "hacker_deposit_refund",
+        "%s refunded hacker deposit for volunteer %s via MCP "
+        "(refund_id=%s, amount_cents=%s, override=%s)"
+        % (
+            admin.get("propel_id"),
+            arguments["volunteer_id"],
+            (updated or {}).get("deposit_refund_id"),
+            (updated or {}).get("deposit_refund_amount_cents"),
+            override,
+        ),
+    )
     return _success({"volunteer": updated})
 
 
@@ -222,7 +261,20 @@ def volunteers_bulk_refund_deposits(arguments, admin):
             admin_user_id=admin.get("propel_id"),
         )
     except Exception as e:
+        logger.exception("MCP bulk refund failed for %s", arguments["event_id"])
         return _failure("Bulk refund failed: %s" % e, 500)
+    result = result or {}
+    _audit(
+        "hacker_deposit_bulk_refund",
+        "%s ran bulk refund for event %s via MCP: %d refunded ($%.2f), %d failed"
+        % (
+            admin.get("propel_id"),
+            arguments["event_id"],
+            len(result.get("refunded") or []),
+            (result.get("total_amount_cents") or 0) / 100.0,
+            len(result.get("failed") or []),
+        ),
+    )
     return _success(result)
 
 
@@ -250,6 +302,9 @@ def volunteers_bulk_refund_deposits(arguments, admin):
 )
 def volunteers_message(arguments, admin):
     # type: (Dict[str, Any], Dict[str, Any]) -> Tuple[Dict[str, Any], int]
+    if not arguments["message"].strip():
+        # Same 400 as the REST view; never send an empty Slack DM / email.
+        return _failure("Message is required", 400)
     result = send_volunteer_message(
         volunteer_id=arguments["volunteer_id"],
         message=arguments["message"],

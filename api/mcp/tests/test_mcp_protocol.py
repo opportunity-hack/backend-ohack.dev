@@ -47,6 +47,12 @@ def tools():
             "message": "Already approved",
         }, 409
 
+    def bare_list(arguments, admin):
+        return [{"id": "a"}, {"id": "b"}], 200
+
+    def bare_list_error(arguments, admin):
+        return [{"id": "a"}], 404
+
     registry.register_tool(
         "test_echo",
         "Echo the arguments back",
@@ -87,6 +93,18 @@ def tools():
         {"type": "object", "properties": {}},
         ("volunteer.admin",),
     )(service_error)
+    registry.register_tool(
+        "test_bare_list",
+        "A tool whose service returns a bare list",
+        {"type": "object", "properties": {}},
+        ("volunteer.admin",),
+    )(bare_list)
+    registry.register_tool(
+        "test_bare_list_error",
+        "A tool whose service returns a bare list with an error status",
+        {"type": "object", "properties": {}},
+        ("volunteer.admin",),
+    )(bare_list_error)
     yield
     registry.TOOL_REGISTRY.clear()
     registry.TOOL_REGISTRY.update(saved)
@@ -242,6 +260,22 @@ def test_call_service_error_passes_through_as_is_error(tools):
     assert payload["error"] == "already_approved"
 
 
+def test_call_bare_list_payload_is_a_success_result(tools):
+    # Some services return a bare list (e.g. a roster). The dispatcher
+    # must serialize it, not crash on payload.get().
+    response, _ = protocol.dispatch(_call("test_bare_list", {}), USER, _allow_all)
+    result = response["result"]
+    assert result["isError"] is False
+    assert json.loads(result["content"][0]["text"]) == [{"id": "a"}, {"id": "b"}]
+
+
+def test_call_bare_list_payload_with_error_status_is_error(tools):
+    response, _ = protocol.dispatch(
+        _call("test_bare_list_error", {}), USER, _allow_all
+    )
+    assert response["result"]["isError"] is True
+
+
 def test_call_rejects_non_object_params_and_arguments(tools):
     response, _ = protocol.dispatch(
         {"jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": [1]},
@@ -307,3 +341,91 @@ def test_anonymous_caller_is_forbidden(tools):
         _call("test_echo", {"message": "hi"}), None, _allow_all
     )
     assert response["error"]["code"] == -32001
+
+
+def test_initialize_echoes_a_supported_client_version(tools):
+    # An older client must get its own version back, not one it cannot speak.
+    for requested, expected in (
+        ("2025-06-18", "2025-06-18"),
+        ("1999-01-01", protocol.PROTOCOL_VERSION),
+        (None, protocol.PROTOCOL_VERSION),
+    ):
+        response, _ = protocol.dispatch(
+            {
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "initialize",
+                "params": {"protocolVersion": requested},
+            },
+            USER,
+            _allow_all,
+        )
+        assert response["result"]["protocolVersion"] == expected
+
+
+def test_confirm_is_always_declared_and_required_in_the_listed_schema(tools):
+    # test_danger registers with requires_confirm=True; whatever its own
+    # schema says, tools/list must advertise the gate the dispatcher enforces.
+    schema = registry.get_tool("test_danger").input_schema
+    assert schema["properties"]["confirm"]["type"] == "boolean"
+    assert "confirm" in schema["required"]
+    # Tools without the gate are left alone.
+    assert "confirm" not in registry.get_tool("test_echo").input_schema.get(
+        "properties", {}
+    )
+
+
+def test_null_optional_argument_is_treated_as_absent(tools):
+    seen = {}
+
+    def capture(arguments, admin):
+        seen.update(arguments)
+        return {"ok": True}, 200
+
+    registry.register_tool(
+        "test_capture",
+        "Records the arguments it was given",
+        {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string"},
+                "note": {"type": "string"},
+            },
+            "required": ["name"],
+            "additionalProperties": False,
+        },
+        ("volunteer.admin",),
+    )(capture)
+    response, _ = protocol.dispatch(
+        _call("test_capture", {"name": "a", "note": None}), USER, _allow_all
+    )
+    assert response["result"]["isError"] is False
+    assert seen == {"name": "a"}
+    # A null REQUIRED argument is still missing.
+    response, _ = protocol.dispatch(
+        _call("test_capture", {"name": None}), USER, _allow_all
+    )
+    assert response["error"]["code"] == -32602
+
+
+def test_non_json_payload_values_do_not_break_the_result(tools):
+    import datetime
+
+    registry.register_tool(
+        "test_datetime",
+        "A tool whose payload carries a datetime",
+        {"type": "object", "properties": {}},
+        ("volunteer.admin",),
+    )(lambda arguments, admin: ({"at": datetime.datetime(2026, 11, 14)}, 200))
+    response, _ = protocol.dispatch(_call("test_datetime", {}), USER, _allow_all)
+    assert response["result"]["isError"] is False
+    assert "2026-11-14" in response["result"]["content"][0]["text"]
+
+
+def test_handler_exception_is_logged(tools, monkeypatch):
+    logged = []
+    monkeypatch.setattr(
+        protocol.logger, "exception", lambda *args, **kwargs: logged.append(args)
+    )
+    protocol.dispatch(_call("test_broken", {}), USER, _allow_all)
+    assert logged and logged[0][1] == "test_broken"
