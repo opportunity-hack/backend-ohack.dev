@@ -72,14 +72,22 @@ def test_malformed_json_is_parse_error(load):
 
 
 def test_tools_list_empty_with_no_tools_registered(load):
-    client = load(passthrough_auth_module())[1].test_client()
-    r = client.post(
-        "/api/mcp",
-        json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
-        headers=HEADERS,
-    )
-    assert r.status_code == 200
-    assert r.json["result"] == {"tools": []}
+    from api.mcp import registry
+
+    saved = dict(registry.TOOL_REGISTRY)
+    registry.TOOL_REGISTRY.clear()
+    try:
+        client = load(passthrough_auth_module())[1].test_client()
+        r = client.post(
+            "/api/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/list"},
+            headers=HEADERS,
+        )
+        assert r.status_code == 200
+        assert r.json["result"] == {"tools": []}
+    finally:
+        registry.TOOL_REGISTRY.clear()
+        registry.TOOL_REGISTRY.update(saved)
 
 
 def test_ping_through_the_route(load):

@@ -86,7 +86,9 @@ adds its module here:
 - `feat/mcp-reimbursements` — `reimbursements_*` (admin review)
 - `feat/mcp-teams` — `teams_*` (approve, roster, messaging, gateway keys)
 - `feat/mcp-checkin` — `checkin_*` (desk tools, per-tool permissions)
-- `feat/mcp-surveys` — `surveys_*` (read-only admin analytics)
+- `feat/mcp-surveys` — `survey_event_responses`, `survey_event_summary`,
+  `survey_cross_event_overview` (read-only admin analytics, `volunteer.admin`-only;
+  `survey_event_responses` takes optional `mode: live | post`)
 - `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds)
 - `feat/mcp-completion` — `completion_*` (project completion status,
   GitHub activity; Slack stand-ups are NOT included — the backend
