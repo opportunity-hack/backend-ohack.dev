@@ -90,7 +90,42 @@ adds its module here:
 - `feat/mcp-volunteers` — `volunteers_*` (roster, select, refunds)
 - `feat/mcp-completion` — `completion_*` (project completion status,
   GitHub activity; Slack stand-ups are NOT included — the backend
-  tracks no stand-up activity, see that PR)
+  tracks no stand-up activity, see below)
+
+### `completion_*` tools (all `volunteer.admin`)
+
+- `completion_team_status` (`team_id`) — one team's submission status
+  (`draft`/`submitted`/`late`, from
+  `api/submissions/submissions_service.py:70` `SUBMITTED_STATUSES`),
+  submitted-at timestamp, which required write-up fields
+  (`project_tagline`, `project_story`) are still missing, Slack
+  channel, and linked GitHub repo. Reads the full team doc via
+  `services.teams_service.get_team_admin` (not `get_team`, whose
+  `public_team_view` strips fields).
+- `completion_event_status` (`hackathon_id`) — rollup over
+  `api.teams.teams_service.get_teams_by_hackathon_id`: total teams,
+  submitted vs still draft, and the per-team status rows.
+- `completion_mark_submitted` (`team_id`, `confirm: true`) — the only
+  status writer: admin-forced submission via
+  `api.submissions.submissions_service.submit_project(admin=True)`,
+  recorded as `late` past the close, idempotent (`already_submitted`
+  200 on a re-submit), 400 `incomplete` when the required write-up
+  fields are missing. There is no service function that sets an
+  arbitrary `project_submission_status`, so no such tool exists.
+- `completion_github_activity` (`team_id`) — commits, contributors,
+  and open PRs for the team's linked repo: org/repo are parsed out of
+  the `github_links` URL stored at approval time, then
+  `api.github.github_service.get_github_activity` is called. Its
+  error shapes pass through (`repo_not_found` 404,
+  `github_rate_limited` 503, `github_unavailable` 502).
+
+No Slack stand-up tool: the backend has no channel-history reader.
+`common/utils/slack.py` only sends, audits, and looks up users and
+channels, and no `conversations.history` read exists anywhere in
+`api/`, `services/`, or `common/`; the only "standups" hits are a
+hearts-service gamification award. A stand-up tool would need new
+service code (a `conversations.history` read plus a stand-up
+definition), not a wrapper.
 
 ## Client setup
 
