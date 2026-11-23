@@ -53,3 +53,22 @@ def test_extract_github_username():
     assert _extract_github_username(None, None) is None
     # Case is normalized
     assert _extract_github_username("1+AiTzEnG@users.noreply.github.com", None) == "aitzeng"
+
+
+def test_certificates_attach_without_privacy_opt_in():
+    """Certificates have no privacy toggle — they always ride the public profile."""
+    from types import SimpleNamespace
+    from services.users_service import _attach_certificates
+
+    user = SimpleNamespace(
+        history={"certificates": [
+            "old.png",
+            {"filename": "new.png", "reasons": ["mentor"], "hearts": 1, "event_id": "fall-2026"},
+        ]},
+        github="",
+    )
+    public_data = {}
+    _attach_certificates(user, public_data, {})  # no "certificates": "public"
+
+    urls = [c["url"] for c in public_data["certificates"]["heart_certificates"]]
+    assert [u.rsplit("/", 1)[-1] for u in urls] == ["old.png", "new.png"]

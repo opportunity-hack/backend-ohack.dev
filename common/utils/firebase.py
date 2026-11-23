@@ -1003,7 +1003,7 @@ def add_reference_link_to_problem_statement(problem_statement_id, name, link):
     db.collection("problem_statements").document(problem_statement_id).set(
         {"references": reference_links}, merge=True)
     
-def add_certificate(user_id, certificate, timestamp=None, reasons=None, hearts=None):
+def add_certificate(user_id, certificate, timestamp=None, reasons=None, hearts=None, event_id=None):
     db = get_db()  # this connects to our Firestore database
     logger.info(f"Adding certificate {certificate} to user {user_id}")
 
@@ -1034,6 +1034,9 @@ def add_certificate(user_id, certificate, timestamp=None, reasons=None, hearts=N
             cert_entry["reasons"] = reasons
         if hearts is not None:
             cert_entry["hearts"] = hearts
+        if event_id:
+            # Which hackathon the certificate was sent for (admin volunteer table)
+            cert_entry["event_id"] = event_id
         user_history["certificates"].append(cert_entry)
     else:
         user_history["certificates"].append(certificate)
