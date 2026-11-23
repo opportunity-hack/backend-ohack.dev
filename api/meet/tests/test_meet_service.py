@@ -132,6 +132,114 @@ def test_vote_update_needs_edit_token(db):
     assert [v["name"] for v in view["votes"]] == ["Ada L"]
 
 
+# --- response notifications ------------------------------------------------
+
+def _backdate_notification(db, seconds):
+    from datetime import datetime, timedelta, timezone
+    doc = next(iter(db.collection(svc.VOTES).stream()))
+    stamp = (datetime.now(timezone.utc) - timedelta(seconds=seconds)).isoformat()
+    doc.reference.update({"last_notified_at": stamp})
+    return stamp
+
+
+def test_new_response_notifies_and_quick_edits_do_not(db):
+    _create()
+    slots = [s["id"] for s in svc.get_public_poll("team-sync")[0]["poll"]["slots"]]
+    with patch.object(svc, "_notify_response") as notify:
+        first, status = _vote()
+        assert status == 201 and notify.call_count == 1
+        assert notify.call_args.kwargs["is_update"] is False
+        # Changed answers inside the throttle window: saved, not announced.
+        assert _vote(editToken=first["editToken"],
+                     choices={slots[0]: "yes", slots[1]: "maybe"})[1] == 200
+        assert notify.call_count == 1
+
+
+def test_edit_after_interval_notifies_once_and_restamps(db):
+    _create()
+    slots = [s["id"] for s in svc.get_public_poll("team-sync")[0]["poll"]["slots"]]
+    with patch.object(svc, "_notify_response") as notify:
+        first, _ = _vote()
+        old = _backdate_notification(db, svc.EDIT_NOTIFY_INTERVAL_SECONDS + 5)
+        # Same name and answers: an autosave with nothing new is not news.
+        assert _vote(editToken=first["editToken"])[1] == 200
+        assert notify.call_count == 1
+        assert _vote(editToken=first["editToken"], choices={slots[1]: "yes"})[1] == 200
+        assert notify.call_count == 2
+        assert notify.call_args.kwargs["is_update"] is True
+        stored = next(iter(db.collection(svc.VOTES).stream())).to_dict()
+        assert stored["last_notified_at"] > old
+        assert _vote(editToken=first["editToken"], choices={slots[0]: "maybe"})[1] == 200
+        assert notify.call_count == 2
+
+
+def test_notification_failure_never_fails_the_vote(db):
+    _create()
+    with patch.object(svc, "_notifications_disabled", side_effect=RuntimeError("boom")):
+        assert _vote()[1] == 201
+
+
+def test_notification_is_off_under_test_environment(db):
+    _create()
+    with patch.object(svc, "_send_response_notifications") as send:
+        assert _vote()[1] == 201
+        send.assert_not_called()
+
+
+def test_notification_text_escapes_public_input_and_omits_email(db):
+    _create(title="Sync <b>&</b> plan")
+    poll = svc._load_poll(db, "team-sync")
+    slots = svc._slot_ids(poll)
+    note = svc.build_response_notification(
+        poll, "<!channel> <script>x</script>", {slots[0]: "yes", slots[1]: "maybe"},
+        False, 3)
+    assert "<!channel>" not in note["slack"] and "&lt;!channel&gt;" in note["slack"]
+    assert "responded to" in note["slack"]
+    assert "yes to 1 of 2 times, maybe to 1 · 3 responses so far" in note["slack"]
+    assert "<script>" not in note["html"] and "<b>" not in note["html"]
+    assert "\n" not in note["subject"]
+    updated = svc.build_response_notification(poll, "Ada", {}, True, 1)
+    assert "updated their times for" in updated["subject"]
+    assert "1 response so far" in updated["slack"]
+
+
+def test_last_notified_at_stays_out_of_every_view(db):
+    _create()
+    _vote()
+    assert "last_notified_at" not in svc.get_public_poll("team-sync")[0]["votes"][0]
+    assert "last_notified_at" not in svc.admin_get_poll("team-sync")[0]["votes"][0]
+
+
+def test_send_posts_to_slack_and_email(db, monkeypatch):
+    import sys
+    import types
+    _create()
+    poll = svc._load_poll(db, "team-sync")
+    sent = {}
+    slack = types.ModuleType("common.utils.slack")
+    slack.send_slack = lambda **kw: sent.setdefault("slack", kw)
+    resend = types.ModuleType("resend")
+    resend.Emails = types.SimpleNamespace(
+        send=lambda params: sent.setdefault("email", params))
+    retry = types.ModuleType("services.resend_utils")
+    retry.send_with_retry = lambda fn, log_context=None: (fn(), None)
+    monkeypatch.setitem(sys.modules, "common.utils.slack", slack)
+    monkeypatch.setitem(sys.modules, "resend", resend)
+    monkeypatch.setitem(sys.modules, "services.resend_utils", retry)
+    monkeypatch.setenv("RESEND_WELCOME_EMAIL_KEY", "k")
+    monkeypatch.delenv("MEET_NOTIFY_SLACK_CHANNEL", raising=False)
+    monkeypatch.delenv("MEET_NOTIFY_EMAIL", raising=False)
+    svc._send_response_notifications(poll, "Ada", {}, False)
+    assert sent["slack"]["channel"] == "meeting-updates"
+    assert sent["email"]["to"] == ["meet@ohack.org"]
+    # An empty value switches a channel off.
+    sent.clear()
+    monkeypatch.setenv("MEET_NOTIFY_SLACK_CHANNEL", "")
+    monkeypatch.setenv("MEET_NOTIFY_EMAIL", "")
+    svc._send_response_notifications(poll, "Ada", {}, False)
+    assert sent == {}
+
+
 def test_vote_validation(db):
     _create()
     assert _vote(name="")[0]["error"] == "invalid_name"
