@@ -15,9 +15,10 @@ Identity for writes comes from the verified token only; tool arguments
 never carry a user id. Every ``tools/call`` writes a structured log line
 and a fire-and-forget Slack audit entry.
 """
+import functools
 import os
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, g, jsonify, request
 
 from common.auth import (
     CHECKIN_PERMISSIONS,
@@ -27,7 +28,7 @@ from common.auth import (
     user_has_any_permission,
 )
 from common.log import get_logger
-from api.mcp import protocol
+from api.mcp import protocol, tokens_service
 from api.mcp.tools import register_all
 
 logger = get_logger(__name__)
@@ -54,6 +55,7 @@ def _audit_tool_call(tool_name, caller, is_error):
             payload={
                 "tool": tool_name,
                 "caller": caller.get("propel_id"),
+                "token_id": caller.get("token_id"),
                 "is_error": bool(is_error),
             },
         )
@@ -61,14 +63,81 @@ def _audit_tool_call(tool_name, caller, is_error):
         logger.warning("MCP audit failed (%s): %s", tool_name, type(e).__name__)
 
 
+def _bearer_token():
+    # type: () -> str
+    parts = (request.headers.get("Authorization") or "").split(None, 1)
+    if len(parts) == 2 and parts[0].lower() == "bearer":
+        return parts[1].strip()
+    return ""
+
+
+def _mcp_gate(fn):
+    """The endpoint gate, for either credential.
+
+    A personal access token (``ohmcp_...``, see ``tokens_service``) is
+    checked here and needs no ``X-Org-Id``: the org is stored on the
+    token. Anything else goes through the PropelAuth gate unchanged.
+    """
+    propel_gated = require_any_permission(
+        CHECKIN_PERMISSIONS, req_to_org_id=getOrgId
+    )(fn)
+
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        raw = _bearer_token()
+        if not raw.startswith(tokens_service.TOKEN_PREFIX):
+            return propel_gated(*args, **kwargs)
+        try:
+            user = tokens_service.user_for_token(raw)
+        except tokens_service.IdentityUnavailable:
+            return (
+                jsonify(
+                    {
+                        "error": "identity_unavailable",
+                        "message": "Could not confirm the token owner. Try again.",
+                    }
+                ),
+                503,
+            )
+        if user is None:
+            return (
+                jsonify(
+                    {
+                        "error": "invalid_token",
+                        "message": "This token is unknown, expired or revoked",
+                    }
+                ),
+                401,
+            )
+        if not user_has_any_permission(user, CHECKIN_PERMISSIONS):
+            return (
+                jsonify(
+                    {
+                        "error": "forbidden",
+                        "message": "The token owner no longer has admin access",
+                    }
+                ),
+                403,
+            )
+        g.mcp_token_user = user
+        return fn(*args, **kwargs)
+
+    return wrapper
+
+
+def _current_user():
+    """The verified caller: the token owner, else the PropelAuth user."""
+    token_user = getattr(g, "mcp_token_user", None)
+    return token_user if token_user is not None else auth_user
+
+
 @bp.route("/mcp", methods=["POST"])
-@require_any_permission(CHECKIN_PERMISSIONS, req_to_org_id=getOrgId)
+@_mcp_gate
 def mcp_endpoint():
     body = request.get_json(silent=True)
+    user = _current_user()
     # Unparsable or empty JSON -> the dispatcher answers -32700.
-    response, status = protocol.dispatch(
-        body, auth_user, user_has_any_permission
-    )
+    response, status = protocol.dispatch(body, user, user_has_any_permission)
     if (
         isinstance(body, dict)
         and body.get("method") == "tools/call"
@@ -77,7 +146,10 @@ def mcp_endpoint():
         params = body.get("params")
         if not isinstance(params, dict):
             params = {}
-        caller = protocol._admin_from_user(auth_user)
+        caller = protocol._admin_from_user(user)
+        token_id = getattr(user, "token_id", None)
+        if token_id:
+            caller["token_id"] = token_id
         # A JSON-RPC error (forbidden, bad params, handler crash) is a
         # failed call too: the audit must not record it as a success.
         if "error" in response:
@@ -89,9 +161,10 @@ def mcp_endpoint():
         # log / Slack line short and single-line.
         tool_name = " ".join(str(params.get("name")).split())[:80]
         logger.info(
-            "MCP tools/call %s by %s is_error=%s",
+            "MCP tools/call %s by %s token=%s is_error=%s",
             tool_name,
             caller.get("propel_id"),
+            caller.get("token_id"),
             is_error,
         )
         _audit_tool_call(tool_name, caller, is_error)
@@ -111,3 +184,37 @@ def mcp_get_not_allowed():
         ),
         405,
     )
+
+
+# --- Personal access tokens -------------------------------------------------
+# PropelAuth session only: a personal token is not a PropelAuth JWT, so it
+# is refused here and can never mint, list or revoke tokens.
+
+
+@bp.route("/mcp/tokens", methods=["GET"])
+@require_any_permission(CHECKIN_PERMISSIONS, req_to_org_id=getOrgId)
+def list_mcp_tokens():
+    payload, status = tokens_service.list_tokens(protocol._admin_from_user(auth_user))
+    return jsonify(payload), status
+
+
+@bp.route("/mcp/tokens", methods=["POST"])
+@require_any_permission(CHECKIN_PERMISSIONS, req_to_org_id=getOrgId)
+def create_mcp_token():
+    payload, status = tokens_service.create_token(
+        protocol._admin_from_user(auth_user),
+        getOrgId(request),
+        request.get_json(silent=True),
+    )
+    response = jsonify(payload)
+    response.headers["Cache-Control"] = "no-store"
+    return response, status
+
+
+@bp.route("/mcp/tokens/<token_id>", methods=["DELETE"])
+@require_any_permission(CHECKIN_PERMISSIONS, req_to_org_id=getOrgId)
+def revoke_mcp_token(token_id):
+    payload, status = tokens_service.revoke_token(
+        protocol._admin_from_user(auth_user), token_id
+    )
+    return jsonify(payload), status

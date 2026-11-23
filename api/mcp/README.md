@@ -37,6 +37,30 @@ Gate, in order, on every request:
    (`checkin_roster`, `checkin_checked_in`, `checkin_check_in`);
    `checkin_reset` stays `volunteer.admin`-only.
 
+### Personal access tokens
+
+A PropelAuth access token lasts 30 minutes, which does not suit an MCP
+client config. An admin can mint a personal access token instead
+(`/admin/mcp` on the site, or the routes below) and send it as the
+Bearer token. No `X-Org-Id` is needed: the org is stored on the token.
+
+- `GET /api/mcp/tokens` — the caller's tokens (never the raw value)
+- `POST /api/mcp/tokens` `{name, expiresInDays?}` — returns `token` once
+- `DELETE /api/mcp/tokens/<id>` — revoke (deletes the doc)
+
+Rules (`api/mcp/tokens_service.py`, collection `mcp_tokens`):
+
+- Only the SHA-256 of a token is stored (doc id). Tokens start `ohmcp_`.
+- A token carries no permissions. Every use re-reads the owner's current
+  permissions from PropelAuth (cached 60s), so removing a role or
+  disabling the account cuts the token off. PropelAuth unreachable →
+  503, never a pass.
+- Expiry 1–90 days (default 90); at most 5 active tokens per person.
+- The three token routes take a PropelAuth session only, so a personal
+  token cannot mint, list or revoke tokens.
+- The Slack audit line for a `tools/call` carries `token_id`; minting
+  and revoking are audited as `mcp_token_created` / `mcp_token_revoked`.
+
 Identity for writes comes from the verified token only. Tool arguments
 never carry a user id, reviewer id, or `approvedBy`. Token lifetime
 and revocation follow PropelAuth exactly as REST does; there are no
@@ -144,7 +168,15 @@ MCP Inspector (Streamable HTTP transport):
 - URL: `https://<backend-host>/api/mcp`
 - Headers: `Authorization: Bearer <token>`, `X-Org-Id: <org>`
 
-Claude Code (`.mcp.json`):
+Claude Code, with a personal access token (keep it out of committed
+config — `claude mcp add` defaults to local scope):
+
+```
+claude mcp add --transport http ohack-admin https://<backend-host>/api/mcp \
+  --header "Authorization: Bearer ohmcp_..."
+```
+
+Claude Code with a PropelAuth session token (`.mcp.json`):
 
 ```json
 {
