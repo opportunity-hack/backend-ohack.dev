@@ -1084,9 +1084,11 @@ def _attach_teams(user, public_data, privacy_settings):
 
 
 def _attach_certificates(user, public_data, privacy_settings):
-    """Attach heart certificates (from history) + git-fame GitHub certificates."""
-    if privacy_settings.get("certificates") != "public":
-        return
+    """Attach heart certificates (from history) + git-fame GitHub certificates.
+
+    Always shown on a public profile — certificates have no privacy toggle
+    (the profile-level visibility switch still applies).
+    """
 
     cdn_server = os.getenv("CDN_SERVER", "https://cdn.ohack.dev")
     certificates = {"heart_certificates": [], "github_certificates": []}
