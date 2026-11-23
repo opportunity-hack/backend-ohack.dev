@@ -175,7 +175,8 @@ def save_hearts(user_id, hearts_json):
         give_hearts_to_user(slack_user_id, hearts_json["amount"], hearts_json["reasons"],
                                create_certificate_image=True,
                                cleanup=True,
-                               generate_backround_image=True)
+                               generate_backround_image=True,
+                               event_id=hearts_json.get("event_id"))
 
     return response
 
@@ -238,7 +239,7 @@ def _resolve_user_by_slack_id(slack_user_id):
     return user
 
 
-def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image=False, cleanup=True, generate_backround_image=False):
+def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image=False, cleanup=True, generate_backround_image=False, event_id=None):
     user = _resolve_user_by_slack_id(slack_user_id)
     if user is None or "id" not in user:
         error_string = f"User with slack id {slack_user_id} not found"
@@ -254,7 +255,8 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
             name=user["name"],
             reasons=reasons,
             hearts=amount,
-            generate_backround_image=generate_backround_image)
+            generate_backround_image=generate_backround_image,
+            event_id=event_id)
         certificate_text = f"\nCertificate: {CDN_SERVER}/certificates/{certificate_filename}"
         if cleanup:
             os.remove(certificate_filename)
@@ -306,7 +308,7 @@ def give_hearts_to_user(slack_user_id, amount, reasons, create_certificate_image
         raise Exception("You must provide at least 1 reasons for giving hearts in a list")
     
 
-def generate_certificate_image(userid, name, reasons, hearts, generate_backround_image=False):
+def generate_certificate_image(userid, name, reasons, hearts, generate_backround_image=False, event_id=None):
     total_hearts = hearts * len(reasons)
 
     # generate image for certificate/announcement
@@ -421,6 +423,7 @@ def generate_certificate_image(userid, name, reasons, hearts, generate_backround
         timestamp=iso_date,
         reasons=reasons,
         hearts=hearts,
+        event_id=event_id,
     )
     info(logger, "Generated certificate", name=name, hearts=total_hearts, filename=filename)
     return filename

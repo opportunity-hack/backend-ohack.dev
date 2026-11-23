@@ -62,7 +62,7 @@ PROFILE_READONLY_RESPONSE_FIELDS = [
     "id", "user_id", "email_address", "name", "nickname", "profile_image",
     "last_login", "history", "bio_video_url", "profile_slug", "profile_visibility",
 ]
-privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback", "hackathon_history", "praises", "bio", "bio_video_url", "portfolio_links", "teams", "certificates", "github_history", "hearts"]
+privacy_fields = ["github", "role", "company", "badges", "expertise", "education", "why", "linkedin_url", "instagram_url", "what", "how", "feedback", "hackathon_history", "praises", "bio", "bio_video_url", "portfolio_links", "teams", "github_history", "hearts"]
 
 # Privacy fields that default to "public" for new/legacy users (everything else defaults private).
 default_public_privacy_fields = {"praises"}

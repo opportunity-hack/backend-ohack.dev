@@ -109,6 +109,9 @@ CACHES = (
        "/profile giveaways reload. Was 60s."),
     _c("api.giveaways.giveaways_service", "_all_campaigns", "cached", 10, READ_AFTER_WRITE,
        "Backed by _campaign_cache."),
+    _c("api.mcp.tokens_service", "_identity_cache", "ttlcache", 60, STATIC,
+       "PropelAuth permissions of an MCP personal-token owner. 60s is how long a "
+       "removed role keeps working through a token; revoking a token is immediate."),
     _c("services.hackathons_service", "_get_full_hackathon_list", "cached", 10, READ_AFTER_WRITE,
        "Unfiltered list — the admin hackathon editor loads from it and autosaves whole "
        "objects back; was 3600s, which let a stale copy undo a newer save."),
