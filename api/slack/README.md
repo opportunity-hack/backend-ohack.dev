@@ -151,104 +151,22 @@ Clear all Slack-related caches.
 ---
 
 ### Send Slack Message (Admin)
-**POST** `/api/slack/message`
-
-Send a message to a Slack channel or user.
-
-#### Authentication Required
-- User must be authenticated
-- User must be org member with `volunteer.admin` permission
-
-#### Headers Required
-- `X-Org-Id`: Organization ID
-
-#### Request Body (JSON)
-```json
-{
-  "message": "Hello from the hackathon platform!",
-  "channel": "#general",
-  "username": "Hackathon Bot",
-  "icon_emoji": ":robot_face:"
-}
-```
-
-#### Required Fields
-- `message` (string): The message to send
-- `channel` (string): Channel name (with #) or user ID
-
-#### Optional Fields
-- `username` (string): Custom bot username (default: "Hackathon Bot")
-- `icon_emoji` (string): Custom emoji icon for the bot
-
-#### Response (Success)
-```json
-{
-  "success": true,
-  "message": "Message sent successfully"
-}
-```
-
-#### Error Responses
-```json
-{
-  "success": false,
-  "error": "Missing request body"
-}
-```
-**Status Code**: 400
+**POST** `/api/slack/message` — `volunteer.admin`, header `X-Org-Id`.
 
 ```json
-{
-  "success": false,
-  "error": "Message is required"
-}
+{ "message": ":trophy: Update with a <https://www.ohack.dev|link>", "channel": "general", "unfurl_links": false }
 ```
-**Status Code**: 400
 
-```json
-{
-  "success": false,
-  "error": "Channel is required"
-}
-```
-**Status Code**: 400
+- `message` (required): Slack mrkdwn, up to 12,000 characters.
+- `channel`: channel name (with or without `#`), channel id, or member id for a direct message. Not needed with `to_self`.
+- `to_self: true`: sends a direct message to the signed-in admin (a test send).
+- `unfurl_links`, `username`, `icon_emoji`: optional.
 
-```json
-{
-  "success": false,
-  "error": "Insufficient permissions"
-}
-```
-**Status Code**: 403
+Success: `{ "success": true, "channel": "#general", "channel_id": "C…", "ts": "…", "permalink": "https://…" }`
 
-```json
-{
-  "success": false,
-  "error": "Failed to send message"
-}
-```
-**Status Code**: 500
+Failure: `{ "success": false, "error": "<code>", "message": "<what to do>" }` with status 400 (`message_required`, `channel_required`, `invalid_channel`, `message_too_long`), 404 (`channel_not_found`, `no_slack_account`), 409 (`not_in_channel`, `is_archived`), 429 (`ratelimited`) or 502 (any other Slack refusal).
 
-## Features
+### List Channels (Admin)
+**GET** `/api/slack/admin/channels` — `volunteer.admin`, header `X-Org-Id`.
 
-1. **User Activity Tracking**: Monitor active Slack users
-2. **Presence Information**: Get real-time user presence status
-3. **User Profiles**: Access detailed user information
-4. **Cache Management**: Admin tools for cache control
-5. **Message Sending**: Send messages as bot to channels/users
-6. **Flexible Filtering**: Filter users by activity and presence
-
-## Notes for Frontend Development
-
-1. **Authentication**: All endpoints require user authentication
-2. **Admin Permissions**: Cache and messaging endpoints require `volunteer.admin` permission
-3. **Organization Context**: Admin operations require `X-Org-Id` header
-4. **Content-Type**: POST requests should use `application/json`
-5. **Response Format**: All responses include `success` field
-6. **User IDs**: Slack user IDs are in format U123456789
-7. **Channel Format**: Use # prefix for channel names, or direct user IDs
-8. **Rate Limiting**: Slack API calls may be rate-limited
-9. **Presence Filtering**: Use minimum_presence to filter by user availability
-10. **Error Handling**: Check both `success` field and HTTP status codes
-11. **Bot Configuration**: Customize bot appearance with username and emoji
-12. **Time Ranges**: Activity lookback period configurable from 1-365 days
+`{ "success": true, "channels": [{ "id", "name", "is_private", "is_member", "num_members" }] }` — public channels plus the private ones the bot is in, sorted by name.

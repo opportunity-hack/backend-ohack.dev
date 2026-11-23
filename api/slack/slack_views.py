@@ -8,11 +8,14 @@ from services.volunteer_slack_refresh import (
     audit_slack_refresh, audit_channel_invite
 )
 from common.utils.slack import invite_user_to_channel
+from services.slack_admin_message import (
+    SlackMessageError, send_admin_message, list_channels, slack_id_for_email,
+    audit_admin_message
+)
 
 from common.auth import auth, auth_user
 from common.exceptions import AuthorizationError, ValidationError
 from common.log import get_logger
-from common.utils.slack import send_slack
 import logging
 
 logger = get_logger("slack_views")
@@ -234,76 +237,67 @@ def clear_cache():
             "error": "Failed to clear Slack cache"
         }), 500
 
+@bp.route("/slack/admin/channels", methods=["GET"])
+@auth.require_user
+@auth.require_org_member_with_permission("volunteer.admin", req_to_org_id=getOrgId)
+def admin_list_channels():
+    """Channels an admin can post to: public ones plus the private ones the
+    bot is in. Each carries is_member so the page can warn before a send."""
+    try:
+        return jsonify({"success": True, "channels": list_channels()})
+    except SlackMessageError as e:
+        return jsonify({"success": False, "error": e.code, "message": e.message}), e.status
+    except Exception as e:
+        logger.error("Error listing Slack channels: %s", str(e))
+        return jsonify({"success": False, "error": "internal_error",
+                        "message": "Could not load the channel list."}), 500
+
+
 @bp.route("/slack/message", methods=["POST"])
 @auth.require_user
-@auth.require_org_member_with_permission("volunteer.admin", 
+@auth.require_org_member_with_permission("volunteer.admin",
                                           req_to_org_id=getOrgId)
 def send_message():
     """
-    API endpoint to send a message to a Slack channel or user.
-    Requires admin scope.
+    Send a Slack message (mrkdwn) as the bot. volunteer.admin only.
 
     Request body:
-        message: The message to send (required)
-        channel: The channel name or user ID to send to (required)
-        username: Custom username for the bot (optional,
-                 defaults to "Hackathon Bot")
-        icon_emoji: Custom emoji for the bot (optional)
+        message: text to send (required, Slack mrkdwn)
+        channel: channel name, channel id or member id (required unless to_self)
+        to_self: true sends a direct message to the signed-in admin instead
+        unfurl_links: optional bool, link previews on or off
+        username / icon_emoji: optional bot name and emoji
 
-    Returns:
-        JSON response with operation status
+    Returns {success, channel, channel_id, ts, permalink} or
+    {success: false, error: <code>, message} with a 4xx/502 status. A send
+    that Slack refused is never reported as a success.
     """
+    request_data = request.get_json(silent=True)
+    if not isinstance(request_data, dict):
+        return jsonify({"success": False, "error": "missing_body",
+                        "message": "Missing request body"}), 400
+    actor = _audit_actor()
+    to_self = request_data.get("to_self") is True
+    unfurl_links = request_data.get("unfurl_links")
+    if not isinstance(unfurl_links, bool):
+        unfurl_links = None
+    message = request_data.get("message")
     try:
-        request_data = request.get_json()
-        if not request_data:
-            return jsonify({
-                "success": False,
-                "error": "Missing request body"
-            }), 400
-
-        message = request_data.get('message')
-        channel = request_data.get('channel')
-        username = request_data.get('username', 'Hackathon Bot')
-        icon_emoji = request_data.get('icon_emoji')
-
-        if not message:
-            return jsonify({
-                "success": False,
-                "error": "Message is required"
-            }), 400
-
-        if not channel:
-            return jsonify({
-                "success": False,
-                "error": "Channel is required"
-            }), 400
-
-        # Send the Slack message
-        send_slack(
-            message=message,
-            channel=channel,
-            username=username,
-            icon_emoji=icon_emoji
-        )
-
-        return jsonify({
-            "success": True,
-            "message": "Message sent successfully"
-        })
-
-    except AuthorizationError as e:
-        logger.warning("Authorization error: %s", str(e))
-        return jsonify({
-            "success": False,
-            "error": str(e)
-        }), 403
-
+        channel = (slack_id_for_email(actor.get("email")) if to_self
+                   else request_data.get("channel"))
+        result = send_admin_message(
+            message, channel, unfurl_links=unfurl_links,
+            username=request_data.get("username"),
+            icon_emoji=request_data.get("icon_emoji"))
+    except SlackMessageError as e:
+        return jsonify({"success": False, "error": e.code, "message": e.message}), e.status
     except Exception as e:
         logger.error("Error sending Slack message: %s", str(e))
-        return jsonify({
-            "success": False,
-            "error": "Failed to send message"
-        }), 500
+        return jsonify({"success": False, "error": "internal_error",
+                        "message": "Failed to send message"}), 500
+
+    audit_admin_message(actor, result, message, test=to_self)
+    return jsonify({"success": True, "message": "Message sent successfully", **result})
 
 
 @bp.route("/slack/invite-to-channel", methods=["POST"])
