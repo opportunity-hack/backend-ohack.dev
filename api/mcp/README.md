@@ -99,7 +99,17 @@ touching each other's lines.
 
 ### Meetings (`feat/mcp-meet`)
 
-_Not merged yet — `meet_*` (scheduling polls; calendar finalize)._
+`api/mcp/tools/meet.py`, all `volunteer.admin`-only, thin wrappers over
+`api/meet/meet_service.py`:
+
+- `meet_list_polls` (optional `status` filter, applied here — the
+  service has none), `meet_get_poll` — read-only.
+- `meet_create_poll`, `meet_update_poll`, `meet_delete_poll`,
+  `meet_delete_vote`, `meet_finalize_poll` — writers, `confirm: true`.
+  Closing a poll is `meet_update_poll` with `status: "closed"` (there
+  is no cancel tool). Finalize creates the Google Calendar event + Meet
+  link; a calendar failure leaves the poll open and re-finalizing is
+  409. Deleting a poll does not cancel a sent calendar event.
 
 ### Reimbursements (`feat/mcp-reimbursements`)
 
