@@ -35,6 +35,7 @@ Rules:
 """
 import hashlib
 import hmac
+import html
 import os
 import re
 import secrets
@@ -75,6 +76,14 @@ RESERVED_CODES = {"admin", "polls", "votes", "new"}
 _CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
+# Response notifications: every new response, and an edit at most once per
+# respondent per interval (the page autosaves each change).
+DEFAULT_NOTIFY_SLACK_CHANNEL = "meeting-updates"
+DEFAULT_NOTIFY_EMAIL = "meet@ohack.org"
+EDIT_NOTIFY_INTERVAL_SECONDS = 15 * 60
+NOTIFY_FROM = "Opportunity Hack <welcome@notifs.ohack.org>"
+MEET_SITE_URL = "https://www.ohack.dev"
+
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -113,6 +122,144 @@ def _audit(action: str, message: str) -> None:
         send_slack_audit(action=action, message=" ".join(message.split()), payload={})
     except Exception as e:
         logger.warning("Meet audit failed (%s): %s", action, type(e).__name__)
+
+
+# ---------------------------------------------------------------------------
+# Response notifications (Slack channel + team inbox)
+# ---------------------------------------------------------------------------
+
+def _notifications_disabled() -> bool:
+    return os.environ.get("ENVIRONMENT") == "test"
+
+
+def _notify_slack_channel() -> str:
+    """Empty env value turns the Slack post off."""
+    return os.environ.get("MEET_NOTIFY_SLACK_CHANNEL", DEFAULT_NOTIFY_SLACK_CHANNEL).strip()
+
+
+def _notify_email() -> str:
+    """Empty env value turns the email off."""
+    return os.environ.get("MEET_NOTIFY_EMAIL", DEFAULT_NOTIFY_EMAIL).strip()
+
+
+def _one_line(value: Any) -> str:
+    return " ".join(str(value or "").split())
+
+
+def _slack_escape(value: Any) -> str:
+    """Names come from an anonymous public form: without this a name could
+    carry ``<!channel>`` or a link into the channel."""
+    return (_one_line(value).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def _edit_notify_due(vote: Dict[str, Any], now_iso: str) -> bool:
+    last = vote.get("last_notified_at")
+    if not last:
+        return True
+    try:
+        elapsed = datetime.fromisoformat(now_iso) - datetime.fromisoformat(last)
+    except (TypeError, ValueError):
+        return True
+    return elapsed.total_seconds() >= EDIT_NOTIFY_INTERVAL_SECONDS
+
+
+def build_response_notification(
+    poll: Dict[str, Any], name: str, choices: Dict[str, str], is_update: bool,
+    response_count: Optional[int] = None,
+) -> Dict[str, str]:
+    """Pure: the Slack text and the email subject/HTML for one response.
+    Name only, never the respondent's email."""
+    slot_ids = [s["id"] for s in poll.get("slots") or []]
+    yes = sum(1 for sid in slot_ids if choices.get(sid) == "yes")
+    maybe = sum(1 for sid in slot_ids if choices.get(sid) == "maybe")
+    summary = "yes to %d of %d times" % (yes, len(slot_ids))
+    if maybe:
+        summary += ", maybe to %d" % maybe
+    if response_count is not None:
+        summary += " · %d response%s so far" % (
+            response_count, "" if response_count == 1 else "s")
+    verb = "updated their times for" if is_update else "responded to"
+    code = poll.get("code") or ""
+    title = _one_line(poll.get("title")) or code
+    who = _one_line(name)
+    poll_url = "%s/meet?code=%s" % (MEET_SITE_URL, code)
+    admin_url = "%s/admin/meet" % MEET_SITE_URL
+
+    slack = ":calendar: *%s* %s *%s* — %s\n<%s|Open poll> · <%s|Admin>" % (
+        _slack_escape(who), verb, _slack_escape(title), summary, poll_url, admin_url)
+    body = (
+        '<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">'
+        '<p style="font-size: 16px;"><strong>%s</strong> %s <strong>%s</strong>.</p>'
+        '<p style="font-size: 14px; color: #555;">%s</p>'
+        '<p style="font-size: 14px;"><a href="%s" style="color: #3498db;">Open the poll</a>'
+        ' · <a href="%s" style="color: #3498db;">Admin</a></p>'
+        '<p style="font-size: 12px; color: #777;">Later changes by the same person are '
+        'announced at most once every %d minutes; the poll page always shows the '
+        'current answers.</p></div>'
+    ) % (html.escape(who), verb, html.escape(title), html.escape(summary),
+         poll_url, admin_url, EDIT_NOTIFY_INTERVAL_SECONDS // 60)
+    return {"slack": slack, "subject": "[meet] %s %s %s" % (who, verb, title),
+            "html": body}
+
+
+def _send_response_notifications(
+    poll: Dict[str, Any], name: str, choices: Dict[str, str], is_update: bool,
+) -> None:
+    """Runs on the background pool. Each channel fails on its own."""
+    code = poll.get("code")
+    try:
+        count: Optional[int] = len(_load_votes(get_db(), code))
+    except Exception as e:
+        logger.warning("Meet notify: response count failed: %s", type(e).__name__)
+        count = None
+    note = build_response_notification(poll, name, choices, is_update, count)
+
+    channel = _notify_slack_channel()
+    if channel:
+        try:
+            from common.utils.slack import send_slack
+
+            send_slack(message=note["slack"], channel=channel,
+                       unfurl_links=False, unfurl_media=False)
+        except Exception as e:
+            logger.warning("Meet notify: Slack failed for %s: %s", code, type(e).__name__)
+
+    to_email = _notify_email()
+    if to_email:
+        try:
+            import resend
+            from services.resend_utils import send_with_retry
+
+            key = os.environ.get("RESEND_WELCOME_EMAIL_KEY")
+            if not key:
+                logger.warning("Meet notify: RESEND_WELCOME_EMAIL_KEY not set, no email")
+                return
+            resend.api_key = key
+            params = {"from": NOTIFY_FROM, "to": [to_email],
+                      "subject": note["subject"], "html": note["html"]}
+            _, error = send_with_retry(lambda: resend.Emails.send(params),
+                                       log_context={"meet_poll": code})
+            if error:
+                logger.warning("Meet notify: email not sent for %s: %s", code, error)
+        except Exception as e:
+            logger.warning("Meet notify: email failed for %s: %s", code, type(e).__name__)
+
+
+def _notify_response(
+    poll: Dict[str, Any], name: str, choices: Dict[str, str], is_update: bool,
+) -> None:
+    """Best-effort and off the request thread: never raises, never delays
+    the respondent. Silent under ENVIRONMENT=test."""
+    try:
+        if _notifications_disabled():
+            return
+        from common.utils.slack import run_in_background
+
+        run_in_background("meet_response_notify", _send_response_notifications,
+                          dict(poll), name, dict(choices), is_update)
+    except Exception as e:
+        logger.warning("Meet notify failed to start: %s", type(e).__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -375,8 +522,15 @@ def submit_vote(code: Any, data: Any) -> Tuple[Dict[str, Any], int]:
             )
         # Full set (not merge): choices is a map and merge would keep
         # answers for times that no longer exist.
+        changed = (existing.get("name") != name
+                   or (existing.get("choices") or {}) != choices)
+        notify = changed and _edit_notify_due(existing, now)
         existing.update({"name": name, "choices": choices, "updated_at": now})
+        if notify:
+            existing["last_notified_at"] = now
         ref.set(existing)
+        if notify:
+            _notify_response(poll, name, choices, is_update=True)
         return {"success": True, "voteId": vote_id, "editToken": edit_token,
                 "updated": True}, 200
 
@@ -391,7 +545,9 @@ def submit_vote(code: Any, data: Any) -> Tuple[Dict[str, Any], int]:
         "edit_token_hash": _hash_token(edit_token),
         "created_at": now,
         "updated_at": now,
+        "last_notified_at": now,
     })
+    _notify_response(poll, name, choices, is_update=False)
     return {"success": True, "voteId": vote_id, "editToken": edit_token,
             "updated": False}, 201
 
