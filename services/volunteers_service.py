@@ -2289,6 +2289,40 @@ def _enrich_with_hackathon(db, event_id: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def get_user_volunteer_docs(
+    user_id: Optional[str] = None,
+    email: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """Every `volunteers` doc (any type, any event) filed under this
+    PropelAuth `user_id` or `email`, deduped, each with `_doc_id`.
+
+    The lookup behind the profile attendance list and the participation
+    letters (api/letters). A failed query is logged and skipped."""
+    if not user_id and not email:
+        return []
+    db = get_db()
+    seen_ids = set()
+    volunteer_docs: List[Dict[str, Any]] = []
+
+    def _collect(query):
+        try:
+            for snap in query.stream():
+                if snap.id in seen_ids:
+                    continue
+                seen_ids.add(snap.id)
+                data = snap.to_dict() or {}
+                data['_doc_id'] = snap.id
+                volunteer_docs.append(data)
+        except Exception as e:
+            warning(logger, "volunteers query failed", exc_info=e)
+
+    if user_id:
+        _collect(db.collection('volunteers').where('user_id', '==', user_id))
+    if email:
+        _collect(db.collection('volunteers').where('email', '==', email))
+    return volunteer_docs
+
+
 def get_user_hackathon_attendance(
     user_id: Optional[str] = None,
     email: Optional[str] = None,
@@ -2317,25 +2351,7 @@ def get_user_hackathon_attendance(
         return []
 
     db = get_db()
-    seen_ids = set()
-    volunteer_docs: List[Dict[str, Any]] = []
-
-    def _collect(query):
-        try:
-            for snap in query.stream():
-                if snap.id in seen_ids:
-                    continue
-                seen_ids.add(snap.id)
-                data = snap.to_dict() or {}
-                data['_doc_id'] = snap.id
-                volunteer_docs.append(data)
-        except Exception as e:
-            warning(logger, "volunteers query failed", exc_info=e)
-
-    if user_id:
-        _collect(db.collection('volunteers').where('user_id', '==', user_id))
-    if email:
-        _collect(db.collection('volunteers').where('email', '==', email))
+    volunteer_docs = get_user_volunteer_docs(user_id, email)
 
     # Group by event, accumulating role labels, applying the attendance filter
     by_event: Dict[str, List[str]] = {}
