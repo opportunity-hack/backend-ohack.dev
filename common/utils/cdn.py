@@ -89,6 +89,26 @@ def get_blob_metadata(path):
     return {"exists": True, "size": blob.size, "content_type": blob.content_type}
 
 
+def upload_bytes(path, data, content_type, cache_control="private, no-store"):
+    """Write raw bytes to `path` in the bucket. Returns the blob path (NOT a
+    URL) — callers that must not publish the object (participation letters)
+    stream it back through the API with `download_bytes`."""
+    bucket = _get_bucket()
+    blob = bucket.blob(path)
+    blob.cache_control = cache_control
+    blob.upload_from_string(data, content_type=content_type)
+    return path
+
+
+def download_bytes(path):
+    """The object's bytes, or None when it does not exist."""
+    bucket = _get_bucket()
+    blob = bucket.get_blob(path)
+    if blob is None:
+        return None
+    return blob.download_as_bytes()
+
+
 def blob_exists(directory, filename):
     """True when <directory>/<filename> already exists — the same path
     upload_to_cdn writes to. Lets callers refuse an overwrite without changing

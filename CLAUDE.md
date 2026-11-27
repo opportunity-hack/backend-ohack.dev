@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
-- Install dependencies: `pip install -r requirements.txt`
+- Install dependencies: `pip install -r requirements.txt` (keep major-version upper bounds on unbounded deps: unpinned `sentry-sdk>=2.0.0` pulled 3.0 in Nov 2026 and crashed boot on `profiles_sample_rate`)
 - Run the app: `flask run` (or `gunicorn api.wsgi:app --log-file=- --log-level debug --preload --workers 1`)
 - Run tests: `pytest`
 - Run a single test: `pytest path/to/test_file.py::test_function_name`
@@ -23,7 +23,7 @@ Each API domain lives in `api/<domain>/` with a consistent structure:
 - `<domain>_service.py` — Business logic called by views. Some older services live in `services/` at the top level (hearts, users, volunteers, etc.).
 - `tests/` — Tests for that domain.
 
-API domains: messages, certificates, contact, github, hearts, judging, leaderboard, llm, newsletters, problemstatements, slack, store, teams, users, validate, volunteers.
+API domains: messages, certificates, letters, contact, github, hearts, judging, leaderboard, llm, newsletters, problemstatements, slack, store, teams, users, validate, volunteers.
 
 ### Database layer (`db/`)
 - `db/interface.py` — Abstract `DatabaseInterface` base class.
@@ -410,3 +410,7 @@ One person = one PropelAuth account (per email) but possibly two logins (Google 
 ## Mentor engagement report (Nov 2026)
 
 `GET /api/admin/mentor-engagement/<event_id>` (`volunteer.admin`; `api/mentors/mentor_engagement_views.py` + `mentor_engagement_service.py`, uncached) joins mentor check-ins (self `checkInTimeList`/`checkoutTimeList` → hours, desk `checkedIn`) with mentor-panel work read off the event's team docs (coverage sign-offs from `history`, falling back to `checks`/legacy shape; non-deleted notes; flags raised/resolved; ratings), keyed by PropelAuth id → volunteer doc `user_id`, then PropelAuth email → doc email; leftovers are returned in `unmatched`, never dropped. `level` is a SUGGESTION for Heart Certificates (`/about/mentors`): `engaged` = checked in AND ≥ `ENGAGED_MIN_ACTIONS` (5) panel actions on ≥ `ENGAGED_MIN_TEAMS` (1) team; each row carries `score` + `score_breakdown` (`engagement_score`: 1/action, 2/team, 2 for checking in, 1/full hour capped at 10) and rows come back ranked most engaged first (`rank`: level → score → actions); `some_activity` / `checked_in_only` / `none` otherwise. Rules are in the pure `summarize_mentor_engagement`; tests `api/mentors/tests/test_mentor_engagement.py`. Slack/in-person help is not measured.
+
+## Participation letters (`api/letters/`, Nov 2026)
+
+Self-serve signed PDF letters on `/profile` → Volunteer History. Full contract: `api/letters/README.md`. Load-bearing: eligibility is per event and only for `end_date >= LETTERS_START_DATE` (2026-11-14; older = admin exception only) — judge = `isSelected` + ≥1 submitted score (identity via `judge_identity.caller_judge_ids`; scores keyed on the STORED judge id; no check-in needed), mentor/volunteer = `isSelected` + `checkInTime`, hacker = `isSelected` + member of an `active` team. Reason codes are twinned with the frontend reason map. The wording is locked in `letter_pdf.compose_letter` (one template renders preview AND final; missing facts drop their sentence; no pronouns/praise/immigration/hours — tests enforce); only `name_on_letter` (→ user doc `legal_name`) and the title/company opt-in are user input. Issue is idempotent through `letter_keys` (create-before-render); the PDF is rendered ONCE, stored in the CDN bucket under an unguessable `letters/<random>/` path (no private bucket — decided Nov 2026) and only ever streamed through `GET /api/letters/<id>/pdf` with a sha256 check. `reportlab` is a dependency (pure Python); fonts + logo are vendored in `api/letters/assets/` (OFL). Eyeball layout changes with `scripts/render_sample_letters.py`. Entry points: `/profile#volunteer-history` (rows + certificate link), the mentor/judge certificate email (composed in the frontend `BulkCertificateDialog`, sent via `/api/admin/email/send` — no backend template to change), and `/admin/letters`; the old `/hack/<event>/letters` generator no longer makes mentor/judge letters.
