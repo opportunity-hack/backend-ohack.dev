@@ -205,6 +205,7 @@ def create_app():
     from api.reimbursements import reimbursements_views
     from api.meet import meet_views
     from api.mcp import mcp_views
+    from api.letters import letters_views
 
     app.register_blueprint(messages_views.bp)
     app.register_blueprint(exception_views.bp)
@@ -241,5 +242,6 @@ def create_app():
     app.register_blueprint(reimbursements_views.bp)
     app.register_blueprint(meet_views.bp)
     app.register_blueprint(mcp_views.bp)
+    app.register_blueprint(letters_views.bp)
 
     return app
