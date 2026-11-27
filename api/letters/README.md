@@ -81,6 +81,18 @@ streamed back through the API; `pdf_sha256` is checked on every read.
 Slack audit (`send_slack_audit`) on issue, revoke and exception. No email on
 issue — the person already has the PDF.
 
+## Entry points (frontend)
+
+- `/profile#volunteer-history`: one letter row per (event, role), with the
+  mentor/judge certificate link beside it.
+- Post-event mentor/judge certificate email: composed in the frontend
+  (`admin/BulkCertificateDialog.js`) and sent through `/api/admin/email/send`;
+  it links to `/profile#volunteer-history`. No backend email template.
+- `/hack/<event>/letters` (the older manual generator) now only produces
+  General Volunteer and OPT letters; mentor and judge answers link to the
+  profile.
+- `/admin/letters`: list, preview, revoke, exception.
+
 ## Config
 
 `LETTERS_SIGNER_NAME`, `LETTERS_SIGNER_TITLE`, `LETTERS_SIGNATURE_IMAGE`
