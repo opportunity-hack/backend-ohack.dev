@@ -3,7 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Commands
-- Install dependencies: `pip install -r requirements.txt`
+- Install dependencies: `pip install -r requirements.txt` (keep major-version upper bounds on unbounded deps: unpinned `sentry-sdk>=2.0.0` pulled 3.0 in Nov 2026 and crashed boot on `profiles_sample_rate`)
 - Run the app: `flask run` (or `gunicorn api.wsgi:app --log-file=- --log-level debug --preload --workers 1`)
 - Run tests: `pytest`
 - Run a single test: `pytest path/to/test_file.py::test_function_name`
