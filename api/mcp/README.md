@@ -149,7 +149,15 @@ _Not merged yet — `checkin_*` (desk tools, per-tool permissions)._
 
 ### Surveys (`feat/mcp-surveys`)
 
-_Not merged yet — `survey_*` (read-only admin analytics)._
+`api/mcp/tools/surveys_tools.py`, read-only, `volunteer.admin`-only,
+thin wrappers over `api/surveys/surveys_service.py`:
+
+- `survey_event_responses` (`event_id`, optional `mode: live | post`)
+  — every response for one event, `ip_address` dropped.
+- `survey_event_summary` (`event_id`) — counts by mode/role plus
+  `overall_rating` / `would_return` averages.
+- `survey_cross_event_overview` — per-event aggregates for the
+  "Compare events" view; no per-response data.
 
 ### Volunteers (`feat/mcp-volunteers`)
 
