@@ -153,7 +153,29 @@ _Not merged yet — `survey_*` (read-only admin analytics)._
 
 ### Volunteers (`feat/mcp-volunteers`)
 
-_Not merged yet — `volunteers_*` (roster, select, refunds)._
+`api/mcp/tools/volunteers_tools.py`, all `volunteer.admin`-only, thin
+wrappers over `services/volunteers_service.py`:
+
+- `volunteers_list_by_event` (`event_id`, `type`, `page` from 1,
+  `limit` 1-200 default 20, optional `selected`) — read-only; `total`
+  counts the page, not the event (same caveat as REST).
+- `volunteers_resend_status` — read-only; with `email_ids` the per-ID
+  delivery status, without them the cached sent-email index (optional
+  recipient `emails` filter; `force` refreshes the cache).
+- `volunteers_select` — `confirm: true`; the ONLY writer of
+  `isSelected`; `selected` must be a JSON boolean.
+- `volunteers_refund_deposit` (`override: true` refunds a
+  donate-disposition deposit), `volunteers_bulk_refund_deposits` —
+  `confirm: true`; real Stripe refunds, irreversible. `ValueError` →
+  400, `RuntimeError` (Stripe/config) → 502, same as REST. Each posts
+  the same Slack audit the REST routes post (`hacker_deposit_refund` /
+  `hacker_deposit_bulk_refund`), because the service does not.
+- `volunteers_message` — `confirm: true`; Slack + email to one
+  volunteer; blank message → 400, not-found → 404, no email → 400.
+
+Omitted on purpose: `send_email_to_address` (send-to-any-address, not
+volunteer-scoped) and the self-service application / mentor check-in
+flows.
 
 ### Project completion (`feat/mcp-completion`)
 
