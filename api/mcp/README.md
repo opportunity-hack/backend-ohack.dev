@@ -157,9 +157,28 @@ _Not merged yet — `volunteers_*` (roster, select, refunds)._
 
 ### Project completion (`feat/mcp-completion`)
 
-_Not merged yet — `completion_*` (project completion status, GitHub
-activity; Slack stand-ups are NOT included — the backend tracks no
-stand-up activity)._
+`api/mcp/tools/completion.py`, all `volunteer.admin`-only:
+
+- `completion_team_status` (`team_id`) — submission status
+  (`draft` / `submitted` / `late`), submitted-at, which required
+  write-up fields (`project_tagline`, `project_story`) are missing,
+  Slack channel, linked GitHub repo. Reads the full team doc
+  (`services.teams_service.get_team_admin`).
+- `completion_event_status` (`hackathon_id`) — rollup: total teams,
+  submitted vs draft, per-team rows. `hackathon_id` is the hackathon's
+  database document id (what `GET /api/team/<hackathon_id>` takes),
+  NOT the `event_id` slug; an unknown id reads as zero teams.
+- `completion_mark_submitted` (`team_id`) — `confirm: true`; the only
+  status writer: `submit_project(admin=True)`, recorded `late` past the
+  close, idempotent (`already_submitted`), 400 `incomplete` when the
+  write-up is missing fields.
+- `completion_github_activity` (`team_id`) — commits, contributors,
+  open PRs for the repo in the team's `github_links`; service errors
+  pass through (`repo_not_found` 404, `github_rate_limited` 503,
+  `github_unavailable` 502), plus 404 `no_github_repo`.
+
+No Slack stand-up tool: the backend has no channel-history reader, so
+that would be new service code, not a wrapper.
 
 ## Client setup
 
