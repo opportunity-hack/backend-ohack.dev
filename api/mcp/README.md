@@ -137,7 +137,16 @@ touching each other's lines.
 
 ### Reimbursements (`feat/mcp-reimbursements`)
 
-_Not merged yet — `reimbursement_*` (admin review)._
+`api/mcp/tools/reimbursements_tools.py`, all `volunteer.admin`-only,
+thin wrappers over `api/reimbursements/reimbursements_service.py`:
+
+- `reimbursement_list` (optional `status`, `event_id`, `limit` 1-200
+  default 50, `offset`), `reimbursement_get` — read-only.
+- `reimbursement_review` — `confirm: true`; forwards only `status` /
+  `reviewNote` / `paymentReference`. Self-approval is refused by the
+  service (403 `self_approval`), and marking a claim `paid` requires
+  `paymentReference` (400 `payment_reference_required`). There is no
+  payout tool.
 
 ### Teams (`feat/mcp-teams`)
 
