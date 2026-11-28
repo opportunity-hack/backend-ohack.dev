@@ -145,7 +145,16 @@ _Not merged yet — `team_*` (approve, roster, messaging, gateway keys)._
 
 ### Check-in (`feat/mcp-checkin`)
 
-_Not merged yet — `checkin_*` (desk tools, per-tool permissions)._
+`api/mcp/tools/checkin.py`, thin wrappers over
+`api/checkin/checkin_service.py`:
+
+- `checkin_roster`, `checkin_checked_in` — read-only, `volunteer.admin`
+  or `checkin.admin`; return `{data, count}` like REST.
+- `checkin_check_in` — `volunteer.admin` or `checkin.admin`;
+  `confirm: true`; idempotent (keeps the first timestamp).
+- `checkin_reset` — `volunteer.admin` only; `confirm: true`; scoped by
+  `volunteer_ids` (max 500) or `all: true`; an empty scope is 400
+  `missing_scope`.
 
 ### Surveys (`feat/mcp-surveys`)
 
