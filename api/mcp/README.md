@@ -141,7 +141,18 @@ _Not merged yet — `reimbursement_*` (admin review)._
 
 ### Teams (`feat/mcp-teams`)
 
-_Not merged yet — `team_*` (approve, roster, messaging, gateway keys)._
+`api/mcp/tools/teams.py`, all `volunteer.admin`-only, thin wrappers
+over `api/teams/teams_service.py` and `api/teams/gateway_keys.py`:
+
+- `team_list_queued` (IN_REVIEW teams), `team_gateway_key_statuses`
+  (metadata only, max 200 team ids) — read-only.
+- `team_approve` (creates the GitHub repo, posts to Slack, mints
+  gateway keys), `team_edit`, `team_add_member` / `team_remove_member`,
+  `team_remove`, `team_message` (Slack and/or email),
+  `team_rotate_gateway_key` (`key1` | `key2`),
+  `team_provision_gateway_key` (idempotent) — writers, `confirm: true`.
+
+No tool returns a gateway key's plaintext or ciphertext.
 
 ### Check-in (`feat/mcp-checkin`)
 
